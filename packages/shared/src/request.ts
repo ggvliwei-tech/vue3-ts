@@ -22,10 +22,19 @@ export interface ApiRes<T = unknown> {
 }
 
 /**
+ * 获取环境变量中的 API 地址
+ */
+function getBaseURL(): string {
+  // Vite 使用 import.meta.env
+  return (import.meta as any).env?.VITE_API_BASE_URL ?? ''
+}
+
+/**
  * 创建请求实例
  */
 export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
   const instance = axios.create({
+    baseURL: getBaseURL(),
     timeout: 15000,
     ...config,
   })
@@ -50,6 +59,7 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       if (data.code === 0) {
         return response
       }
+      // 业务错误（如参数校验失败），返回 reject 让调用方处理
       return Promise.reject(new Error(data.msg || '请求失败'))
     },
     (error: unknown) => {

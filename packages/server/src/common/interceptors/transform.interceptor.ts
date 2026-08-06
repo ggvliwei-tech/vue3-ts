@@ -25,7 +25,7 @@ export class TransformInterceptor implements NestInterceptor {
       map((data) => {
         // 返回统一的响应格式：状态码 200、成功消息、实际数据
         return {
-          code: 200, // 业务状态码，200 表示成功
+          code: 0, // 业务状态码，200 表示成功
           msg: '请求成功', // 提示消息
           data, // 控制器返回的实际数据
         };
