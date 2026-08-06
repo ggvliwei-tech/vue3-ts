@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { showToast } from 'vant'
 import { login } from '@/api/user'
 
 const router = useRouter()
+const route = useRoute()
 
 const username = ref('')
 const password = ref('')
@@ -28,7 +29,7 @@ async function handleLogin() {
     })
     localStorage.setItem('token', res.data.data.accessToken)
     showToast('登录成功')
-    router.push('/home')
+    router.push((route.query.redirect as string) || '/home')
   } catch (e: any) {
     showToast(e.message || '登录失败')
   } finally {
