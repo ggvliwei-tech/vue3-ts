@@ -21,33 +21,27 @@ function handleLogout() {
 </script>
 
 <template>
-  <div class="home-page">
-    <van-nav-bar title="首页" />
+  <div class="profile-page">
+    <van-nav-bar title="我的" />
 
-    <div class="home-content">
+    <div class="profile-content">
       <van-cell-group inset>
-        <van-cell title="欢迎使用" label="登录成功，欢迎回来" />
+        <van-cell title="退出登录" is-link @click="handleLogout">
+          <template #icon>
+            <van-icon name="logout" style="margin-right: 8px; color: #ee0a24" />
+          </template>
+        </van-cell>
       </van-cell-group>
-
-      <div class="logout-wrap">
-        <van-button type="danger" block round @click="handleLogout">
-          退出登录
-        </van-button>
-      </div>
     </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-.home-page {
+.profile-page {
   background-color: #f5f5f5;
 }
 
-.home-content {
+.profile-content {
   padding: 20px 0;
-}
-
-.logout-wrap {
-  padding: 30px 16px;
 }
 </style>
