@@ -16,6 +16,7 @@
 <template>
   <!-- 页面容器：显示 admin 管理后台标识 -->
   <div>我是admin</div>
+  <el-button type="primary">Primary</el-button>
 </template>
 
 <!-- 样式区域（待扩展） -->

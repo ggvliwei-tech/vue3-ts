@@ -16,6 +16,7 @@
 <template>
   <!-- 页面容器：显示 app 前台应用标识 -->
   <div> 我是app</div>
+  <van-button type="primary">主要按钮</van-button>
 </template>
 
 <!-- 样式区域（待扩展） -->
