@@ -1,0 +1,35 @@
+{
+  "name": "@project/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./types": {
+      "import": "./src/types.ts",
+      "types": "./src/types.ts"
+    },
+    "./request": {
+      "import": "./src/request.ts",
+      "types": "./src/request.ts"
+    },
+    "./utils": {
+      "import": "./src/utils.ts",
+      "types": "./src/utils.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "type-check": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "rimraf": "^6.0.0"
+  }
+}

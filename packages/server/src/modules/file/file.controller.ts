@@ -1,0 +1,86 @@
+// 从 @nestjs/common 导入 NestJS 核心装饰器
+import {
+  Controller, // 定义控制器，处理特定路由的请求
+  Post, // 定义 POST 请求的路由装饰器
+  Delete, // 定义 DELETE 请求的路由装饰器
+  UseInterceptors, // 使用拦截器的装饰器
+  UploadedFiles, // 获取多文件上传参数的装饰器
+  Param, UploadedFile, // Param 获取路由参数，UploadedFile 获取单文件上传参数的装饰器
+} from '@nestjs/common';
+// 从 @nestjs/platform-express 导入文件上传拦截器
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+// 导入文件服务，用于处理具体的文件上传/删除逻辑
+import { FileService } from './file.service';
+
+// 定义路由前缀为 /file，所有该控制器下的接口都会以 /file 开头
+@Controller('file')
+export class FileController {
+  // 通过构造函数注入 FileService 服务
+  constructor(private readonly fileService: FileService) {}
+
+  // 单文件（原有）
+  // 注册 POST /file/image 路由
+  @Post('image')
+  // 注册单文件上传拦截器，拦截字段名为 'file'，限制文件大小 5MB
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }),
+  )
+  // 处理单文件上传的请求，file 为拦截器解析后的文件对象
+  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+    // 调用服务的 uploadSingle 方法上传文件，归类为 'goods' 类型
+    const res = await this.fileService.uploadSingle(file, 'goods');
+    // 返回统一格式的响应结果
+    return {
+      code: 200, // 状态码，200 表示成功
+      data: res.url, // 返回上传后的文件 URL
+      info: res, // 返回完整的上传结果信息
+    };
+  }
+
+  // ========== 多文件上传 ==========
+  // 注册 POST /file/images 路由
+  @Post('images')
+  // 注册多文件上传拦截器
+  @UseInterceptors(
+    FilesInterceptor(
+      'files', // 前端 formData key 必须为 files
+      10, // 最大一次上传数量
+      {
+        limits: {
+          fileSize: 5 * 1024 * 1024, // 单文件5MB
+        },
+      },
+    ),
+  )
+  // 处理多文件上传的请求，files 为拦截器解析后的文件数组
+  async uploadImages(@UploadedFiles() files: Express.Multer.File[]) {
+    // 判断是否有文件上传，如果没有则返回 400 错误
+    if (!files || files.length === 0) {
+      return { code: 400, msg: '未选择上传文件' };
+    }
+
+    // 循环调用单文件上传逻辑
+    // 使用 Promise.all 并发执行所有文件的上传操作，提升效率
+    const list = await Promise.all(
+      files.map((file) => this.fileService.uploadSingle(file, 'goods')), // 遍历文件数组，逐个调用服务上传
+    );
+
+    // 返回统一格式的响应结果
+    return {
+      code: 200, // 状态码，200 表示成功
+      data: list.map((item) => item.url), // 返回所有文件的 URL 数组
+      list: list, // 返回完整的上传结果列表
+    };
+  }
+
+  // 删除
+  // 注册 DELETE /file/:id 路由，:id 为路由参数
+  @Delete(':id')
+  // 处理删除文件的请求，id 为从路由参数中获取的文件 ID
+  async remove(@Param('id') id: string) {
+    // 将 id 字符串转为数字后调用服务的删除方法
+    await this.fileService.deleteFile(+id);
+    // 返回删除成功的响应
+    return { code: 200, msg: '删除成功' };
+  }
+}

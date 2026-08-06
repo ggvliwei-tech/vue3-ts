@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ESNext"
+  },
+  "references": [
+    { "path": "packages/admin" },
+    { "path": "packages/app" },
+    { "path": "packages/shared" },
+    { "path": "packages/server" }
+  ],
+  "files": []
+}
