@@ -3,13 +3,27 @@
  * 提供项目中复用的辅助方法
  */
 
-// TODO: 待实现工具函数
-// 常用工具函数示例：
-// 1. formatDate - 日期格式化
-// 2. deepClone - 深拷贝对象
-// 3. debounce - 防抖函数
-// 4. throttle - 节流函数
-// 5. isEmpty - 判断空值
-// 6. generateUUID - 生成唯一标识
+import dayjs from 'dayjs'
 
-export {}
+/**
+ * 日期格式化
+ * @param date 日期值
+ * @param format 格式化字符串，默认 'YYYY-MM-DD HH:mm:ss'
+ */
+export function formatDate(date: dayjs.ConfigType, format = 'YYYY-MM-DD HH:mm:ss'): string {
+  return dayjs(date).format(format)
+}
+
+/**
+ * 生成 UUID
+ */
+export function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}

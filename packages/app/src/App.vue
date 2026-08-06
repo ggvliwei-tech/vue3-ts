@@ -3,13 +3,9 @@
   使用 Vue 3 Composition API 的 <script setup> 语法
 -->
 <script setup lang="ts">
-// 组件逻辑区域（待扩展）
-// 可在此处添加：
-// - 响应式状态 (ref, reactive)
-// - 计算属性 (computed)
-// - 监听器 (watch)
-// - 生命周期钩子 (onMounted 等)
-// - 组件引入与注册
+import { ref } from 'vue'
+
+const value = ref('')
 </script>
 
 <!-- 组件模板区域 -->
@@ -17,7 +13,20 @@
   <!-- 页面容器：显示 app 前台应用标识 -->
   <div> 我是app</div>
   <van-button type="primary">主要按钮</van-button>
+  <van-cell-group inset>
+    <van-field v-model="value" label="文本" placeholder="请输入用户名" />
+  </van-cell-group>
+  <div class="a">当前用户名：{{ value }}
+    <div class="b">wkss </div>
+  </div>
 </template>
 
 <!-- 样式区域（待扩展） -->
-<!-- 可在此处添加 scoped 样式或引入全局样式 -->
+
+<style lang="scss" scoped>
+  .a{
+    .b{
+      color: red;
+    }
+  }
+</style>

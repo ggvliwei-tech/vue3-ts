@@ -22,7 +22,7 @@
     "lint:check": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "type-check": "pnpm -r type-check --parallel",
+    "type-check": "pnpm -r --parallel type-check",
     "clean": "pnpm -r clean && rimraf -rf node_modules",
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter @project/server test:e2e"
@@ -32,10 +32,14 @@
   "license": "ISC",
   "packageManager": "pnpm@10.18.3",
   "devDependencies": {
+    "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
     "concurrently": "^10.0.4",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2",
+    "sass": "^1.102.0",
     "typescript": "~6.0.2",
     "unplugin-auto-import": "^21.0",
     "unplugin-vue-components": "^32.1",

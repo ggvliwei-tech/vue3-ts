@@ -12,5 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     VanButton: typeof import('vant/es')['Button']
+    VanCellGroup: typeof import('vant/es')['CellGroup']
+    VanField: typeof import('vant/es')['Field']
   }
 }
