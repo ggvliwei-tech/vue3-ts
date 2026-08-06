@@ -41,8 +41,15 @@ function onChange(tab: string) {
 
 <style lang="scss" scoped>
 .tabbar-layout {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   background-color: #f5f5f5;
-  padding-bottom: 50px;
+}
+
+.tabbar-layout :deep(.van-nav-bar) {
+  position: sticky;
+  top: 0;
+  z-index: 99;
 }
 </style>

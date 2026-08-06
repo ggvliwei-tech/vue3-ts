@@ -38,10 +38,19 @@ function handleLogout() {
 
 <style lang="scss" scoped>
 .profile-page {
-  background-color: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+
+  .van-nav-bar {
+    flex-shrink: 0;
+  }
 }
 
 .profile-content {
+  flex: 1;
+  overflow-y: auto;
   padding: 20px 0;
 }
 </style>

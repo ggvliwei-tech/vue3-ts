@@ -1,22 +1,15 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
-import { showConfirmDialog, showToast } from 'vant'
+import { showToast } from 'vant'
 
-const router = useRouter()
+const gridItems = [
+  { text: '账本', icon: 'balance-o', route: '' },
+  { text: '文件', icon: 'notes-o', route: '' },
+  { text: 'AI', icon: 'chat', route: '' },
+  { text: '聊天室', icon: 'comment-o', route: '' },
+]
 
-function handleLogout() {
-  showConfirmDialog({
-    title: '确认退出',
-    message: '确定要退出登录吗？',
-  })
-    .then(() => {
-      localStorage.removeItem('token')
-      showToast('已退出登录')
-      router.push('/login')
-    })
-    .catch(() => {
-      // 取消退出
-    })
+function onGridClick(index: number) {
+  showToast(gridItems[index].text)
 }
 </script>
 
@@ -25,29 +18,34 @@ function handleLogout() {
     <van-nav-bar title="首页" />
 
     <div class="home-content">
-      <van-cell-group inset>
-        <van-cell title="欢迎使用" label="登录成功，欢迎回来" />
-      </van-cell-group>
-
-      <div class="logout-wrap">
-        <van-button type="danger" block round @click="handleLogout">
-          退出登录
-        </van-button>
-      </div>
+      <van-grid :column-num="4" :border="false">
+        <van-grid-item
+          v-for="(item, index) in gridItems"
+          :key="index"
+          :icon="item.icon"
+          :text="item.text"
+          @click="onGridClick(index)"
+        />
+      </van-grid>
     </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
 .home-page {
-  background-color: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+
+  .van-nav-bar {
+    flex-shrink: 0;
+  }
 }
 
 .home-content {
-  padding: 20px 0;
-}
-
-.logout-wrap {
-  padding: 30px 16px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 0;
 }
 </style>
