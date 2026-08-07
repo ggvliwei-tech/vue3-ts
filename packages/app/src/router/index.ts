@@ -37,6 +37,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Register.vue'),
     meta: { title: '注册' },
   },
+  {
+    path: '/account-book',
+    name: 'AccountBook',
+    component: () => import('@/views/AccountBook.vue'),
+    meta: { title: '账本列表' },
+  },
 ]
 
 const router = createRouter({

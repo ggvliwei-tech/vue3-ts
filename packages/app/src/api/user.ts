@@ -23,6 +23,10 @@ export interface LoginRes {
   }
 }
 
+export interface RefreshTokenRes {
+  accessToken: string
+}
+
 /**
  * 用户登录
  */
@@ -35,4 +39,11 @@ export function login(data: LoginParams) {
  */
 export function register(data: RegisterParams) {
   return post<LoginRes>('/api/v1/user/register', data)
+}
+
+/**
+ * 刷新 accessToken（refreshToken 通过 HttpOnly Cookie 自动携带）
+ */
+export function refreshToken() {
+  return post<RefreshTokenRes>('/api/v1/user/refresh-token')
 }

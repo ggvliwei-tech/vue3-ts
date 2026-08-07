@@ -13,6 +13,8 @@ import axios, {
 export interface RequestConfig extends AxiosRequestConfig {
   /** 是否需要 token，默认 true */
   needToken?: boolean
+  /** 是否跳过 token 刷新，默认 false */
+  skipRefresh?: boolean
 }
 
 export interface ApiRes<T = unknown> {
@@ -21,13 +23,45 @@ export interface ApiRes<T = unknown> {
   data: T
 }
 
+export interface RefreshTokenRes {
+  accessToken: string
+}
+
 /**
  * 获取环境变量中的 API 地址
  */
 function getBaseURL(): string {
-  // Vite 使用 import.meta.env
   return (import.meta as any).env?.VITE_API_BASE_URL ?? ''
 }
+
+/**
+ * 刷新 token 的回调（由各端自行实现）
+ */
+let onRefreshToken: ((callback: RefreshCallback) => void) | null = null
+
+export type RefreshCallback = (newToken: string | null) => void
+
+/**
+ * 设置刷新 token 回调
+ */
+export function setRefreshTokenCallback(callback: (cb: RefreshCallback) => void) {
+  onRefreshToken = callback
+}
+
+/**
+ * 401 未授权回调（刷新失败时跳转登录页）
+ */
+let onUnauthorized: (() => void) | null = null
+
+/**
+ * 设置未授权回调，用于 token 刷新失败时跳转登录页
+ */
+export function setUnauthorizedCallback(callback: () => void) {
+  onUnauthorized = callback
+}
+
+/** 默认请求实例 */
+export const request = createRequest()
 
 /**
  * 创建请求实例
@@ -36,8 +70,14 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
   const instance = axios.create({
     baseURL: getBaseURL(),
     timeout: 15000,
+    withCredentials: true, // 允许跨域携带 Cookie（refresh_token）
     ...config,
   })
+
+  // 是否正在刷新中
+  let isRefreshing = false
+  // 401 等待队列
+  let pendingQueue: Array<(token: string | null) => void> = []
 
   // 请求拦截器
   instance.interceptors.request.use(
@@ -59,20 +99,87 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       if (data.code === 0) {
         return response
       }
-      // 业务错误（如参数校验失败），返回 reject 让调用方处理
+      // 401 token 过期，尝试刷新
+      if (data.code === 401) {
+        const originalConfig = (response as any).config
+        if (originalConfig?.skipRefresh) {
+          onUnauthorized?.()
+          return Promise.reject(new Error(data.msg || '登录已过期'))
+        }
+        return handle401(originalConfig, instance)
+      }
+      // 业务错误
       return Promise.reject(new Error(data.msg || '请求失败'))
     },
     (error: unknown) => {
+      // HTTP 401
+      if ((error as any).response?.status === 401) {
+        const originalConfig = (error as any).config
+        if (originalConfig?.skipRefresh) {
+          onUnauthorized?.()
+          return Promise.reject(new Error('登录已过期'))
+        }
+        return handle401(originalConfig, instance)
+      }
       const message = (error as any).response?.data?.msg || (error as Error).message || '网络异常'
       return Promise.reject(new Error(message))
     },
   )
 
+  /**
+   * 处理 401 响应：尝试刷新 token 并重试原始请求
+   */
+  function handle401(
+    originalConfig: AxiosRequestConfig,
+    axiosInstance: AxiosInstance,
+  ): Promise<AxiosResponse<ApiRes>> {
+    if (!isRefreshing) {
+      isRefreshing = true
+
+      return new Promise((resolve, reject) => {
+        // 将当前请求加入等待队列
+        pendingQueue.push((newToken: string | null) => {
+          if (newToken) {
+            // 刷新成功，重试原始请求
+            originalConfig.headers = originalConfig.headers || {}
+            originalConfig.headers.Authorization = `Bearer ${newToken}`
+            resolve(axiosInstance.request(originalConfig))
+          } else {
+            // 刷新失败，拒绝请求
+            reject(new Error('登录已过期，请重新登录'))
+          }
+        })
+
+        // 触发刷新 token
+        onRefreshToken?.((newToken: string | null) => {
+          isRefreshing = false
+          // 处理等待队列
+          pendingQueue.forEach((cb) => cb(newToken))
+          pendingQueue = []
+
+          if (!newToken) {
+            reject(new Error('登录已过期，请重新登录'))
+          }
+        })
+      })
+    }
+
+    // 已经在刷新中，将请求加入等待队列
+    return new Promise((resolve, reject) => {
+      pendingQueue.push((newToken: string | null) => {
+        if (newToken) {
+          originalConfig.headers = originalConfig.headers || {}
+          originalConfig.headers.Authorization = `Bearer ${newToken}`
+          resolve(axiosInstance.request(originalConfig))
+        } else {
+          reject(new Error('登录已过期，请重新登录'))
+        }
+      })
+    })
+  }
+
   return instance
 }
-
-/** 默认请求实例 */
-export const request = createRequest()
 
 /**
  * 通用请求方法

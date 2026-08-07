@@ -1,15 +1,23 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 
+const router = useRouter()
+
 const gridItems = [
-  { text: '账本', icon: 'balance-o', route: '' },
+  { text: '账本', icon: 'balance-o', route: '/account-book' },
   { text: '文件', icon: 'notes-o', route: '' },
   { text: 'AI', icon: 'chat', route: '' },
   { text: '聊天室', icon: 'comment-o', route: '' },
 ]
 
 function onGridClick(index: number) {
-  showToast(gridItems[index].text)
+  const item = gridItems[index]
+  if (item.route) {
+    router.push(item.route)
+  } else {
+    showToast(item.text)
+  }
 }
 </script>
 
