@@ -14,33 +14,35 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'index',
         name: 'Home',
-        component: () => import('@/views/Home.vue'),
+        component: () => import('@/views/home/Home.vue'),
         meta: { title: '首页' },
       },
       {
         path: 'profile',
         name: 'Profile',
-        component: () => import('@/views/Profile.vue'),
+        component: () => import('@/views/home/Profile.vue'),
         meta: { title: '我的' },
       },
     ],
   },
+  // 认证模块
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/Login.vue'),
+    component: () => import('@/views/auth/Login.vue'),
     meta: { title: '登录' },
   },
   {
     path: '/register',
     name: 'Register',
-    component: () => import('@/views/Register.vue'),
+    component: () => import('@/views/auth/Register.vue'),
     meta: { title: '注册' },
   },
+  // 账本模块
   {
     path: '/account-book',
     name: 'AccountBook',
-    component: () => import('@/views/AccountBook.vue'),
+    component: () => import('@/views/book/AccountBook.vue'),
     meta: { title: '账本列表' },
   },
 ]
