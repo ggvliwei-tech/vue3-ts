@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   ConflictException,
-  Injectable, // 依赖注入装饰器
-  UnauthorizedException, // 未授权异常
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm'; // 注入 Repository 的装饰器
 import { Repository } from 'typeorm'; // TypeORM 仓储接口，用于数据库操作
@@ -67,21 +69,21 @@ export class UserService {
     const user = await this.userRepo.findOne({
       where: { username: loginDto.username },
     });
-    // 如果用户不存在，抛出未授权异常
+    // 如果用户不存在，抛出请求错误
     if (!user) {
-      throw new UnauthorizedException('用户名不存在');
+      throw new BadRequestException('用户名不存在');
     }
 
     // 第二步：使用 bcrypt 比对提交的密码和数据库中存储的哈希密码
     const isPwdOk = await bcrypt.compare(loginDto.password, user.password);
-    // 如果密码不匹配，抛出未授权异常
+    // 如果密码不匹配，抛出请求错误
     if (!isPwdOk) {
-      throw new UnauthorizedException('密码错误');
+      throw new BadRequestException('密码错误');
     }
 
     // 第三步：检查用户账号状态，0 表示已禁用
     if (user.status === 0) {
-      throw new UnauthorizedException('账号已被禁用');
+      throw new ForbiddenException('账号已被禁用');
     }
 
     // 第四步：签发 JWT Token
@@ -119,7 +121,7 @@ export class UserService {
   // 刷新AccessToken接口
   async refreshToken(userId: number) {
     const user = await this.userRepo.findOneBy({ id: userId });
-    if (!user) throw new UnauthorizedException('用户不存在');
+    if (!user) throw new NotFoundException('用户不存在');
 
     const payload = { sub: user.id, username: user.username };
     const newAccessToken = this.jwtService.sign(payload, {
@@ -142,7 +144,7 @@ export class UserService {
   // 退出登录：清空数据库refreshToken，直接失效
   async logout(userId: number) {
     const user = await this.userRepo.findOneBy({ id: userId });
-    if (!user) throw new UnauthorizedException('用户不存在');
+    if (!user) throw new NotFoundException('用户不存在');
     user.refreshToken = null;
     await this.userRepo.save(user);
     return { msg: '退出登录成功' };
