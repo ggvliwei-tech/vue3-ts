@@ -86,8 +86,23 @@ export class UserController {
   @ApiOperation({ summary: '刷新AccessToken，自动读取Cookie里的Refresh' })
   @Post('refresh-token')
   @UseGuards(RefreshTokenGuard)
-  refresh(@CurrentUser() user: any) {
-    return this.userService.refreshToken(user.id);
+  async refresh(
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id);
+
+    // 用新的 refreshToken 覆盖旧 Cookie，实现 token 轮换
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('refresh_token', newRefreshToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/api/v1/user',
+    });
+
+    return { accessToken };
   }
 
 

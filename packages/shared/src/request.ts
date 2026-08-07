@@ -99,8 +99,10 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       if (data.code === 0) {
         return response
       }
+      console.log('[request] 业务错误, code:', data.code, 'msg:', data.msg)
       // 401 token 过期，尝试刷新
       if (data.code === 401) {
+        console.log('[request] 检测到 401，onRefreshToken 是否已设置:', !!onRefreshToken)
         const originalConfig = (response as any).config
         if (originalConfig?.skipRefresh) {
           onUnauthorized?.()
@@ -112,8 +114,10 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       return Promise.reject(new Error(data.msg || '请求失败'))
     },
     (error: unknown) => {
+      console.log('[request] HTTP 错误, status:', (error as any).response?.status)
       // HTTP 401
       if ((error as any).response?.status === 401) {
+        console.log('[request] 检测到 HTTP 401，onRefreshToken 是否已设置:', !!onRefreshToken)
         const originalConfig = (error as any).config
         if (originalConfig?.skipRefresh) {
           onUnauthorized?.()
@@ -140,26 +144,23 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
         // 将当前请求加入等待队列
         pendingQueue.push((newToken: string | null) => {
           if (newToken) {
-            // 刷新成功，重试原始请求
             originalConfig.headers = originalConfig.headers || {}
             originalConfig.headers.Authorization = `Bearer ${newToken}`
             resolve(axiosInstance.request(originalConfig))
           } else {
-            // 刷新失败，拒绝请求
             reject(new Error('登录已过期，请重新登录'))
           }
         })
 
         // 触发刷新 token
         onRefreshToken?.((newToken: string | null) => {
-          isRefreshing = false
-          // 处理等待队列
-          pendingQueue.forEach((cb) => cb(newToken))
+          // 先保存并清空队列，避免新 401 请求被错误处理
+          const queue = pendingQueue
           pendingQueue = []
+          isRefreshing = false
 
-          if (!newToken) {
-            reject(new Error('登录已过期，请重新登录'))
-          }
+          // 执行队列
+          queue.forEach((cb) => cb(newToken))
         })
       })
     }
