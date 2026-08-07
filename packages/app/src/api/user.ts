@@ -43,7 +43,8 @@ export function register(data: RegisterParams) {
 
 /**
  * 刷新 accessToken（refreshToken 通过 HttpOnly Cookie 自动携带）
+ * skipRefresh: true 防止 refresh 请求自身 401 时再次触发刷新，避免无限递归
  */
 export function refreshToken() {
-  return post<RefreshTokenRes>('/api/v1/user/refresh-token')
+  return post<RefreshTokenRes>('/api/v1/user/refresh-token', undefined, { skipRefresh: true })
 }
