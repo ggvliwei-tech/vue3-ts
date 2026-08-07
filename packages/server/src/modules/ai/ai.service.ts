@@ -1,24 +1,13 @@
-// 导入依赖注入装饰器和异常类
 import { Injectable, BadRequestException } from '@nestjs/common';
-// 导入配置服务，用于读取环境变量配置
 import { ConfigService } from '@nestjs/config';
-// 导入 OpenAI 聊天模型和嵌入模型
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
-// 导入 Ollama 本地聊天模型
 import { ChatOllama } from '@langchain/ollama';
-// 导入 LangChain 消息类型：人类消息、系统消息、AI 消息
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
-// 导入 LangChain 文档类型
 import { Document } from '@langchain/core/documents';
-// 导入 Redis 客户端
-import Redis from 'ioredis';
-// 导入 LLM 类型枚举
 import { LlmTypeEnum } from './enums/llm-type.enum';
-// 导入文件系统模块
+import { RedisService } from '../redis/redis.service';
 import fs from 'fs';
-// 导入 PDF 解析库
 import { PDFParse } from 'pdf-parse';
-// 导入 Chroma 向量数据库客户端
 import { ChromaClient } from 'chromadb';
 
 // 标记为可注入的服务
@@ -28,40 +17,14 @@ export class AiService {
   private readonly llm: ChatOpenAI | ChatOllama;
   // 文本嵌入模型，用于向量相似度计算
   private embeddings: OpenAIEmbeddings;
-  // Redis 客户端，用于存储聊天历史
-  private readonly redisClient: Redis;
   // 当前使用的 LLM 类型标识
   private readonly llmType: string;
 
-  // 构造函数注入配置服务，并初始化所有依赖
-  constructor(private configService: ConfigService) {
-    // 1. 初始化 Redis
-    const redisPassword = this.configService.get('REDIS_PASSWORD');
-    this.redisClient = new Redis({
-      host: this.configService.get('REDIS_HOST') || 'localhost',       // Redis 主机地址
-      port: this.configService.get('REDIS_PORT') || 6379,             // Redis 端口
-      password: redisPassword || undefined,                           // Redis 密码
-      lazyConnect: true,                                              // 延迟连接，首次使用时才连接
-      retryStrategy: (times) => {
-        // 重试策略：失败超过 3 次停止重试
-        if (times > 3) {
-          console.warn('[Redis] 连接失败次数过多，停止重试');
-          return null;
-        }
-        // 指数退避：每次间隔增长，最大 2 秒
-        return Math.min(times * 500, 2000);
-      },
-    });
-
-    // 监听 Redis 错误事件
-    this.redisClient.on('error', (err) => {
-      console.error('[Redis] 连接错误:', err.message);
-    });
-
-    // 监听 Redis 连接成功事件
-    this.redisClient.on('ready', () => {
-      console.log('[Redis] 连接成功');
-    });
+  // 构造函数注入配置服务和 Redis 服务
+  constructor(
+    private configService: ConfigService,
+    private redisService: RedisService,
+  ) {
 
     // 2. 判断使用哪种大模型
     this.llmType = this.configService.get('LLM_TYPE') || 'openai';
@@ -122,7 +85,7 @@ export class AiService {
     // 构建 Redis 存储键
     const historyKey = `chat_history:${sessionId}`;
     // 从 Redis 获取历史消息
-    const historyData = await this.redisClient.get(historyKey);
+    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
     // 初始化消息数组，包含系统提示词
     const messages: Array<SystemMessage | HumanMessage | AIMessage> = [
       new SystemMessage('你是后端全栈工程师，回答简洁，提供可直接运行代码，不要冗余描述'),
@@ -130,10 +93,8 @@ export class AiService {
 
     // 如果有历史消息，解析并添加到消息数组
     if (historyData) {
-      // 解析 JSON 格式的历史消息
-      const history = JSON.parse(historyData) as Array<{ type: string; content: string }>;
       // 遍历历史消息，按类型转换为对应消息对象
-      for (const msg of history) {
+      for (const msg of historyData) {
         if (msg.type === 'human') {
           messages.push(new HumanMessage(msg.content));
         } else if (msg.type === 'ai') {
@@ -149,12 +110,12 @@ export class AiService {
 
     // 保存历史到 Redis（保留最近 10 轮对话，即 20 条消息）
     const updatedHistory = [
-      ...JSON.parse(historyData || '[]'),          // 原有历史消息
-      { type: 'human', content: question },        // 新增用户问题
-      { type: 'ai', content: res.content },        // 新增 AI 回复
-    ].slice(-20);                                  // 只保留最近 20 条
+      ...historyData || [],                       // 原有历史消息
+      { type: 'human', content: question },       // 新增用户问题
+      { type: 'ai', content: res.content },       // 新增 AI 回复
+    ].slice(-20);                                 // 只保留最近 20 条
     // 存入 Redis，设置过期时间 86400 秒（24 小时）
-    await this.redisClient.set(historyKey, JSON.stringify(updatedHistory), 'EX', 86400);
+    await this.redisService.setJson(historyKey, updatedHistory, 86400);
 
     return res.content;
   }

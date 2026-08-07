@@ -1,22 +1,16 @@
-// 导入 NestJS 模块装饰器
 import { Module } from '@nestjs/common';
-// 导入配置模块
 import { ConfigModule } from '@nestjs/config';
-// 导入限流模块和限流守卫
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-// 导入全局守卫 Token
 import { APP_GUARD } from '@nestjs/core';
-// 导入 AI 服务，处理 AI 业务逻辑
 import { AiService } from './ai.service';
-// 导入 AI 控制器，处理 AI 相关请求
 import { AiController } from './ai.controller';
+import { RedisModule } from '../redis/redis.module';
 
 // AI 模块定义，封装大语言模型相关功能
 @Module({
   imports: [
-    // 导入配置模块
     ConfigModule,
-    // AI 接口限流：10秒最多请求5次，防止刷量扣费
+    RedisModule,
     ThrottlerModule.forRoot([
       {
         ttl: 10000, // 时间窗口，10 秒
