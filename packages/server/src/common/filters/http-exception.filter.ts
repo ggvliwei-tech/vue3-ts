@@ -23,10 +23,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // 获取异常返回的消息内容
     const errMsg = exception.getResponse();
 
-    // 注意这里返回 HTTP 200，但用业务 code 表示错误状态
-    // 将异常信息以 JSON 格式返回给客户端
-    response.status(HttpStatus.OK).json({
-      code: status, // 业务状态码等于 HTTP 状态码
+    // 修复：返回真实 HTTP 状态码，而非一律 200
+    response.status(status).json({
+      code: status, // 业务状态码与 HTTP 状态码一致
       // 消息可能是字符串或对象，这里兼容两种格式
       msg: typeof errMsg === 'string' ? errMsg : (errMsg as any).message,
       data: null, // 错误时 data 为 null

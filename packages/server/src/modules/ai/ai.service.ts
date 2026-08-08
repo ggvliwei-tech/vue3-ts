@@ -15,8 +15,8 @@ import { ChromaClient } from 'chromadb';
 export class AiService {
   // 大语言模型实例，支持 OpenAI 或 Ollama
   private readonly llm: ChatOpenAI | ChatOllama;
-  // 文本嵌入模型，用于向量相似度计算
-  private embeddings: OpenAIEmbeddings;
+  // 文本嵌入模型，用于向量相似度计算（Ollama 模型下不可用）
+  private embeddings: OpenAIEmbeddings | null;
   // 当前使用的 LLM 类型标识
   private readonly llmType: string;
 
@@ -62,8 +62,8 @@ export class AiService {
         temperature: 0.6,
         numCtx: 2048, // 减少上下文长度以降低内存占用
       });
-      // Ollama 不支持 embeddings，设为 undefined
-      this.embeddings = undefined as unknown as OpenAIEmbeddings;
+      // Ollama 不支持 embeddings
+      this.embeddings = null;
     }
   }
 
@@ -158,6 +158,7 @@ export class AiService {
     // 生成嵌入并添加文档
     const texts = docs.map(d => d.pageContent);
     // 使用嵌入模型将文本转换为向量
+    if (!this.embeddings) throw new BadRequestException('当前模型不支持 embeddings');
     const embeddings = await this.embeddings.embedDocuments(texts);
 
     // 将向量添加到集合中
@@ -182,6 +183,7 @@ export class AiService {
     const collection = await client.getOrCreateCollection({ name: collectionName });
 
     // 将用户问题转换为向量（嵌入）
+    if (!this.embeddings) throw new BadRequestException('当前模型不支持 embeddings');
     const questionEmbedding = await this.embeddings.embedQuery(question);
 
     // 在集合中查询最相似的 3 个文档

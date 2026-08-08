@@ -12,7 +12,7 @@ import configuration from './config/configuration';
 import { UserModule } from './modules/user/user.module';
 import { AccountBookModule } from './modules/account_book/account-book.module';
 import { FileModule } from './modules/file/file.module';
-import { AiModule } from './modules/ai/ai.moduls';
+import { AiModule } from './modules/ai/ai.module';
 import { ChatModule } from './modules/chat/chat.module';
 
 // 根模块，负责组装所有全局依赖

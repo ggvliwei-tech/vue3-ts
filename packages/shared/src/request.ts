@@ -63,6 +63,10 @@ export function setUnauthorizedCallback(callback: () => void) {
 /** 默认请求实例 */
 export const request = createRequest()
 
+// 模块级共享的刷新状态，避免多实例竞态条件
+let isRefreshing = false
+let pendingQueue: Array<(token: string | null) => void> = []
+
 /**
  * 创建请求实例
  */
@@ -73,11 +77,6 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
     withCredentials: true, // 允许跨域携带 Cookie（refresh_token）
     ...config,
   })
-
-  // 是否正在刷新中
-  let isRefreshing = false
-  // 401 等待队列
-  let pendingQueue: Array<(token: string | null) => void> = []
 
   // 请求拦截器
   instance.interceptors.request.use(
@@ -99,10 +98,8 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       if (data.code === 0) {
         return response
       }
-      console.log('[request] 业务错误, code:', data.code, 'msg:', data.msg)
       // 401 token 过期，尝试刷新
       if (data.code === 401) {
-        console.log('[request] 检测到 401，onRefreshToken 是否已设置:', !!onRefreshToken)
         const originalConfig = (response as any).config
         if (originalConfig?.skipRefresh) {
           onUnauthorized?.()
@@ -114,10 +111,8 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       return Promise.reject(new Error(data.msg || '请求失败'))
     },
     (error: unknown) => {
-      console.log('[request] HTTP 错误, status:', (error as any).response?.status)
       // HTTP 401
       if ((error as any).response?.status === 401) {
-        console.log('[request] 检测到 HTTP 401，onRefreshToken 是否已设置:', !!onRefreshToken)
         const originalConfig = (error as any).config
         if (originalConfig?.skipRefresh) {
           onUnauthorized?.()

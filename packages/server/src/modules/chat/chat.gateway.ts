@@ -11,11 +11,12 @@ import { Server, Socket } from 'socket.io';
 // 导入 NestJS 日志工具
 import { Logger } from '@nestjs/common';
 
-// WebSocket 网关配置，全局路由前缀 /ws，允许跨域
+// WebSocket 网关配置，全局路由前缀 /ws，明确指定允许的跨域来源
 @WebSocketGateway({
   namespace: '/ws',   // 命名空间，所有 WebSocket 路径以 /ws 开头
   cors: {
-    origin: '*',      // 允许所有域名跨域连接
+    origin: ['http://localhost:5173', 'http://localhost:5174'], // 仅允许开发环境前端地址
+    credentials: true,
   },
 })
 // 实现连接和断开事件接口

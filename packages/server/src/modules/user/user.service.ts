@@ -69,16 +69,15 @@ export class UserService {
     const user = await this.userRepo.findOne({
       where: { username: loginDto.username },
     });
-    // 如果用户不存在，抛出请求错误
+    // 如果用户不存在或密码不匹配，统一返回模糊错误，防止枚举用户
     if (!user) {
-      throw new BadRequestException('用户名不存在');
+      throw new BadRequestException('账号或密码错误');
     }
 
-    // 第二步：使用 bcrypt 比对提交的密码和数据库中存储的哈希密码
+    // 使用 bcrypt 比对提交的密码和数据库中存储的哈希密码
     const isPwdOk = await bcrypt.compare(loginDto.password, user.password);
-    // 如果密码不匹配，抛出请求错误
     if (!isPwdOk) {
-      throw new BadRequestException('密码错误');
+      throw new BadRequestException('账号或密码错误');
     }
 
     // 第三步：检查用户账号状态，0 表示已禁用

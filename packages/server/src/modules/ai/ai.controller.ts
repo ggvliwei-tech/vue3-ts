@@ -23,8 +23,8 @@ export class AiController {
   async chat(@Body() dto: ChatDto) {
     // 调用服务层简单问答方法
     const data = await this.aiService.simpleChat(dto.question);
-    // 返回统一响应格式
-    return { code: 200, data };
+    // 返回统一响应格式（与 TransformInterceptor 保持一致，code: 0 表示成功）
+    return { code: 0, data };
   }
 
   // 2. 带会话历史多轮对话
@@ -35,8 +35,8 @@ export class AiController {
     const sessionId = dto.sessionId || randomUUID();
     // 调用服务层带历史的问答方法
     const data = await this.aiService.chatWithHistory(dto.question, sessionId);
-    // 返回统一响应格式，包含 sessionId
-    return { code: 200, data, sessionId };
+    // 返回统一响应格式，包含 sessionId（code: 0 表示成功）
+    return { code: 0, data, sessionId };
   }
 
   // 3. RAG 知识库问答
@@ -45,8 +45,8 @@ export class AiController {
   async ragChat(@Body() dto: ChatDto) {
     // 调用服务层 RAG 问答方法
     const data = await this.aiService.ragQuery(dto.question);
-    // 返回统一响应格式
-    return { code: 200, data };
+    // 返回统一响应格式（code: 0 表示成功）
+    return { code: 0, data };
   }
 
   // 4. SSE 流式输出（前端打字机效果）
@@ -71,7 +71,7 @@ export class AiController {
   async createSession() {
     // 生成新的 UUID 作为 sessionId
     const sessionId = randomUUID();
-    // 返回统一响应格式
-    return { code: 200, data: { sessionId } };
+    // 返回统一响应格式（code: 0 表示成功）
+    return { code: 0, data: { sessionId } };
   }
 }

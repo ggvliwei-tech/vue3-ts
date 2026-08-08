@@ -40,16 +40,7 @@ export class UserController {
     return this.userService.create(createUserDto);
   }
 
-/*  // 接口描述：用户登录获取 Token
-  @ApiOperation({ summary: '用户登录，获取token' })
-  // POST /user/login 路由
-  @Post('login')
-  // 登录方法：接收 LoginUserDto 作为请求体，校验密码并签发 Token
-  login(@Body() loginDto: LoginUserDto) {
-    return this.userService.login(loginDto);
-  }*/
-
-
+  // 接口描述：用户登录，Refresh存入HttpOnly Cookie
   @ApiOperation({ summary: '登录，Refresh存入HttpOnly Cookie' })
   @Post('login')
   async login(
@@ -75,14 +66,6 @@ export class UserController {
 
 
 
-/*  @ApiOperation({ summary: '刷新AccessToken（携带RefreshToken）' })
-  @ApiBearerAuth()
-  @UseGuards(RefreshTokenGuard)
-  @Post('refresh-token')
-  refresh(@CurrentUser() user) {
-    return this.userService.refreshToken(user.id);
-  }*/
-
   @ApiOperation({ summary: '刷新AccessToken，自动读取Cookie里的Refresh' })
   @Post('refresh-token')
   @UseGuards(RefreshTokenGuard)
@@ -104,15 +87,6 @@ export class UserController {
 
     return { accessToken };
   }
-
-
-/*  @ApiOperation({ summary: '退出登录，销毁RefreshToken' })
-  @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
-  @Post('logout')
-  logout(@CurrentUser() user) {
-    return this.userService.logout(user.id);
-  }*/
 
 
   @ApiOperation({ summary: '退出登录：清空Cookie+数据库RefreshToken' })
@@ -145,8 +119,6 @@ export class UserController {
   @Get()
   // 查询所有用户方法：通过 @CurrentUser() 获取当前登录用户信息
   findAll(@CurrentUser() user: any) {
-    // 打印当前登录用户信息到控制台
-    console.log('当前登录用户', user);
     // 返回所有用户列表
     return this.userService.findAll();
   }

@@ -78,7 +78,13 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   // JSON 序列化/反序列化便捷方法
   async getJson<T>(key: string): Promise<T | null> {
     const data = await this.client.get(key);
-    return data ? JSON.parse(data) : null;
+    if (!data) return null;
+    try {
+      return JSON.parse(data) as T;
+    } catch (e) {
+      console.error(`[Redis] JSON 解析失败, key: ${key}, error: ${(e as Error).message}`);
+      return null;
+    }
   }
 
   async setJson(key: string, value: unknown, ttl?: number): Promise<'OK' | null> {
