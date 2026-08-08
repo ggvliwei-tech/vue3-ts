@@ -39,7 +39,7 @@ export class AccountBookController {
   @Post()
   @ApiOperation({ summary: '新增账号账本记录' })
   // POST /account-book 路由，接收 CreateAccountBookDto 作为请求体
-  create(@Body() createDto: CreateAccountBookDto, @CurrentUser() user) {
+  create(@Body() createDto: CreateAccountBookDto, @CurrentUser() user: any) {
     // 调用服务层创建方法，传入 DTO 和当前用户 ID
     return this.accountBookService.create(createDto, user.id);
   }
@@ -51,8 +51,10 @@ export class AccountBookController {
   findAll(
     @Query('page') page = 1,     // 页码，默认第 1 页
     @Query('limit') limit = 10,  // 每页数量，默认 10 条
-    @CurrentUser() user          // 当前登录用户
+    @CurrentUser() user: any
   ) {
+
+    console.log('当前登录用户信息:', user);
     // 调用服务层查询方法，传入用户 ID 和分页参数
     return this.accountBookService.findAll(user.id, +page, +limit);
   }
@@ -61,7 +63,7 @@ export class AccountBookController {
   @Get(':id')
   @ApiOperation({ summary: '根据ID查询单条' })
   // GET /account-book/:id 路由，根据 ID 查询
-  findOne(@Param('id') id: string, @CurrentUser() user) {
+  findOne(@Param('id') id: string, @CurrentUser() user: any) {
     // 调用服务层查询方法，传入 ID（转为数字）和用户 ID
     return this.accountBookService.findOne(+id, user.id);
   }
@@ -73,7 +75,7 @@ export class AccountBookController {
   update(
     @Param('id') id: string,                        // 路由参数，记录 ID
     @Body() updateDto: UpdateAccountBookDto,        // 请求体，更新数据
-    @CurrentUser() user                             // 当前登录用户
+    @CurrentUser() user: any                             // 当前登录用户
   ) {
     // 调用服务层更新方法，传入 ID、DTO 和用户 ID
     return this.accountBookService.update(+id, updateDto, user.id);
@@ -83,7 +85,7 @@ export class AccountBookController {
   @Delete(':id')
   @ApiOperation({ summary: '删除账本记录' })
   // DELETE /account-book/:id 路由，删除记录
-  remove(@Param('id') id: string, @CurrentUser() user) {
+  remove(@Param('id') id: string, @CurrentUser() user: any) {
     // 调用服务层删除方法，传入 ID（转为数字）和用户 ID
     return this.accountBookService.remove(+id, user.id);
   }
