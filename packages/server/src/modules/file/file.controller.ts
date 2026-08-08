@@ -4,6 +4,7 @@ import {
   Post, // 定义 POST 请求的路由装饰器
   Delete, // 定义 DELETE 请求的路由装饰器
   UseInterceptors, // 使用拦截器的装饰器
+  UseGuards, // 使用守卫的装饰器
   UploadedFiles, // 获取多文件上传参数的装饰器
   Param, UploadedFile, // Param 获取路由参数，UploadedFile 获取单文件上传参数的装饰器
 } from '@nestjs/common';
@@ -11,8 +12,14 @@ import {
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 // 导入文件服务，用于处理具体的文件上传/删除逻辑
 import { FileService } from './file.service';
+// 导入 JWT 认证守卫
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 导入 Swagger 认证标识
+import { ApiBearerAuth } from '@nestjs/swagger';
 
 // 定义路由前缀为 /file，所有该控制器下的接口都会以 /file 开头
+@UseGuards(JwtAuthGuard) // 控制器级别守卫，所有接口均需登录
+@ApiBearerAuth() // Swagger 显示 Bearer Token 输入框
 @Controller('file')
 export class FileController {
   // 通过构造函数注入 FileService 服务

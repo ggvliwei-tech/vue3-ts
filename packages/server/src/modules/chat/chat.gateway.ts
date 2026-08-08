@@ -10,6 +10,10 @@ import {
 import { Server, Socket } from 'socket.io';
 // 导入 NestJS 日志工具
 import { Logger } from '@nestjs/common';
+// 导入 JWT 服务
+import { JwtService } from '@nestjs/jwt';
+// 导入配置服务
+import { ConfigService } from '@nestjs/config';
 
 // WebSocket 网关配置，全局路由前缀 /ws，明确指定允许的跨域来源
 @WebSocketGateway({
@@ -28,9 +32,43 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // 创建 WebSocket 专用日志实例
   private readonly logger = new Logger('WebSocket');
 
-  // 客户端连接时触发
-  handleConnection(client: Socket) {
-    this.logger.log(`客户端上线: ${client.id}`);
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  // 客户端连接时触发，验证 Token
+  async handleConnection(client: Socket) {
+    try {
+      // 从握手数据中获取 token
+      // 前端连接时应携带: io('/ws', { auth: { token: 'Bearer xxx' } })
+      const auth = client.handshake?.auth?.token as string;
+      if (!auth) {
+        client.emit('error', { code: 401, msg: '未携带Token，请先登录' });
+        client.disconnect();
+        return;
+      }
+
+      const [type, token] = auth.split(' ');
+      if (type !== 'Bearer' || !token) {
+        client.emit('error', { code: 401, msg: 'Token格式错误' });
+        client.disconnect();
+        return;
+      }
+
+      // 验证 Token
+      const payload = this.jwtService.verify(token, {
+        secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+      });
+
+      // 将 Token 载荷绑定到 socket 上，后续可通过 client.data.user 获取 { sub, username }
+      client.data = { user: payload };
+      this.logger.log(`客户端上线: ${client.id}, 用户ID: ${payload.sub}`);
+    } catch (err) {
+      this.logger.warn(`客户端认证失败: ${client.id}, ${err.message}`);
+      client.emit('error', { code: 401, msg: 'Token已过期或无效' });
+      client.disconnect();
+    }
   }
 
   // 客户端断开连接时触发

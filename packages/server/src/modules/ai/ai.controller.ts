@@ -1,5 +1,5 @@
 // 导入 NestJS 核心装饰器
-import { Controller, Post, Body, Sse, MessageEvent, Get, Query } from '@nestjs/common';
+import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards } from '@nestjs/common';
 // 导入 RxJS 相关操作符，用于流式数据处理
 import { Observable, from, map } from 'rxjs';
 // 导入 AI 服务，注入业务逻辑
@@ -10,8 +10,14 @@ import { ChatDto } from './dto/chat.dto';
 import { isBaseMessage } from '@langchain/core/messages';
 // 导入 UUID 生成函数
 import { randomUUID } from 'crypto';
+// 导入 JWT 认证守卫
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 导入 Swagger 认证标识
+import { ApiBearerAuth } from '@nestjs/swagger';
 
 // 设置路由前缀为 /ai
+@UseGuards(JwtAuthGuard) // 控制器级别守卫，所有接口均需登录
+@ApiBearerAuth() // Swagger 显示 Bearer Token 输入框
 @Controller('ai')
 export class AiController {
   // 构造函数注入 AI 服务

@@ -8,18 +8,17 @@ import {
 import { JwtService } from '@nestjs/jwt';
 // 配置服务，用于读取 JWT 密钥
 import { ConfigService } from '@nestjs/config';
-// 用户服务，用于查询用户信息
-import { UserService } from '../../modules/user/user.service';
 
 // 标记为可注入的服务
 @Injectable()
 // 实现 CanActivate 接口，作为 JWT 认证守卫
+// 注：此守卫仅验证 Token 有效性，不查询数据库
+// 需要用户完整信息时，控制器可自行注入 UserService 查询
 export class JwtAuthGuard implements CanActivate {
   // 构造函数注入依赖
   constructor(
     private readonly jwtService: JwtService, // 注入 JWT 服务，用于 Token 验证
     private readonly configService: ConfigService, // 注入配置服务，获取 JWT 密钥
-    private readonly userService: UserService, // 注入用户服务，用于查询用户
   ) {}
 
   // 守卫核心方法，返回 true 放行请求，返回 false 或抛异常则拒绝
@@ -47,20 +46,10 @@ export class JwtAuthGuard implements CanActivate {
         secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
       });
 
-      // 第四步：从 Token 载荷中获取用户 ID（payload.sub），查询数据库验证用户是否存在
-      const user = await this.userService.findById(payload.sub);
-      // 如果用户不存在，拒绝请求
-      if (!user) {
-        throw new UnauthorizedException('用户不存在，请重新登录');
-      }
-      // 如果用户状态为 0（已禁用），拒绝请求
-      if (user.status === 0) {
-        throw new UnauthorizedException('账号已禁用');
-      }
-
-      // 第五步：将用户对象挂载到请求对象上
-      // 控制器中可以通过 @CurrentUser() 装饰器获取此数据
-      request.user = user;
+      // 第四步：将 Token 载荷挂载到请求对象上
+      // payload 包含 { sub: userId, username }
+      // 需要完整用户信息时，控制器可自行注入 UserService 查询
+      request.user = payload;
       // 所有验证通过，放行请求
       return true;
     } catch (err) {
