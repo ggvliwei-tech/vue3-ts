@@ -8,6 +8,10 @@ import router from './router'
 import { setRefreshTokenCallback, setUnauthorizedCallback } from '@project/shared/request'
 import { refreshToken } from '@/api/user'
 
+// Element Plus 命令式组件 CSS（auto-import 不会自动加载）
+import 'element-plus/es/components/message/style/css'
+import 'element-plus/es/components/message-box/style/css'
+
 // token 过期时尝试刷新 token
 setRefreshTokenCallback((callback) => {
   refreshToken()
