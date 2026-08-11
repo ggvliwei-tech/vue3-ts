@@ -49,9 +49,8 @@ async function bootstrap() {
   // 设置全局接口前缀，所有路由自动加上 /api/v1
   app.setGlobalPrefix('api/v1');
 
-  // 开启全局 CORS 跨域支持，明确指定允许的来源
-  // 生产环境应配置为前端实际域名，如: origin: ['https://example.com']
-  const allowedOrigins = configService.get<string[]>('CORS_ORIGINS') || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
+  // 开启全局 CORS 跨域支持，来源由 CORS_ORIGINS 配置项控制（.env 逗号分隔）
+  const allowedOrigins = configService.get<string[]>('CORS_ORIGINS') || [];
   app.enableCors({
     origin: allowedOrigins,
     credentials: true, // 允许跨域携带 Cookie

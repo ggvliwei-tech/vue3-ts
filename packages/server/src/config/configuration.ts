@@ -37,5 +37,8 @@ export default () => ({
   OSS_BASE_URL: process.env.OSS_BASE_URL || '',                   // OSS 基础 URL
   OSS_CDN_DOMAIN: process.env.OSS_CDN_DOMAIN || '',               // CDN 域名前缀
   OSS_UPLOAD_FOLDER: process.env.OSS_UPLOAD_FOLDER || 'uploads',  // OSS 上传文件夹前缀
+
+  // CORS 跨域白名单（必填，逗号分隔）
+  CORS_ORIGINS: getEnv('CORS_ORIGINS').split(',').map(s => s.trim()),
 });
 
