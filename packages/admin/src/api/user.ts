@@ -2,7 +2,7 @@
  * Admin 管理后台用户相关 API
  */
 
-import { post } from '@project/shared/request'
+import { get, post } from '@project/shared/request'
 
 export interface LoginParams {
   username: string
@@ -20,6 +20,13 @@ export interface LoginRes {
 
 export interface RefreshTokenRes {
   accessToken: string
+}
+
+export interface User {
+  id: number
+  username: string
+  status: number
+  createTime: string
 }
 
 /**
@@ -42,4 +49,18 @@ export function logout() {
  */
 export function refreshToken() {
   return post<RefreshTokenRes>('/api/v1/user/refresh-token', undefined, { skipRefresh: true })
+}
+
+/**
+ * 获取用户列表
+ */
+export function getUserList() {
+  return get<User[]>('/api/v1/user')
+}
+
+/**
+ * 强制用户下线
+ */
+export function forceKick(userId: number) {
+  return post(`/api/v1/user/${userId}/kick`)
 }

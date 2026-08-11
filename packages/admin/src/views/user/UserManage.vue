@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { get, post } from '@project/shared/request'
-
-interface User {
-  id: number
-  username: string
-  status: number
-  createTime: string
-}
+import { getUserList, forceKick, type User } from '@/api/user'
 
 const users = ref<User[]>([])
 const loading = ref(false)
@@ -16,7 +9,7 @@ const loading = ref(false)
 async function fetchUsers() {
   loading.value = true
   try {
-    const res = await get<User[]>('/api/v1/user')
+    const res = await getUserList()
     users.value = res.data.data
   } catch (e: any) {
     ElMessage.error(e.message || '获取用户列表失败')
@@ -26,13 +19,14 @@ async function fetchUsers() {
 }
 
 async function handleKick(userId: number, username: string) {
+  console.log("点击了吗a",userId,username);
   await ElMessageBox.confirm(`确定要强制用户「${username}」下线吗？`, '提示', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning',
   })
   try {
-    const res = await post(`/api/v1/user/${userId}/kick`)
+    const res = await forceKick(userId)
     ElMessage.success(res.data.data.msg || '已强制下线')
   } catch (e: any) {
     ElMessage.error(e.message || '操作失败')
