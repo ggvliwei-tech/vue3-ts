@@ -2,7 +2,7 @@
  * 账本相关 API 模块
  */
 
-import { get, post, put, del } from '@project/shared/request'
+import { get, post, patch, del } from '@project/shared/request'
 
 export interface AccountBook {
   id: number
@@ -61,7 +61,7 @@ export function getAccountBook(id: number) {
  * 更新账本
  */
 export function updateAccountBook(id: number, data: UpdateAccountBookParams) {
-  return put<AccountBook>(`/api/v1/account-book/${id}`, data)
+  return patch<AccountBook>(`/api/v1/account-book/${id}`, data)
 }
 
 /**

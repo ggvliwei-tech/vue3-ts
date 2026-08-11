@@ -203,3 +203,11 @@ export function put<T = unknown>(
 export function del<T = unknown>(url: string, config?: RequestConfig): Promise<AxiosResponse<ApiRes<T>>> {
   return request.delete<ApiRes<T>>(url, config)
 }
+
+export function patch<T = unknown>(
+  url: string,
+  data?: unknown,
+  config?: RequestConfig,
+): Promise<AxiosResponse<ApiRes<T>>> {
+  return request.patch<ApiRes<T>>(url, data, config)
+}
