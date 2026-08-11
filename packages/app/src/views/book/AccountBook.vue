@@ -9,7 +9,7 @@ import {
   type AccountBook,
   type CreateAccountBookParams,
 } from '@/api/accountBook'
-import { showToast, showConfirmDialog, showLoadingToast, closeToast } from 'vant'
+import { showToast, showDialog, showLoadingToast, closeToast } from 'vant'
 
 const router = useRouter()
 
@@ -101,9 +101,10 @@ function onEdit(item: AccountBook) {
 
 async function onDelete(item: AccountBook) {
   try {
-    await showConfirmDialog({
+    await showDialog({
       title: '确认删除',
       message: `确定要删除账本"${item.websiteName}"吗？`,
+      showCancelButton: true,
     })
 
     showLoadingToast({ message: '删除中...', forbidClick: true, duration: 0 })

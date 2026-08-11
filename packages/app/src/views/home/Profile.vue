@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import { showConfirmDialog, showToast } from 'vant'
+import { showDialog, showToast } from 'vant'
 
 const router = useRouter()
 
 function handleLogout() {
-  showConfirmDialog({
+  showDialog({
     title: '确认退出',
     message: '确定要退出登录吗？',
+    showCancelButton: true,
   })
     .then(() => {
       localStorage.removeItem('token')
