@@ -191,14 +191,10 @@ export class UserService {
     return { msg: `用户 ${user.username} 已${user.status === 1 ? '启用' : '禁用'}`, status: user.status };
   }
 
-  // 查询所有用户列表
+  // 查询所有用户列表（不返回密码）
   async findAll() {
-    return await this.userRepo.find();
-  }
-
-  // 根据用户 ID 查询单个用户
-  // 此方法被 JwtAuthGuard 调用，用于验证 Token 中的用户是否存在
-  async findById(id: number) {
-    return await this.userRepo.findOneBy({ id });
+    return await this.userRepo.find({
+      select: { id: true, username: true, status: true, createTime: true },
+    });
   }
 }
