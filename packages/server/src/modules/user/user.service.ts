@@ -167,6 +167,20 @@ export class UserService {
     return { msg: '退出登录成功' };
   }
 
+  // 强制用户下线：加入黑名单（立即生效）+ 删除 RefreshToken
+  async forceKick(userId: number) {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('用户不存在');
+
+    // 1. 将当前用户加入 Redis 黑名单（TTL 120 秒，覆盖 Access Token 1 分钟有效期）
+    await this.redisService.set(`blacklist:token:${userId}`, '1', 120);
+
+    // 2. 删除 RefreshToken，阻止后续刷新
+    await this.redisService.del(`refresh:token:${userId}`);
+
+    return { msg: `用户 ${user.username} 已强制下线` };
+  }
+
   // 查询所有用户列表
   async findAll() {
     return await this.userRepo.find();

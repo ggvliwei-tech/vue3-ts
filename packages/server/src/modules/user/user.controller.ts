@@ -3,7 +3,7 @@ import {
   Get, // GET 请求装饰器
   Post, // POST 请求装饰器
   Body, // 请求体参数装饰器
-  UseGuards, Res, // 使用守卫的装饰器
+  UseGuards, Res, Param, // 使用守卫的装饰器 + 路由参数
 } from '@nestjs/common';
 import type { Response } from 'express'; // Express Response 类型，包含 cookie/clearCookie 等方法
 import {
@@ -108,6 +108,13 @@ export class UserController {
 
 
   // ===== 以下为需要 JWT 鉴权的接口 =====
+
+  // 接口描述：强制用户下线（管理员功能，无需登录）
+  @ApiOperation({ summary: '强制用户下线（管理员功能）' })
+  @Post(':id/kick')
+  async forceKick(@Param('id') userId: string) {
+    return this.userService.forceKick(Number(userId));
+  }
 
   // 接口描述：获取用户列表
   @ApiOperation({ summary: '获取用户列表（需要Token）' })

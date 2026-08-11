@@ -8,6 +8,8 @@ import {
 import { JwtService } from '@nestjs/jwt';
 // 配置服务，用于读取 JWT 密钥
 import { ConfigService } from '@nestjs/config';
+// Redis 服务，用于黑名单检查
+import { RedisService } from '../../modules/redis/redis.service';
 
 // 标记为可注入的服务
 @Injectable()
@@ -19,6 +21,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService, // 注入 JWT 服务，用于 Token 验证
     private readonly configService: ConfigService, // 注入配置服务，获取 JWT 密钥
+    private readonly redisService: RedisService, // 注入 Redis 服务，用于黑名单检查
   ) {}
 
   // 守卫核心方法，返回 true 放行请求，返回 false 或抛异常则拒绝
@@ -50,6 +53,13 @@ export class JwtAuthGuard implements CanActivate {
       // payload 包含 { sub: userId, username }
       // 需要完整用户信息时，控制器可自行注入 UserService 查询
       request.user = payload;
+
+      // 第五步：检查 Redis 黑名单（强制下线拦截）
+      const isBlacklisted = await this.redisService.exists(`blacklist:token:${payload.sub}`);
+      if (isBlacklisted) {
+        throw new UnauthorizedException('账号已在其他地方被强制下线，请重新登录');
+      }
+
       // 所有验证通过，放行请求
       return true;
     } catch (err) {

@@ -54,7 +54,6 @@ export class AccountBookController {
     @CurrentUser() user: any
   ) {
 
-    console.log('当前登录用户信息:', user);
     // 调用服务层查询方法，传入用户 ID 和分页参数
     return this.accountBookService.findAll(user.id, +page, +limit);
   }
