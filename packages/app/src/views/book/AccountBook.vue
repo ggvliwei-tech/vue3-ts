@@ -19,7 +19,7 @@ const finished = ref(false)
 const accountBooks = ref<AccountBook[]>([])
 const page = ref(1)
 const limit = 10
-const isInitialLoad = ref(true) // 防止首次挂载重复请求
+const isInitialLoad = ref(true) // 防止首次挂载时 van-list 重复触发 onLoad
 
 // 弹窗相关
 const showPopup = ref(false)
@@ -54,6 +54,7 @@ async function loadData(isRefresh = false) {
     }
   } catch (err: any) {
     showToast(err.message || '加载失败')
+    finished.value = true // 请求失败时终止 loading，防止 van-list 无限重试
   } finally {
     loading.value = false
     refreshing.value = false
@@ -68,7 +69,7 @@ function onRefresh() {
 }
 
 function onLoad() {
-  if (isInitialLoad.value) {
+  if (isInitialLoad.value || finished.value) {
     isInitialLoad.value = false
     return
   }
