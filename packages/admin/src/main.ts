@@ -1,12 +1,32 @@
 /**
  * Admin 管理后台应用入口文件
- * 创建 Vue 3 应用实例并挂载到 DOM
  */
 
-// 从 vue 库中导入 createApp 函数，用于创建 Vue 应用实例
 import { createApp } from 'vue'
-// 导入根组件 App.vue
 import App from './App.vue'
+import router from './router'
+import { setRefreshTokenCallback, setUnauthorizedCallback } from '@project/shared/request'
+import { refreshToken } from '@/api/user'
 
-// 创建 Vue 应用实例并将 App 组件挂载到 id 为 'app' 的 DOM 元素上
-createApp(App).mount('#app')
+// token 过期时尝试刷新 token
+setRefreshTokenCallback((callback) => {
+  refreshToken()
+    .then((res) => {
+      const newToken = res.data.data.accessToken
+      localStorage.setItem('token', newToken)
+      callback(newToken)
+    })
+    .catch(() => {
+      localStorage.removeItem('token')
+      callback(null)
+      router.push('/login')
+    })
+})
+
+// token 刷新失败后的兜底回调
+setUnauthorizedCallback(() => {
+  localStorage.removeItem('token')
+  router.push('/login')
+})
+
+createApp(App).use(router).mount('#app')

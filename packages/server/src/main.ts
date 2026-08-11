@@ -51,7 +51,7 @@ async function bootstrap() {
 
   // 开启全局 CORS 跨域支持，明确指定允许的来源
   // 生产环境应配置为前端实际域名，如: origin: ['https://example.com']
-  const allowedOrigins = configService.get<string[]>('CORS_ORIGINS') || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:4173'];
+  const allowedOrigins = configService.get<string[]>('CORS_ORIGINS') || ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
   app.enableCors({
     origin: allowedOrigins,
     credentials: true, // 允许跨域携带 Cookie
