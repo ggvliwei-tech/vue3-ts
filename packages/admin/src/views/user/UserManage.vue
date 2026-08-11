@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUserList, forceKick, toggleUserStatus, type User } from '@/api/user'
+import { formatDate } from '@project/shared'
 
 const users = ref<User[]>([])
 const loading = ref(false)
@@ -53,7 +54,6 @@ onMounted(() => {
   fetchUsers()
 })
 
-import { formatDate } from '@project/shared'
 </script>
 
 <template>

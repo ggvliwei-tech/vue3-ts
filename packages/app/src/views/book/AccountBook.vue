@@ -9,6 +9,7 @@ import {
   type AccountBook,
   type CreateAccountBookParams,
 } from '@/api/accountBook'
+import { formatDate } from '@project/shared'
 import { showToast, showDialog, showLoadingToast, closeToast } from 'vant'
 
 const router = useRouter()
@@ -170,8 +171,6 @@ function onCopyAccount(account: string) {
     navigator.clipboard.writeText(account).then(() => showToast('已复制'))
   }
 }
-
-import { formatDate } from '@project/shared'
 
 onMounted(() => {
   loadData(true)
