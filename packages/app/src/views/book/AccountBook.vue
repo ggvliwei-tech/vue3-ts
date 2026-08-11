@@ -274,6 +274,7 @@ onMounted(() => {
 .account-book-content {
   flex: 1;
   overflow-y: auto;
+  background: #f5f5f5;
 
   :deep(.van-pull-refresh) {
     min-height: 100%;
