@@ -46,10 +46,4 @@ function onChange(tab: string) {
   height: 100vh;
   background-color: #f5f5f5;
 }
-
-.tabbar-layout :deep(.van-nav-bar) {
-  position: sticky;
-  top: 0;
-  z-index: 99;
-}
 </style>

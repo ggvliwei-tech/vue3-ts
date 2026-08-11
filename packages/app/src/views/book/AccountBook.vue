@@ -180,36 +180,38 @@ onMounted(() => {
   <div class="account-book-page">
     <van-nav-bar title="账本列表" left-arrow @click-left="router.back()" />
 
-    <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
-      <van-list
-        v-model:loading="loading"
-        :finished="finished"
-        finished-text="没有更多了"
-        @load="onLoad"
-      >
-        <van-cell-group v-for="item in accountBooks" :key="item.id" inset class="book-card">
-          <van-cell :title="item.websiteName" :value="item.websiteUrl" is-link>
-            <template #right-icon>
-              <van-button size="small" type="primary" @click="onEdit(item)">编辑</van-button>
-              <van-button size="small" type="danger" plain @click="onDelete(item)">删除</van-button>
-            </template>
-          </van-cell>
-          <van-cell title="账号" :value="item.loginAccount" @click="onCopyAccount(item.loginAccount)">
-            <template #right-icon>
-              <van-icon name="copy" />
-            </template>
-          </van-cell>
-          <van-cell v-if="item.websiteUrl" title="网址" :value="item.websiteUrl" is-link @click="onCopyUrl(item.websiteUrl)">
-            <template #right-icon>
-              <van-icon name="copy" />
-            </template>
-          </van-cell>
-          <van-cell title="更新时间" :value="item.updatedAt" />
-        </van-cell-group>
+    <div class="account-book-content">
+      <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
+        <van-list
+          v-model:loading="loading"
+          :finished="finished"
+          finished-text="没有更多了"
+          @load="onLoad"
+        >
+          <van-cell-group v-for="item in accountBooks" :key="item.id" inset class="book-card">
+            <van-cell :title="item.websiteName" :value="item.websiteUrl" is-link>
+              <template #right-icon>
+                <van-button size="small" type="primary" @click="onEdit(item)">编辑</van-button>
+                <van-button size="small" type="danger" plain @click="onDelete(item)">删除</van-button>
+              </template>
+            </van-cell>
+            <van-cell title="账号" :value="item.loginAccount" @click="onCopyAccount(item.loginAccount)">
+              <template #right-icon>
+                <van-icon name="copy" />
+              </template>
+            </van-cell>
+            <van-cell v-if="item.websiteUrl" title="网址" :value="item.websiteUrl" is-link @click="onCopyUrl(item.websiteUrl)">
+              <template #right-icon>
+                <van-icon name="copy" />
+              </template>
+            </van-cell>
+            <van-cell title="更新时间" :value="item.updatedAt" />
+          </van-cell-group>
 
-        <van-empty v-if="!loading && accountBooks.length === 0" description="暂无账本数据" />
-      </van-list>
-    </van-pull-refresh>
+          <van-empty v-if="!loading && accountBooks.length === 0" description="暂无账本数据" />
+        </van-list>
+      </van-pull-refresh>
+    </div>
 
     <!-- 悬浮新增按钮 -->
     <van-button round type="primary" class="add-btn" @click="onAdd">
@@ -259,9 +261,23 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .account-book-page {
-  min-height: 100vh;
-  background: #f7f8fa;
-  padding-bottom: 80px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+
+  .van-nav-bar {
+    flex-shrink: 0;
+  }
+}
+
+.account-book-content {
+  flex: 1;
+  overflow-y: auto;
+
+  :deep(.van-pull-refresh) {
+    min-height: 100%;
+  }
 }
 
 .book-card {
