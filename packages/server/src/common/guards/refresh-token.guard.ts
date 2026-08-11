@@ -36,11 +36,9 @@ export class RefreshTokenGuard implements CanActivate {
         secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       });
 
-      // 数据库比对是否一致（防止已退出登录的旧 Token）
-      // 从 Token 载荷中获取用户 ID，查询数据库验证用户
-      const user = await this.userService.findById(payload.sub);
-      // 如果用户不存在，或数据库中的 refreshToken 与当前 Token 不一致，拒绝请求
-      if (!user || user.refreshToken !== token) {
+      // 从 Redis 验证 RefreshToken 是否有效
+      const user = await this.userService.validateRefreshToken(payload.sub, token);
+      if (!user) {
         throw new UnauthorizedException('刷新令牌已失效，请重新登录');
       }
 

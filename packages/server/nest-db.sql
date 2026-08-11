@@ -24,6 +24,9 @@ CREATE TABLE `sys_user` (
   UNIQUE INDEX `uk_sys_user_username` (`username`) COMMENT '用户名唯一约束'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
 
+-- 迁移：2026-08-11 RefreshToken 迁移至 Redis，删除数据库中的冗余字段
+ALTER TABLE `sys_user` DROP COLUMN IF EXISTS `refreshToken`;
+
 -- 4. 初始化一条管理员测试数据（密码：123456 bcrypt加密字符串）
 INSERT INTO `sys_user` (`username`, `password`, `status`)
 VALUES ('admin', '$2b$10$vI8aWBqBg5nTRcXeaMlyLu/E0c2p61c/jAF7oypnE7j4Vbtc9Qv2', 1);

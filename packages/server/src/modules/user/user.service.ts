@@ -14,6 +14,7 @@ import { User } from './entities/user.entity'; // 用户实体类
 import { CreateUserDto } from './dto/create-user.dto'; // 注册用户 DTO
 import { LoginUserDto } from './dto/login-user.dto';
 import { ConfigService } from '@nestjs/config'; // 登录用户 DTO
+import { RedisService } from '../redis/redis.service'; // Redis 服务，用于 RefreshToken 存储
 
 // 标记为可注入的服务
 @Injectable()
@@ -26,11 +27,30 @@ export class UserService {
     // 注入 JWT 服务，用于 Token 签发
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
   ) {}
 
   // 从配置中获取 JWT 过期时间，解决 string 到 StringValue 的类型兼容问题
   private getJwtExpiresIn(key: string): JwtSignOptions['expiresIn'] {
     return this.configService.getOrThrow<string>(key) as JwtSignOptions['expiresIn'];
+  }
+
+  // 将 JWT expiresIn 格式（如 "7d"、"1h"、"30m"）转为 Redis TTL 秒数
+  private parseJwtExpiry(key: string): number {
+    const value = this.configService.getOrThrow<string>(key);
+    const num = parseInt(value, 10);
+    if (value.endsWith('d')) return num * 24 * 60 * 60;
+    if (value.endsWith('h')) return num * 60 * 60;
+    if (value.endsWith('m')) return num * 60;
+    if (value.endsWith('s')) return num;
+    return num; // 纯数字默认为秒
+  }
+
+  // 从 Redis 验证 RefreshToken 是否有效，有效则返回用户信息
+  async validateRefreshToken(userId: number, token: string): Promise<User | null> {
+    const stored = await this.redisService.get(`refresh:token:${userId}`);
+    if (!stored || stored !== token) return null;
+    return this.userRepo.findOneBy({ id: userId });
   }
 
   // 注册用户：对密码进行 bcrypt 哈希后存入数据库
@@ -102,9 +122,9 @@ export class UserService {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: this.getJwtExpiresIn('JWT_REFRESH_EXPIRES_IN'),
     });
-// 存入数据库，绑定当前用户
-    user.refreshToken = refreshToken;
-    await this.userRepo.save(user);
+    // 将 RefreshToken 存入 Redis，设置与 JWT 一致的 TTL（自动过期）
+    const ttlSeconds = this.parseJwtExpiry('JWT_REFRESH_EXPIRES_IN');
+    await this.redisService.set(`refresh:token:${user.id}`, refreshToken, ttlSeconds);
     // 返回 Token 和用户基本信息
     return {
       accessToken,
@@ -133,19 +153,17 @@ export class UserService {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn:this.getJwtExpiresIn('JWT_REFRESH_EXPIRES_IN'),
     });
-    user.refreshToken = newRefreshToken;
-    await this.userRepo.save(user);
+    // 更新 Redis 中的 RefreshToken，设置与 JWT 一致的 TTL
+    const ttlSeconds = this.parseJwtExpiry('JWT_REFRESH_EXPIRES_IN');
+    await this.redisService.set(`refresh:token:${userId}`, newRefreshToken, ttlSeconds);
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
 
     // return { accessToken: newAccessToken };
   }
 
-  // 退出登录：清空数据库refreshToken，直接失效
+  // 退出登录：从 Redis 删除 RefreshToken，令牌立即失效
   async logout(userId: number) {
-    const user = await this.userRepo.findOneBy({ id: userId });
-    if (!user) throw new NotFoundException('用户不存在');
-    user.refreshToken = null;
-    await this.userRepo.save(user);
+    await this.redisService.del(`refresh:token:${userId}`);
     return { msg: '退出登录成功' };
   }
 

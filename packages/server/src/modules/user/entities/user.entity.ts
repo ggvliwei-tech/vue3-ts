@@ -24,11 +24,6 @@ export class User {
   @Column({ default: 1, comment: '状态 1正常 0禁用' })
   status!: number;
 
-
-  // 新增：刷新令牌
-  @Column({ type: 'varchar', length: 255, nullable: true, comment: '刷新Token' })
-  refreshToken: string | null;
-
   // 创建时间字段，类型为时间戳，默认值为数据库当前时间
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   createTime!: Date;
