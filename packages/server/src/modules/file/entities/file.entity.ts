@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 
 @Entity('sys_file')
 export class FileEntity {
@@ -41,6 +41,7 @@ export class FileEntity {
   @Column({ nullable: true })
   uploadUserId: number;
 
-  @CreateDateColumn()
-  createTime: Date;
+  // 上传时间，存储毫秒时间戳
+  @Column({ type: 'bigint', comment: '上传时间(毫秒时间戳)' })
+  createTime: number;
 }

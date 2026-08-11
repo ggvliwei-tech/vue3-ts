@@ -26,7 +26,7 @@ export interface User {
   id: number
   username: string
   status: number
-  createTime: string
+  createTime: number
 }
 
 /**

@@ -19,7 +19,7 @@ CREATE TABLE `sys_user` (
   `username` VARCHAR(50) NOT NULL COMMENT '登录用户名',
   `password` VARCHAR(100) NOT NULL COMMENT '加密后密码',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '账号状态：1正常 0禁用',
-  `createTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `createTime` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
   PRIMARY KEY (`id`),
   UNIQUE INDEX `uk_sys_user_username` (`username`) COMMENT '用户名唯一约束'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
@@ -63,7 +63,7 @@ CREATE TABLE `sys_file` (
   `storage_type` VARCHAR(20) NOT NULL DEFAULT 'local' COMMENT '存储类型：local本地/oss阿里云OSS',
   `module` VARCHAR(50) DEFAULT NULL COMMENT '归属模块：avatar头像、goods商品图、contract合同附件等',
   `upload_user_id` INT UNSIGNED DEFAULT NULL COMMENT '上传人用户ID',
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
+  `create_time` BIGINT NOT NULL COMMENT '上传时间(毫秒时间戳)',
   PRIMARY KEY (`id`),
   KEY `idx_module` (`module`),
   KEY `idx_upload_user_id` (`upload_user_id`)

@@ -17,18 +17,13 @@ export class AccountBookEntity {
   @Column({ length: 255, comment: '登录密码' })
   loginPassword: string;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', comment: '创建时间' })
-  createdAt: Date;
+  @Column({ type: 'bigint', comment: '创建时间(毫秒时间戳)' })
+  createdAt: number;
 
 
   @Column({ comment: '创建人用户ID' })
   userId: number;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-    comment: '修改时间',
-  })
-  updatedAt: Date;
+  @Column({ type: 'bigint', comment: '修改时间(毫秒时间戳)' })
+  updatedAt: number;
 }

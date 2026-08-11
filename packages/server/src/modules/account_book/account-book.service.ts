@@ -32,6 +32,8 @@ export class AccountBookService {
       ...dto,                    // 展开 DTO 数据
       loginPassword: hashPwd,    // 使用加密后的密码
       userId,                    // 关联创建人用户 ID
+      createdAt: Date.now(),     // 创建时间
+      updatedAt: Date.now(),     // 更新时间
     });
     // 将账本实体保存到数据库
     return this.accountBookRepo.save(record);
@@ -76,8 +78,8 @@ export class AccountBookService {
       dto.loginPassword = await bcrypt.hash(dto.loginPassword, 10);
     }
 
-    // 将 DTO 中的字段合并到实体对象
-    Object.assign(item, dto);
+    // 将 DTO 中的字段合并到实体对象，同时更新 updatedAt
+    Object.assign(item, dto, { updatedAt: Date.now() });
     // 保存更新后的实体到数据库
     return this.accountBookRepo.save(item);
   }

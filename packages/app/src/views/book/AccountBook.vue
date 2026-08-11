@@ -171,6 +171,12 @@ function onCopyAccount(account: string) {
   }
 }
 
+function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 onMounted(() => {
   loadData(true)
 })
@@ -205,7 +211,7 @@ onMounted(() => {
                 <van-icon name="copy" />
               </template>
             </van-cell>
-            <van-cell title="更新时间" :value="item.updatedAt" />
+            <van-cell title="更新时间" :value="formatTime(item.updatedAt)" />
           </van-cell-group>
 
           <van-empty v-if="!loading && accountBooks.length === 0" description="暂无账本数据" />

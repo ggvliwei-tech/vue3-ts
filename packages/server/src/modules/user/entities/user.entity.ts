@@ -24,7 +24,7 @@ export class User {
   @Column({ default: 1, comment: '状态 1正常 0禁用' })
   status!: number;
 
-  // 创建时间字段，类型为时间戳，默认值为数据库当前时间
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  createTime!: Date;
+  // 创建时间字段，存储毫秒时间戳
+  @Column({ type: 'bigint', comment: '创建时间(毫秒时间戳)' })
+  createTime!: number;
 }

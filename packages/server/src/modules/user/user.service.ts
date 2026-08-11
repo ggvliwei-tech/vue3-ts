@@ -70,6 +70,7 @@ export class UserService {
     const user = this.userRepo.create({
       ...createUserDto, // 展开 DTO 数据（包含 username 等）
       password: hashPwd, // 使用加密后的密码
+      createTime: Date.now(), // 创建时间
     });
     // 将用户实体保存到数据库，若并发请求导致唯一约束冲突，由数据库层面拦截
     try {

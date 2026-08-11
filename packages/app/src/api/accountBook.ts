@@ -11,8 +11,8 @@ export interface AccountBook {
   loginAccount: string
   loginPassword: string
   userId: number
-  createdAt: string
-  updatedAt: string
+  createdAt: number
+  updatedAt: number
 }
 
 export interface CreateAccountBookParams {
