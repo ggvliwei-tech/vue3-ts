@@ -64,3 +64,10 @@ export function getUserList() {
 export function forceKick(userId: number) {
   return post(`/api/v1/user/${userId}/kick`)
 }
+
+/**
+ * 切换用户状态（启用/禁用）
+ */
+export function toggleUserStatus(userId: number) {
+  return post(`/api/v1/user/${userId}/toggle-status`)
+}

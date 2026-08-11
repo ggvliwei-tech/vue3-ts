@@ -181,6 +181,16 @@ export class UserService {
     return { msg: `用户 ${user.username} 已强制下线` };
   }
 
+  // 切换用户状态（启用/禁用）
+  async toggleStatus(userId: number) {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('用户不存在');
+
+    user.status = user.status === 1 ? 0 : 1;
+    await this.userRepo.save(user);
+    return { msg: `用户 ${user.username} 已${user.status === 1 ? '启用' : '禁用'}`, status: user.status };
+  }
+
   // 查询所有用户列表
   async findAll() {
     return await this.userRepo.find();

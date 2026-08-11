@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getUserList, forceKick, type User } from '@/api/user'
+import { getUserList, forceKick, toggleUserStatus, type User } from '@/api/user'
 
 const users = ref<User[]>([])
 const loading = ref(false)
@@ -40,8 +40,13 @@ async function handleToggleStatus(user: User) {
     cancelButtonText: '取消',
     type: 'warning',
   })
-  ElMessage.success(`已${action}用户「${user.username}」`)
-  await fetchUsers()
+  try {
+    const res = await toggleUserStatus(user.id)
+    ElMessage.success(res.data.data.msg || `已${action}用户「${user.username}」`)
+    await fetchUsers()
+  } catch (e: any) {
+    ElMessage.error(e.message || '操作失败')
+  }
 }
 
 onMounted(() => {

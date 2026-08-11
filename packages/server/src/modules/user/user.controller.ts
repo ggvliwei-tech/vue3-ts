@@ -116,6 +116,13 @@ export class UserController {
     return this.userService.forceKick(Number(userId));
   }
 
+  // 接口描述：切换用户状态（启用/禁用，管理员功能，无需登录）
+  @ApiOperation({ summary: '切换用户状态（启用/禁用）' })
+  @Post(':id/toggle-status')
+  async toggleStatus(@Param('id') userId: string) {
+    return this.userService.toggleStatus(Number(userId));
+  }
+
   // 接口描述：获取用户列表
   @ApiOperation({ summary: '获取用户列表（需要Token）' })
   // 在 Swagger 文档中显示 Bearer Token 输入框
