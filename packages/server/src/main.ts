@@ -16,12 +16,6 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 // 导入 cookie-parser 中间件，用于解析和读取 Cookie
 import cookieParser from 'cookie-parser';
-// 导入路径拼接工具
-import { join } from 'path';
-// 导入文件系统模块
-import * as fs from 'fs';
-
-
 // 应用启动入口函数
 async function bootstrap() {
   // 创建 NestJS 应用实例，指定使用 Express 平台
@@ -31,20 +25,6 @@ async function bootstrap() {
 
   // 使用 cookie-parser 中间件解析 Cookie
   app.use(cookieParser())
-
-
-  // 全局上传配置
-  const uploadPath = join(__dirname, '../uploads');
-
-  // 文件夹不存在自动创建
-  if (!fs.existsSync(uploadPath)) {
-    fs.mkdirSync(uploadPath, { recursive: true });
-  }
-
-  // 静态资源访问：可以通过 http://域名/api/v1/uploads/xxx 访问图片
-  app.useStaticAssets(uploadPath, {
-    prefix: '/api/v1/uploads',
-  });
 
   // 设置全局接口前缀，所有路由自动加上 /api/v1
   app.setGlobalPrefix('api/v1');

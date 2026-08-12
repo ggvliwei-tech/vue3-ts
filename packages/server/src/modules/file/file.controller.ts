@@ -55,7 +55,7 @@ export class FileController {
     @CurrentUser() user: any,
   ) {
     // 调用服务的 uploadSingle 方法上传文件，归类为 'goods' 类型
-    const res = await this.fileService.uploadSingle(file, 'goods', true, user.id);
+    const res = await this.fileService.uploadSingle(file, '', true, user.id);
     // 返回统一格式的响应结果
     return {
       code: 200, // 状态码，200 表示成功
@@ -92,7 +92,7 @@ export class FileController {
     // 循环调用单文件上传逻辑
     // 使用 Promise.all 并发执行所有文件的上传操作，提升效率
     const list = await Promise.all(
-      files.map((file) => this.fileService.uploadSingle(file, 'goods', true, user.id)),
+      files.map((file) => this.fileService.uploadSingle(file, '', true, user.id)),
     );
 
     // 返回统一格式的响应结果
