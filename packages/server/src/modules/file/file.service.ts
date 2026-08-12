@@ -45,12 +45,36 @@ export class FileService {
   }
 
   /**
+   * 分页查询文件列表
+   */
+  async findAll(page = 1, limit = 10, module?: string) {
+    const skip = (page - 1) * limit;
+    const where: any = {};
+    if (module) {
+      where.module = module;
+    }
+    const [list, total] = await this.fileRepo.findAndCount({
+      where,
+      skip,
+      take: limit,
+      order: { createTime: 'DESC' },
+    });
+    return {
+      list,
+      total,
+      page,
+      limit,
+    };
+  }
+
+  /**
    * 单文件上传 + 图片压缩 + 入库
    */
   async uploadSingle(
     file: Express.Multer.File, // 上传的文件对象
     module = 'common', // 文件归属模块标识
     compress = true, // 是否开启图片压缩
+    uploadUserId?: number, // 上传人用户ID
   ) {
     // 1. 基础校验：检查文件缓冲区是否存在
     if (!file?.buffer) {
@@ -90,6 +114,8 @@ export class FileService {
       size: uploadBuffer.length,              // 压缩后的文件大小
       storageType: this.configService.get('STORAGE_TYPE'), // 当前使用的存储类型
       module,                                 // 归属模块
+      uploadUserId,                           // 上传人用户ID
+      createTime: Date.now(),                 // 上传时间
     });
     // 保存记录到数据库
     await this.fileRepo.save(record);

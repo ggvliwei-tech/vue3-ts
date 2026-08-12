@@ -1,12 +1,14 @@
 // 从 @nestjs/common 导入 NestJS 核心装饰器
 import {
   Controller, // 定义控制器，处理特定路由的请求
+  Get, // 定义 GET 请求的路由装饰器
   Post, // 定义 POST 请求的路由装饰器
   Delete, // 定义 DELETE 请求的路由装饰器
   UseInterceptors, // 使用拦截器的装饰器
   UseGuards, // 使用守卫的装饰器
   UploadedFiles, // 获取多文件上传参数的装饰器
   Param, UploadedFile, // Param 获取路由参数，UploadedFile 获取单文件上传参数的装饰器
+  Query, // 查询参数装饰器
 } from '@nestjs/common';
 // 从 @nestjs/platform-express 导入文件上传拦截器
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -14,9 +16,13 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileService } from './file.service';
 // 导入 JWT 认证守卫
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-// 导入 Swagger 认证标识
-import { ApiBearerAuth } from '@nestjs/swagger';
+// 导入 Swagger 认证标识和操作装饰器
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+
+// Swagger 标签
+@ApiTags('文件管理')
 // 定义路由前缀为 /file，所有该控制器下的接口都会以 /file 开头
 @UseGuards(JwtAuthGuard) // 控制器级别守卫，所有接口均需登录
 @ApiBearerAuth() // Swagger 显示 Bearer Token 输入框
@@ -24,6 +30,17 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 export class FileController {
   // 通过构造函数注入 FileService 服务
   constructor(private readonly fileService: FileService) {}
+
+  // ========== 文件列表（分页） ==========
+  @Get()
+  @ApiOperation({ summary: '分页查询文件列表' })
+  async findAll(
+    @Query('page') page = 1,
+    @Query('limit') limit = 10,
+    @Query('module') module?: string,
+  ) {
+    return this.fileService.findAll(+page, +limit, module);
+  }
 
   // 单文件（原有）
   // 注册 POST /file/image 路由
@@ -33,9 +50,12 @@ export class FileController {
     FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }),
   )
   // 处理单文件上传的请求，file 为拦截器解析后的文件对象
-  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+  async uploadImage(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: any,
+  ) {
     // 调用服务的 uploadSingle 方法上传文件，归类为 'goods' 类型
-    const res = await this.fileService.uploadSingle(file, 'goods');
+    const res = await this.fileService.uploadSingle(file, 'goods', true, user.id);
     // 返回统一格式的响应结果
     return {
       code: 200, // 状态码，200 表示成功
@@ -60,7 +80,10 @@ export class FileController {
     ),
   )
   // 处理多文件上传的请求，files 为拦截器解析后的文件数组
-  async uploadImages(@UploadedFiles() files: Express.Multer.File[]) {
+  async uploadImages(
+    @UploadedFiles() files: Express.Multer.File[],
+    @CurrentUser() user: any,
+  ) {
     // 判断是否有文件上传，如果没有则返回 400 错误
     if (!files || files.length === 0) {
       return { code: 400, msg: '未选择上传文件' };
@@ -69,7 +92,7 @@ export class FileController {
     // 循环调用单文件上传逻辑
     // 使用 Promise.all 并发执行所有文件的上传操作，提升效率
     const list = await Promise.all(
-      files.map((file) => this.fileService.uploadSingle(file, 'goods')), // 遍历文件数组，逐个调用服务上传
+      files.map((file) => this.fileService.uploadSingle(file, 'goods', true, user.id)),
     );
 
     // 返回统一格式的响应结果
@@ -83,6 +106,7 @@ export class FileController {
   // 删除
   // 注册 DELETE /file/:id 路由，:id 为路由参数
   @Delete(':id')
+  @ApiOperation({ summary: '删除文件' })
   // 处理删除文件的请求，id 为从路由参数中获取的文件 ID
   async remove(@Param('id') id: string) {
     // 将 id 字符串转为数字后调用服务的删除方法

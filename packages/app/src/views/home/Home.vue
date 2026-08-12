@@ -6,7 +6,7 @@ const router = useRouter()
 
 const gridItems = [
   { text: '账本', icon: 'balance-o', route: '/account-book' },
-  { text: '文件', icon: 'notes-o', route: '' },
+  { text: '文件', icon: 'notes-o', route: '/file-list' },
   { text: 'AI', icon: 'chat', route: '' },
   { text: '聊天室', icon: 'comment-o', route: '' },
 ]

@@ -45,6 +45,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/book/AccountBook.vue'),
     meta: { title: '账本列表' },
   },
+  // 文件模块
+  {
+    path: '/file-list',
+    name: 'FileList',
+    component: () => import('@/views/file/FileList.vue'),
+    meta: { title: '文件管理' },
+  },
 ]
 
 const router = createRouter({
