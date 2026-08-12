@@ -1,4 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import {Exclude} from "class-transformer";
 
 @Entity('account_book')
 export class AccountBookEntity {
@@ -15,6 +16,7 @@ export class AccountBookEntity {
   loginAccount: string;
 
   @Column({ length: 255, comment: '登录密码' })
+  @Exclude()
   loginPassword: string;
 
   @Column({ type: 'bigint', comment: '创建时间(毫秒时间戳)' })

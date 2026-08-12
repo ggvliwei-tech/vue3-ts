@@ -1,5 +1,9 @@
 // NestJS 模块装饰器
 import { Module } from '@nestjs/common';
+// APP_INTERCEPTOR 用于全局注册拦截器
+import { APP_INTERCEPTOR } from '@nestjs/core';
+// class-transformer 序列化拦截器，配合 @Expose/@Exclude 使用
+import { ClassSerializerInterceptor } from '@nestjs/common';
 // 配置模块和服务，用于读取和管理环境变量
 import { ConfigModule, ConfigService } from '@nestjs/config';
 // TypeORM 数据库模块，用于连接和操作数据库
@@ -55,6 +59,8 @@ import { ChatModule } from './modules/chat/chat.module';
         synchronize: process.env.NODE_ENV !== 'production', // 非生产环境自动同步表结构
         logging: false, // 关闭 SQL 日志输出
         charset: 'utf8mb4', // 使用 utf8mb4 字符集，支持 emoji 等特殊字符
+        supportBigNumbers: true,
+        bigNumberStrings: false // 关键：关闭大数强制字符串
       }),
       inject: [ConfigService], // 注入 ConfigService 供 useFactory 使用
     }),
@@ -65,6 +71,12 @@ import { ChatModule } from './modules/chat/chat.module';
     FileModule,
     AiModule,
     ChatModule
+  ],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: ClassSerializerInterceptor,
+    },
   ],
 })
 export class AppModule {}
