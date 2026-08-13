@@ -9,6 +9,7 @@ import {
 } from '@/api/file'
 import { formatDate } from '@project/shared'
 import { showToast, showDialog, showLoadingToast, closeToast, showImagePreview } from 'vant'
+import { getImageUrl } from '@/utils/image'
 
 const router = useRouter()
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -112,7 +113,7 @@ async function handleUpload(event: Event) {
 // 预览图片
 function previewImage(index: number) {
   showImagePreview({
-    images: getImageUrls(),
+    images: getImageUrlsList(),
     startPosition: index,
     closeable: true,
   })
@@ -141,8 +142,8 @@ async function onDelete(item: FileItem) {
 }
 
 // 获取图片列表用于预览
-function getImageUrls() {
-  return fileList.value.map((item) => item.url)
+function getImageUrlsList() {
+  return fileList.value.map((item) => getImageUrl(item.url))
 }
 
 // 格式化文件大小
@@ -178,7 +179,7 @@ onMounted(() => {
             >
               <div class="file-thumb" @click="previewImage(index)">
                 <van-image
-                  :src="item.url"
+                  :src="getImageUrl(item.url)"
                   width="100%"
                   height="100%"
                   fit="cover"
