@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { chatWithHistory, createSession } from '@/api/ai'
-import { consumeSSE } from '@/utils/sse'
+import { consumeSSEWithHistory } from '@/utils/sse'
 import { showToast } from 'vant'
+import MarkdownIt from 'markdown-it'
 
 const router = useRouter()
+
+// markdown-it 实例
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+})
 
 interface Message {
   role: 'user' | 'assistant'
@@ -35,11 +44,19 @@ async function ensureSessionId() {
   if (sessionId.value) return
   try {
     const res = await createSession()
-    sessionId.value = res.data.data.sessionId
-  } catch {
-    // 前端生成 fallback
-    sessionId.value = crypto.randomUUID?.() || Date.now().toString(36)
+    // 兼容不同响应结构
+    const newId = (res.data as any)?.data?.sessionId
+              || (res.data as any)?.sessionId
+              || (res as any)?.data?.sessionId
+    if (newId) {
+      sessionId.value = newId
+      return
+    }
+  } catch (e) {
+    console.warn('[AI] createSession 失败，使用 fallback:', e)
   }
+  // fallback: 前端生成
+  sessionId.value = crypto.randomUUID?.() ?? `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 // 解析 SSE 返回的 data 字段
@@ -52,6 +69,12 @@ function parseSSEData(raw: string): string {
   } catch {
     return raw
   }
+}
+
+// 渲染 markdown 内容
+function renderMarkdown(content: string): string {
+  if (!content) return ''
+  return md.render(content)
 }
 
 // 发送消息（非流式，带历史）
@@ -131,7 +154,7 @@ async function sendStreamMessage() {
   try {
     await ensureSessionId()
 
-    await consumeSSE(text, token, {
+    await consumeSSEWithHistory(text, sessionId.value, token, {
       onChunk: (chunk) => {
         const text = parseSSEData(chunk)
         messages.value[aiMessageIndex].content += text
@@ -213,7 +236,12 @@ onUnmounted(() => {
           class="message-avatar"
         />
         <div class="message-bubble">
-          <div class="message-content">{{ msg.content }}</div>
+          <div
+            v-if="msg.role === 'assistant'"
+            class="message-content markdown-body"
+            v-html="renderMarkdown(msg.content)"
+          ></div>
+          <div v-else class="message-content">{{ msg.content }}</div>
           <div class="message-time">
             {{ new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
           </div>
@@ -242,7 +270,7 @@ onUnmounted(() => {
         placeholder="输入你的问题..."
         :autosize="{ maxHeight: 120, minHeight: 40 }"
         :disabled="isStreaming"
-        @keydown.enter.exact.prevent="sendMessage"
+        @keydown.enter.exact.prevent="sendStreamMessage"
       />
       <div class="input-actions">
         <van-button
@@ -261,7 +289,7 @@ onUnmounted(() => {
           round
           :loading="loading"
           :disabled="!inputText.trim()"
-          @click="sendMessage"
+          @click="sendStreamMessage"
         >
           发送
         </van-button>
@@ -345,6 +373,128 @@ onUnmounted(() => {
 
 .message-content {
   white-space: pre-wrap;
+}
+
+// Markdown 渲染样式
+:deep(.markdown-body) {
+  white-space: normal;
+
+  // 段落和文本
+  p {
+    margin: 0 0 8px;
+    line-height: 1.6;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  // 行内代码
+  code {
+    background: rgba(0, 0, 0, 0.06);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: #e83e8c;
+    word-break: break-word;
+  }
+
+  // 代码块
+  pre {
+    background: #282c34;
+    color: #abb2bf;
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+
+    code {
+      background: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+  }
+
+  // 标题
+  h1, h2, h3, h4, h5, h6 {
+    margin: 12px 0 6px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: inherit;
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+
+  h1 { font-size: 18px; }
+  h2 { font-size: 16px; }
+  h3 { font-size: 15px; }
+
+  // 列表
+  ul, ol {
+    padding-left: 20px;
+    margin: 4px 0;
+  }
+
+  li {
+    margin: 2px 0;
+    line-height: 1.6;
+  }
+
+  // 链接
+  a {
+    color: #1989fa;
+    text-decoration: none;
+    word-break: break-all;
+  }
+
+  // 引用
+  blockquote {
+    border-left: 3px solid #dcdee0;
+    padding-left: 12px;
+    color: #969799;
+    margin: 8px 0;
+  }
+
+  // 表格
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    font-size: 13px;
+
+    th, td {
+      border: 1px solid #ebedf0;
+      padding: 6px 10px;
+      text-align: left;
+    }
+
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+    }
+  }
+
+  // 水平线
+  hr {
+    border: none;
+    border-top: 1px solid #ebedf0;
+    margin: 12px 0;
+  }
+
+  // 加粗和斜体
+  strong {
+    font-weight: 600;
+  }
+
+  em {
+    font-style: italic;
+  }
 }
 
 .message-time {
