@@ -31,28 +31,28 @@ export interface SessionItem {
  * 单轮简单问答
  */
 export function chat(data: ChatParams) {
-  return post<ChatRes>('/ai/chat', data)
+  return post<ChatRes>('/api/v1/ai/chat', data)
 }
 
 /**
  * 多轮对话（带历史上下文）
  */
 export function chatWithHistory(data: ChatParams) {
-  return post<ChatHistoryRes>('/ai/chat/history', data)
+  return post<ChatHistoryRes>('/api/v1/ai/chat/history', data)
 }
 
 /**
  * RAG 知识库问答
  */
 export function ragChat(data: ChatParams) {
-  return post<ChatRes>('/ai/rag', data)
+  return post<ChatRes>('/api/v1/ai/rag', data)
 }
 
 /**
  * 创建会话 ID
  */
 export function createSession() {
-  return post<CreateSessionRes>('/ai/session/create')
+  return post<CreateSessionRes>('/api/v1/ai/session/create')
 }
 
 /**
@@ -61,7 +61,7 @@ export function createSession() {
 export function uploadPdf(file: File) {
   const formData = new FormData()
   formData.append('file', file)
-  return post('/ai/upload/pdf', formData, {
+  return post('/api/v1/ai/upload/pdf', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
@@ -70,19 +70,19 @@ export function uploadPdf(file: File) {
  * 列出所有会话
  */
 export function listSessions() {
-  return get<SessionItem[]>('/ai/sessions')
+  return get<SessionItem[]>('/api/v1/ai/sessions')
 }
 
 /**
  * 删除单个会话
  */
 export function deleteSession(sessionId: string) {
-  return post(`/ai/session/${sessionId}/delete`)
+  return post(`/api/v1/ai/session/${sessionId}/delete`)
 }
 
 /**
  * 清空所有会话历史
  */
 export function clearSessions() {
-  return post('/ai/sessions/clear')
+  return post('/api/v1/ai/sessions/clear')
 }

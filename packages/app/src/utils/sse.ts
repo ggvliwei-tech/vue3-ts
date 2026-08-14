@@ -29,7 +29,7 @@ export async function consumeSSE(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
-  const url = `${getBaseURL()}/ai/stream?question=${encodeURIComponent(question)}`
+  const url = `${getBaseURL()}/api/v1/ai/stream?question=${encodeURIComponent(question)}`
 
   try {
     const response = await fetch(url, {
@@ -102,7 +102,7 @@ export async function consumeSSEWithHistory(
     question,
     sessionId,
   })
-  const url = `${getBaseURL()}/ai/stream/history?${params}`
+  const url = `${getBaseURL()}/api/v1/ai/stream/history?${params}`
 
   try {
     const response = await fetch(url, {
