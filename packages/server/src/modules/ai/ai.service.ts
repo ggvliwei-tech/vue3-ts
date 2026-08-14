@@ -221,4 +221,80 @@ ${question}
     // 返回流式数据
     return stream;
   }
+
+  // ====================== 6. 列出所有会话 ======================
+  async listSessions() {
+    const redisClient = this.redisService.getClient();
+    const keys = await redisClient.keys('chat_history:*');
+    const sessions: Array<{ sessionId: string; messageCount: number }> = [];
+    for (const key of keys) {
+      const data = await this.redisService.getJson<Array<{ type: string; content: string }>>(key);
+      const sessionId = key.replace('chat_history:', '');
+      sessions.push({
+        sessionId,
+        messageCount: data?.length || 0,
+      });
+    }
+    return sessions;
+  }
+
+  // ====================== 7. 删除单个会话 ======================
+  async deleteSession(sessionId: string) {
+    const historyKey = `chat_history:${sessionId}`;
+    await this.redisService.del(historyKey);
+    return true;
+  }
+
+  // ====================== 8. 清空所有会话 ======================
+  async clearSessions() {
+    const redisClient = this.redisService.getClient();
+    const keys = await redisClient.keys('chat_history:*');
+    if (keys.length > 0) {
+      await redisClient.del(keys);
+    }
+    return true;
+  }
+
+  // ====================== 9. SSE 流式输出（带历史上下文） ======================
+  async streamChatWithHistory(question: string, sessionId: string) {
+    const historyKey = `chat_history:${sessionId}`;
+    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
+
+    const messages: Array<SystemMessage | HumanMessage | AIMessage> = [
+      new SystemMessage('你是后端全栈工程师，回答简洁'),
+    ];
+
+    if (historyData) {
+      for (const msg of historyData) {
+        if (msg.type === 'human') messages.push(new HumanMessage(msg.content));
+        else if (msg.type === 'ai') messages.push(new AIMessage(msg.content));
+      }
+    }
+
+    messages.push(new HumanMessage(question));
+
+    const stream = await this.llm.stream(messages);
+
+    // 包装流以收集完整回复，结束后存入 Redis
+    let fullResponse = '';
+    const self = this;
+    const savedStream = (async function* () {
+      for await (const chunk of stream) {
+        const content = typeof chunk.content === 'string' ? chunk.content : '';
+        fullResponse += content;
+        yield chunk;
+      }
+      // 流结束后保存历史
+      if (fullResponse) {
+        const updatedHistory = [
+          ...(historyData || []),
+          { type: 'human', content: question },
+          { type: 'ai', content: fullResponse },
+        ].slice(-20);
+        await self.redisService.setJson(historyKey, updatedHistory, 86400);
+      }
+    })();
+
+    return savedStream;
+  }
 }

@@ -1,5 +1,5 @@
 // 导入 NestJS 核心装饰器
-import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
 // 导入 RxJS 相关操作符，用于流式数据处理
 import { Observable, from, map } from 'rxjs';
 // 导入 AI 服务，注入业务逻辑
@@ -13,10 +13,14 @@ import { randomUUID } from 'crypto';
 // 导入 JWT 认证守卫
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 // 导入 Swagger 认证标识
-import { ApiBearerAuth } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
+// 导入文件上传拦截器
+import { FileInterceptor } from '@nestjs/platform-express';
+// 导入限流守卫
+import { ThrottlerGuard } from '@nestjs/throttler';
 
 // 设置路由前缀为 /ai
-@UseGuards(JwtAuthGuard) // 控制器级别守卫，所有接口均需登录
+@UseGuards(JwtAuthGuard, ThrottlerGuard) // 控制器级别守卫，所有接口均需登录 + 限流
 @ApiBearerAuth() // Swagger 显示 Bearer Token 输入框
 @Controller('ai')
 export class AiController {
@@ -74,10 +78,67 @@ export class AiController {
   // 5. 生成新的会话ID
   // POST /ai/session/create 路由
   @Post('session/create')
+  @ApiOperation({ summary: '创建新会话' })
   async createSession() {
     // 生成新的 UUID 作为 sessionId
     const sessionId = randomUUID();
     // 返回统一响应格式（code: 0 表示成功）
     return { code: 0, data: { sessionId } };
+  }
+
+  // 6. PDF 上传到向量库
+  // POST /ai/upload/pdf 路由
+  @Post('upload/pdf')
+  @ApiOperation({ summary: '上传 PDF 到 RAG 向量库' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async uploadPdf(@UploadedFile() file: Express.Multer.File) {
+    const result = await this.aiService.uploadPdfToVector(file.path);
+    return { code: 0, data: result };
+  }
+
+  // 7. 列出所有会话
+  // GET /ai/sessions 路由
+  @Get('sessions')
+  @ApiOperation({ summary: '列出所有会话' })
+  async listSessions() {
+    const sessions = await this.aiService.listSessions();
+    return { code: 0, data: sessions };
+  }
+
+  // 8. 删除单个会话
+  // POST /ai/session/:sessionId/delete 路由
+  @Post('session/:sessionId/delete')
+  @ApiOperation({ summary: '删除单个会话' })
+  async deleteSession(@Param('sessionId') sessionId: string) {
+    await this.aiService.deleteSession(sessionId);
+    return { code: 0, msg: '会话已删除' };
+  }
+
+  // 9. 清空所有会话
+  // POST /ai/sessions/clear 路由
+  @Post('sessions/clear')
+  @ApiOperation({ summary: '清空所有会话历史' })
+  async clearSessions() {
+    await this.aiService.clearSessions();
+    return { code: 0, msg: '所有会话已清空' };
+  }
+
+  // 10. SSE 流式输出（带会话历史）
+  // GET /ai/stream/history 路由
+  @Get('stream/history')
+  @Sse() // Server-Sent Events 装饰器
+  @ApiOperation({ summary: 'SSE 流式输出（带历史上下文）' })
+  async streamWithHistory(
+    @Query('question') question: string,
+    @Query('sessionId') sessionId: string,
+  ): Promise<Observable<MessageEvent>> {
+    const sid = sessionId || randomUUID();
+    const stream = await this.aiService.streamChatWithHistory(question, sid);
+    return from(stream).pipe(
+      map((chunk) => ({
+        data: isBaseMessage(chunk) ? JSON.stringify(chunk.content) : String(chunk),
+      })),
+    );
   }
 }

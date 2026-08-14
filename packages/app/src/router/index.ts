@@ -52,6 +52,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/file/FileList.vue'),
     meta: { title: '文件管理' },
   },
+  // AI 模块
+  {
+    path: '/ai-chat',
+    name: 'AiChat',
+    component: () => import('@/views/ai/AiChat.vue'),
+    meta: { title: 'AI 聊天' },
+  },
 ]
 
 const router = createRouter({
