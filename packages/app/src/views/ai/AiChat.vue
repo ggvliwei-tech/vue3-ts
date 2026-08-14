@@ -1,12 +1,36 @@
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted, computed } from 'vue'
+import { ref, nextTick, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { chatWithHistory, createSession } from '@/api/ai'
 import { consumeSSEWithHistory } from '@/utils/sse'
+import { refreshToken } from '@/api/user'
 import { showToast } from 'vant'
 import MarkdownIt from 'markdown-it'
 
 const router = useRouter()
+
+// 未授权错误关键词
+const TOKEN_EXPIRED_MSG = 'Token已过期或无效，请重新登录'
+
+/**
+ * 检查是否为 token 过期错误，若是则自动刷新 token
+ * @returns true 表示是 token 过期且刷新成功
+ */
+async function autoRefreshToken(msg: string): Promise<boolean> {
+  if (!msg.includes(TOKEN_EXPIRED_MSG)) return false
+
+  try {
+    const res = await refreshToken()
+    const newToken = res.data.data.accessToken
+    localStorage.setItem('token', newToken)
+    return true
+  } catch {
+    // 刷新失败，跳转登录页
+    localStorage.removeItem('token')
+    router.push('/login')
+    return false
+  }
+}
 
 // markdown-it 实例
 const md = new MarkdownIt({
@@ -112,6 +136,34 @@ async function sendMessage() {
       timestamp: Date.now(),
     })
   } catch (err: any) {
+    // 检查是否为 token 过期，是则自动刷新并重试
+    if (await autoRefreshToken(err.message)) {
+      try {
+        const res = await chatWithHistory({
+          question: text,
+          sessionId: sessionId.value,
+        })
+
+        const content = typeof res.data.data === 'string'
+          ? res.data.data
+          : (res.data.data as any)?.content || ''
+
+        messages.value.push({
+          role: 'assistant',
+          content,
+          timestamp: Date.now(),
+        })
+        return
+      } catch (retryErr: any) {
+        messages.value.push({
+          role: 'assistant',
+          content: `出错了：${retryErr.message || '请求失败'}`,
+          timestamp: Date.now(),
+        })
+        return
+      }
+    }
+
     messages.value.push({
       role: 'assistant',
       content: `出错了：${err.message || '请求失败'}`,
@@ -155,16 +207,92 @@ async function sendStreamMessage() {
     await ensureSessionId()
 
     await consumeSSEWithHistory(text, sessionId.value, token, {
-      onChunk: (chunk) => {
-        const text = parseSSEData(chunk)
-        messages.value[aiMessageIndex].content += text
+      onChunk: async (chunk) => {
+        const parsed = parseSSEData(chunk)
+        // 检测 SSE 数据块中是否包含 token 过期消息
+        if (parsed.includes(TOKEN_EXPIRED_MSG)) {
+          // 清除已追加的 token 过期内容
+          messages.value[aiMessageIndex].content = ''
+          // 终止当前流
+          abortController?.abort()
+          // 自动刷新 token
+          if (await autoRefreshToken(TOKEN_EXPIRED_MSG)) {
+            const newToken = localStorage.getItem('token') || ''
+            if (newToken) {
+              // 使用新 token 重新发起请求
+              try {
+                await consumeSSEWithHistory(text, sessionId.value, newToken, {
+                  onChunk: (c) => {
+                    const t = parseSSEData(c)
+                    messages.value[aiMessageIndex].content += t
+                    scrollToBottom()
+                  },
+                  onDone: () => {
+                    isStreaming.value = false
+                    abortController = null
+                  },
+                  onError: (err) => {
+                    if (!messages.value[aiMessageIndex].content) {
+                      messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
+                    }
+                    isStreaming.value = false
+                    abortController = null
+                    showToast(err.message || '流式输出失败')
+                  },
+                }, abortController!.signal)
+                return
+              } catch {
+                // 重试失败，走兜底逻辑
+              }
+            }
+          }
+          // 刷新也失败
+          messages.value[aiMessageIndex].content = 'Token 刷新失败，请重新登录'
+          isStreaming.value = false
+          abortController = null
+          showToast('Token 刷新失败')
+          return
+        }
+        // 正常内容追加
+        messages.value[aiMessageIndex].content += parsed
         scrollToBottom()
       },
       onDone: () => {
         isStreaming.value = false
         abortController = null
       },
-      onError: (error) => {
+      onError: async (error) => {
+        // 检查是否为 token 过期，是则自动刷新并重试
+        if (await autoRefreshToken(error.message)) {
+          const newToken = localStorage.getItem('token') || ''
+          if (newToken) {
+            try {
+              await consumeSSEWithHistory(text, sessionId.value, newToken, {
+                onChunk: (chunk) => {
+                  const text = parseSSEData(chunk)
+                  messages.value[aiMessageIndex].content += text
+                  scrollToBottom()
+                },
+                onDone: () => {
+                  isStreaming.value = false
+                  abortController = null
+                },
+                onError: (err) => {
+                  if (!messages.value[aiMessageIndex].content) {
+                    messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
+                  }
+                  isStreaming.value = false
+                  abortController = null
+                  showToast(err.message || '流式输出失败')
+                },
+              }, abortController!.signal)
+              return
+            } catch {
+              // 重试也失败，走下面兜底逻辑
+            }
+          }
+        }
+
         if (!messages.value[aiMessageIndex].content) {
           messages.value[aiMessageIndex].content = `流式输出错误：${error.message}`
         }
@@ -174,6 +302,37 @@ async function sendStreamMessage() {
       },
     }, abortController.signal)
   } catch (err: any) {
+    // 检测是否为 token 过期
+    if (await autoRefreshToken(err.message)) {
+      const newToken = localStorage.getItem('token') || ''
+      if (newToken) {
+        try {
+          await consumeSSEWithHistory(text, sessionId.value, newToken, {
+            onChunk: (chunk) => {
+              const parsed = parseSSEData(chunk)
+              messages.value[aiMessageIndex].content += parsed
+              scrollToBottom()
+            },
+            onDone: () => {
+              isStreaming.value = false
+              abortController = null
+            },
+            onError: (error) => {
+              if (!messages.value[aiMessageIndex].content) {
+                messages.value[aiMessageIndex].content = `流式输出错误：${error.message}`
+              }
+              isStreaming.value = false
+              abortController = null
+              showToast(error.message || '流式输出失败')
+            },
+          }, abortController!.signal)
+          return
+        } catch {
+          // 重试失败，走兜底
+        }
+      }
+    }
+
     if (!messages.value[aiMessageIndex].content) {
       messages.value[aiMessageIndex].content = `请求失败：${err.message}`
     }
@@ -232,7 +391,7 @@ onUnmounted(() => {
           round
           width="32"
           height="32"
-          src="https://img.yzcdn.cn/public_files/2019/03/05/2b60f35875a34cd08561950739118508.png"
+          src="https://sybimg.banglail.com/app-icons/2025-07-23/57d57ca4bf9c4f0fb63edc76c3a1cfe9.png"
           class="message-avatar"
         />
         <div class="message-bubble">
@@ -251,7 +410,7 @@ onUnmounted(() => {
           round
           width="32"
           height="32"
-          src="https://img.yzcdn.cn/public_files/2019/03/05/3c17e0e5981641fc9005f8e179611875.png"
+          src="https://sybimg.banglail.com/app-icons/2025-07-23/57d57ca4bf9c4f0fb63edc76c3a1cfe9.png"
           class="message-avatar"
         />
       </div>
