@@ -14,6 +14,7 @@ import 'vant/es/dialog/style/index.mjs'
 import 'vant/es/toast/style/index.mjs'
 import 'vant/es/overlay/style/index.mjs'
 import 'vant/es/popup/style/index.mjs'
+import 'vant/es/image-preview/style/index.mjs'
 
 // token 过期时尝试刷新 token
 setRefreshTokenCallback((callback) => {

@@ -116,6 +116,7 @@ function previewImage(index: number) {
     images: getImageUrlsList(),
     startPosition: index,
     closeable: true,
+    showIndex: true,
   })
 }
 
