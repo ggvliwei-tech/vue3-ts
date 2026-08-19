@@ -87,8 +87,9 @@ async function ensureSessionId() {
 function parseSSEData(raw: string): string {
   try {
     const parsed = JSON.parse(raw)
+
     if (typeof parsed === 'string') return parsed
-    if (parsed.content) return parsed.content
+    if (parsed.data) return parsed.data
     return JSON.stringify(parsed)
   } catch {
     return raw
