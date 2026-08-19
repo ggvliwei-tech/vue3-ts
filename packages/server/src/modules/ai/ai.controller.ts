@@ -1,7 +1,7 @@
 // 导入 NestJS 核心装饰器
 import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
 // 导入 RxJS 相关操作符，用于流式数据处理
-import { Observable, from, map } from 'rxjs';
+import { Observable, from, map, filter } from 'rxjs';
 // 导入 AI 服务，注入业务逻辑
 import { AiService } from './ai.service';
 // 导入聊天 DTO，定义请求数据结构
@@ -68,10 +68,20 @@ export class AiController {
     const stream = await this.aiService.streamChat(question);
     // 将流数据转换为 SSE 消息事件格式
     return from(stream).pipe(
-      map((chunk) => ({
-        // 如果是 LangChain 消息则序列化 content，否则转为字符串
-        data: isBaseMessage(chunk) ? JSON.stringify(chunk.content) : String(chunk),
-      })),
+      map((chunk) => {
+        // 兼容 string 和 ContentBlock[] 两种格式，提取纯文本
+        const extractText = (c: any): string =>
+          typeof c === 'string' ? c
+            : Array.isArray(c)
+              ? c.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('')
+              : '';
+        const content = isBaseMessage(chunk)
+          ? extractText(chunk.content)
+          : String(chunk);
+        return { data: content };
+      }),
+      // 过滤空 content chunk
+      filter((event) => !!event.data),
     );
   }
 
@@ -136,9 +146,19 @@ export class AiController {
     const sid = sessionId || randomUUID();
     const stream = await this.aiService.streamChatWithHistory(question, sid);
     return from(stream).pipe(
-      map((chunk) => ({
-        data: isBaseMessage(chunk) ? JSON.stringify(chunk.content) : String(chunk),
-      })),
+      map((chunk) => {
+        const extractText = (c: any): string =>
+          typeof c === 'string' ? c
+            : Array.isArray(c)
+              ? c.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('')
+              : '';
+        const content = isBaseMessage(chunk)
+          ? extractText(chunk.content)
+          : String(chunk);
+        return { data: content };
+      }),
+      // 过滤空 content chunk
+      filter((event) => !!event.data),
     );
   }
 }

@@ -83,15 +83,16 @@ async function ensureSessionId() {
   sessionId.value = crypto.randomUUID?.() ?? `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-// 解析 SSE 返回的 data 字段
+// 解析 SSE 返回的 data 字段 — 后端现在发纯文本，兼容旧格式
 function parseSSEData(raw: string): string {
   try {
     const parsed = JSON.parse(raw)
-
     if (typeof parsed === 'string') return parsed
-    if (parsed.data) return parsed.data
-    return JSON.stringify(parsed)
+    if (typeof parsed?.data === 'string') return parsed.data
+    if (typeof parsed?.content === 'string') return parsed.content
+    return ''
   } catch {
+    // 纯文本直接返回
     return raw
   }
 }

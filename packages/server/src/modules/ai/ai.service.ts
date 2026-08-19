@@ -280,7 +280,15 @@ ${question}
     const self = this;
     const savedStream = (async function* () {
       for await (const chunk of stream) {
-        const content = typeof chunk.content === 'string' ? chunk.content : '';
+        // 兼容 string 和 ContentBlock[] 两种格式
+        const content = typeof chunk.content === 'string'
+          ? chunk.content
+          : Array.isArray(chunk.content)
+            ? chunk.content
+                .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
+                .map((b: any) => b.text)
+                .join('')
+            : '';
         fullResponse += content;
         yield chunk;
       }
