@@ -67,6 +67,23 @@ export class AiService {
     }
   }
 
+  // ====================== Redis Key 辅助方法 ======================
+  private getSessionHistoryKey(userId: string, sessionId: string) {
+    return `ai:session:${userId}:${sessionId}`;
+  }
+
+  private getLastSessionKey(userId: string) {
+    return `ai:session:last:${userId}`;
+  }
+
+  async recordLastSession(userId: string, sessionId: string) {
+    await this.redisService.setJson(
+      this.getLastSessionKey(userId),
+      { sessionId, updatedAt: Date.now() },
+      604800, // 7 天
+    );
+  }
+
   // ====================== 1. 单轮简单问答（无历史） ======================
   async simpleChat(question: string) {
     // 构建消息数组：系统提示词 + 用户问题
@@ -81,9 +98,9 @@ export class AiService {
   }
 
   // ====================== 2. 多轮对话（Redis 持久化历史） ======================
-  async chatWithHistory(question: string, sessionId: string) {
-    // 构建 Redis 存储键
-    const historyKey = `chat_history:${sessionId}`;
+  async chatWithHistory(question: string, sessionId: string, userId: string) {
+    // 构建 Redis 存储键（用户隔离）
+    const historyKey = this.getSessionHistoryKey(userId, sessionId);
     // 从 Redis 获取历史消息
     const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
     // 初始化消息数组，包含系统提示词
@@ -116,6 +133,8 @@ export class AiService {
     ].slice(-20);                                 // 只保留最近 20 条
     // 存入 Redis，设置过期时间 86400 秒（24 小时）
     await this.redisService.setJson(historyKey, updatedHistory, 86400);
+    // 记录用户最近一次会话
+    await this.recordLastSession(userId, sessionId);
 
     return res.content;
   }
@@ -222,14 +241,19 @@ ${question}
     return stream;
   }
 
-  // ====================== 6. 列出所有会话 ======================
-  async listSessions() {
+  // ====================== 6. 列出用户的会话 ======================
+  async listSessions(userId: string) {
     const redisClient = this.redisService.getClient();
-    const keys = await redisClient.keys('chat_history:*');
+    const newKeys = await redisClient.keys(`ai:session:${userId}:*`);
+    // 兼容旧格式 key
+    const oldKeys = await redisClient.keys('chat_history:*');
+    const keys = [...newKeys, ...oldKeys];
     const sessions: Array<{ sessionId: string; messageCount: number }> = [];
     for (const key of keys) {
       const data = await this.redisService.getJson<Array<{ type: string; content: string }>>(key);
-      const sessionId = key.replace('chat_history:', '');
+      const sessionId = key.startsWith('chat_history:')
+        ? key.replace('chat_history:', '')
+        : key.split(':').slice(3).join(':');
       sessions.push({
         sessionId,
         messageCount: data?.length || 0,
@@ -239,25 +263,26 @@ ${question}
   }
 
   // ====================== 7. 删除单个会话 ======================
-  async deleteSession(sessionId: string) {
-    const historyKey = `chat_history:${sessionId}`;
+  async deleteSession(userId: string, sessionId: string) {
+    const historyKey = this.getSessionHistoryKey(userId, sessionId);
     await this.redisService.del(historyKey);
     return true;
   }
 
-  // ====================== 8. 清空所有会话 ======================
-  async clearSessions() {
+  // ====================== 8. 清空当前用户所有会话 ======================
+  async clearSessions(userId: string) {
     const redisClient = this.redisService.getClient();
-    const keys = await redisClient.keys('chat_history:*');
+    const keys = await redisClient.keys(`ai:session:${userId}:*`);
     if (keys.length > 0) {
       await redisClient.del(keys);
     }
+    await this.redisService.del(this.getLastSessionKey(userId));
     return true;
   }
 
   // ====================== 9. SSE 流式输出（带历史上下文） ======================
-  async streamChatWithHistory(question: string, sessionId: string) {
-    const historyKey = `chat_history:${sessionId}`;
+  async streamChatWithHistory(question: string, sessionId: string, userId: string) {
+    const historyKey = this.getSessionHistoryKey(userId, sessionId);
     const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
 
     const messages: Array<SystemMessage | HumanMessage | AIMessage> = [
@@ -300,9 +325,26 @@ ${question}
           { type: 'ai', content: fullResponse },
         ].slice(-20);
         await self.redisService.setJson(historyKey, updatedHistory, 86400);
+        await self.recordLastSession(userId, sessionId);
       }
     })();
 
     return savedStream;
+  }
+
+  // ====================== 10. 获取用户最近一次会话 ======================
+  async getLastSession(userId: string): Promise<{ sessionId: string } | null> {
+    const lastData = await this.redisService.getJson<{ sessionId: string; updatedAt: number }>(
+      this.getLastSessionKey(userId),
+    );
+    if (!lastData?.sessionId) return null;
+    // 验证历史数据是否仍存在（TTL 可能已过期）
+    const historyKey = this.getSessionHistoryKey(userId, lastData.sessionId);
+    const exists = await this.redisService.exists(historyKey);
+    if (!exists) {
+      await this.redisService.del(this.getLastSessionKey(userId));
+      return null;
+    }
+    return { sessionId: lastData.sessionId };
   }
 }

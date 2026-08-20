@@ -18,6 +18,8 @@ import { ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 // 导入限流守卫
 import { ThrottlerGuard } from '@nestjs/throttler';
+// 导入当前用户装饰器
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 // 设置路由前缀为 /ai
 @UseGuards(JwtAuthGuard, ThrottlerGuard) // 控制器级别守卫，所有接口均需登录 + 限流
@@ -40,11 +42,11 @@ export class AiController {
   // 2. 带会话历史多轮对话
   // POST /ai/chat/history 路由
   @Post('chat/history')
-  async chatHistory(@Body() dto: ChatDto) {
+  async chatHistory(@Body() dto: ChatDto, @CurrentUser() user: { id: string; username: string }) {
     // 不传 sessionId 时自动生成一个新的
     const sessionId = dto.sessionId || randomUUID();
     // 调用服务层带历史的问答方法
-    const data = await this.aiService.chatWithHistory(dto.question, sessionId);
+    const data = await this.aiService.chatWithHistory(dto.question, sessionId, user.id);
     // 返回统一响应格式，包含 sessionId（code: 0 表示成功）
     return { code: 0, data, sessionId };
   }
@@ -89,11 +91,22 @@ export class AiController {
   // POST /ai/session/create 路由
   @Post('session/create')
   @ApiOperation({ summary: '创建新会话' })
-  async createSession() {
+  async createSession(@CurrentUser() user: { id: string; username: string }) {
     // 生成新的 UUID 作为 sessionId
     const sessionId = randomUUID();
+    // 记录用户最近会话
+    await this.aiService.recordLastSession(user.id, sessionId);
     // 返回统一响应格式（code: 0 表示成功）
     return { code: 0, data: { sessionId } };
+  }
+
+  // 5.1 获取用户最近一次会话
+  // GET /ai/session/last 路由
+  @Get('session/last')
+  @ApiOperation({ summary: '获取用户最近一次会话' })
+  async getLastSession(@CurrentUser() user: { id: string; username: string }) {
+    const lastSession = await this.aiService.getLastSession(user.id);
+    return { code: 0, data: lastSession };
   }
 
   // 6. PDF 上传到向量库
@@ -107,12 +120,12 @@ export class AiController {
     return { code: 0, data: result };
   }
 
-  // 7. 列出所有会话
+  // 7. 列出用户的会话
   // GET /ai/sessions 路由
   @Get('sessions')
-  @ApiOperation({ summary: '列出所有会话' })
-  async listSessions() {
-    const sessions = await this.aiService.listSessions();
+  @ApiOperation({ summary: '列出用户的会话' })
+  async listSessions(@CurrentUser() user: { id: string; username: string }) {
+    const sessions = await this.aiService.listSessions(user.id);
     return { code: 0, data: sessions };
   }
 
@@ -120,17 +133,17 @@ export class AiController {
   // POST /ai/session/:sessionId/delete 路由
   @Post('session/:sessionId/delete')
   @ApiOperation({ summary: '删除单个会话' })
-  async deleteSession(@Param('sessionId') sessionId: string) {
-    await this.aiService.deleteSession(sessionId);
+  async deleteSession(@Param('sessionId') sessionId: string, @CurrentUser() user: { id: string; username: string }) {
+    await this.aiService.deleteSession(user.id, sessionId);
     return { code: 0, msg: '会话已删除' };
   }
 
-  // 9. 清空所有会话
+  // 9. 清空当前用户所有会话
   // POST /ai/sessions/clear 路由
   @Post('sessions/clear')
-  @ApiOperation({ summary: '清空所有会话历史' })
-  async clearSessions() {
-    await this.aiService.clearSessions();
+  @ApiOperation({ summary: '清空当前用户所有会话历史' })
+  async clearSessions(@CurrentUser() user: { id: string; username: string }) {
+    await this.aiService.clearSessions(user.id);
     return { code: 0, msg: '所有会话已清空' };
   }
 
@@ -142,9 +155,10 @@ export class AiController {
   async streamWithHistory(
     @Query('question') question: string,
     @Query('sessionId') sessionId: string,
+    @CurrentUser() user: { id: string; username: string },
   ): Promise<Observable<MessageEvent>> {
     const sid = sessionId || randomUUID();
-    const stream = await this.aiService.streamChatWithHistory(question, sid);
+    const stream = await this.aiService.streamChatWithHistory(question, sid, user.id);
     return from(stream).pipe(
       map((chunk) => {
         const extractText = (c: any): string =>

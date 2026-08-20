@@ -27,6 +27,10 @@ export interface SessionItem {
   messageCount: number
 }
 
+export interface LastSessionRes {
+  sessionId: string
+}
+
 /**
  * 单轮简单问答
  */
@@ -53,6 +57,13 @@ export function ragChat(data: ChatParams) {
  */
 export function createSession() {
   return post<CreateSessionRes>('/api/v1/ai/session/create')
+}
+
+/**
+ * 获取用户最近一次会话
+ */
+export function getLastSession() {
+  return get<LastSessionRes | null>('/api/v1/ai/session/last')
 }
 
 /**

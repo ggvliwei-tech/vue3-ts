@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { chatWithHistory, createSession } from '@/api/ai'
+import { chatWithHistory, createSession, getLastSession } from '@/api/ai'
 import { consumeSSEWithHistory } from '@/utils/sse'
 import { refreshToken } from '@/api/user'
 import { showToast } from 'vant'
@@ -51,9 +51,32 @@ const inputText = ref('')
 const loading = ref(false)
 const sessionId = ref('')
 const isStreaming = ref(false)
+const showResumeHint = ref(false)
 
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 let abortController: AbortController | null = null
+
+// 组件挂载时恢复上次会话
+onMounted(async () => {
+  // 先从 localStorage 快速恢复
+  const cachedSessionId = localStorage.getItem('ai:last_session_id')
+  if (cachedSessionId) {
+    sessionId.value = cachedSessionId
+    showResumeHint.value = true
+  }
+  // 再从服务端验证/更新
+  try {
+    const res = await getLastSession()
+    const serverSessionId = (res.data as any)?.data?.sessionId
+    if (serverSessionId && serverSessionId !== sessionId.value) {
+      sessionId.value = serverSessionId
+      localStorage.setItem('ai:last_session_id', serverSessionId)
+      showResumeHint.value = true
+    }
+  } catch (e) {
+    console.warn('[AI] 获取最近会话失败:', e)
+  }
+})
 
 // 滚动到底部
 async function scrollToBottom() {
@@ -74,6 +97,7 @@ async function ensureSessionId() {
               || (res as any)?.data?.sessionId
     if (newId) {
       sessionId.value = newId
+      localStorage.setItem('ai:last_session_id', newId)
       return
     }
   } catch (e) {
@@ -81,6 +105,7 @@ async function ensureSessionId() {
   }
   // fallback: 前端生成
   sessionId.value = crypto.randomUUID?.() ?? `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+  localStorage.setItem('ai:last_session_id', sessionId.value)
 }
 
 // 解析 SSE 返回的 data 字段 — 后端现在发纯文本，兼容旧格式
@@ -353,6 +378,8 @@ function stopStreaming() {
 function clearChat() {
   messages.value = []
   sessionId.value = ''
+  showResumeHint.value = false
+  localStorage.removeItem('ai:last_session_id')
   showToast('已清空对话')
 }
 
@@ -378,8 +405,17 @@ onUnmounted(() => {
     <!-- 消息列表区域 -->
     <div ref="chatContainerRef" class="chat-container">
       <div v-if="messages.length === 0" class="empty-hint">
-        <van-icon name="chat-o" size="64" color="#dcdee0" />
-        <p>开始与 AI 对话吧</p>
+        <template v-if="showResumeHint">
+          <van-icon name="chat-o" size="64" color="#dcdee0" />
+          <p>已恢复上次对话，继续提问吧</p>
+          <van-button type="primary" size="small" round class="new-chat-btn" @click="clearChat">
+            开启新对话
+          </van-button>
+        </template>
+        <template v-else>
+          <van-icon name="chat-o" size="64" color="#dcdee0" />
+          <p>开始与 AI 对话吧</p>
+        </template>
       </div>
 
       <div
@@ -487,6 +523,10 @@ onUnmounted(() => {
   height: 100%;
   color: #969799;
   gap: 12px;
+
+  .new-chat-btn {
+    margin-top: 8px;
+  }
 
   p {
     font-size: 14px;
