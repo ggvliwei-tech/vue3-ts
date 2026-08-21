@@ -349,8 +349,8 @@ function formatTime(ts: number): string {
         class="message-row"
         :class="msg.isSelf ? 'message-self' : 'message-other'"
       >
-        <!-- 左侧头像：他人消息时显示 -->
-        <div class="avatar avatar-left">
+        <!-- 头像 -->
+        <div class="avatar">
           <van-icon name="user-o" size="28" color="#1989fa" />
         </div>
         <!-- 消息气泡容器 -->
@@ -361,10 +361,6 @@ function formatTime(ts: number): string {
           <div class="message-content">{{ msg.content }}</div>
           <!-- 消息发送时间 -->
           <div class="message-time">{{ formatTime(msg.createdAt) }}</div>
-        </div>
-        <!-- 右侧头像：自己消息时显示 -->
-        <div class="avatar avatar-right">
-          <van-icon name="user-o" size="28" color="#1989fa" />
         </div>
       </div>
     </div>
@@ -513,25 +509,21 @@ function formatTime(ts: number): string {
 
 // 自己发送的消息行样式
 .message-self {
-  // 气泡靠右，用左侧 margin 推开
+  // 头像排到最后（右侧）
+  .avatar {
+    order: 2;
+  }
+
+  // 气泡排到前面（左侧），靠右对齐
   .message-bubble {
     // 背景色为主题蓝色
     background: #1989fa;
     // 文字颜色为白色
     color: #fff;
-    // 圆角样式（左上角直角，模拟气泡尾巴在右侧）
+    // 圆角样式（左上角直角）
     border-radius: 12px 2px 12px 12px;
-    // 左侧自动边距推到右侧
+    // 左侧自动边距，气泡靠右
     margin-left: auto;
-  }
-
-  // 隐藏左侧头像
-  .avatar-left {
-    visibility: hidden;
-    width: 0;
-    min-width: 0;
-    padding: 0;
-    margin: 0;
   }
 
   // 自己的消息时间右对齐
@@ -542,7 +534,7 @@ function formatTime(ts: number): string {
 
 // 其他人发送的消息行样式
 .message-other {
-  // 气泡靠左，用右侧 margin 推开
+  // 气泡样式
   .message-bubble {
     // 背景色为白色
     background: #fff;
@@ -552,15 +544,6 @@ function formatTime(ts: number): string {
     border-radius: 2px 12px 12px 12px;
     // 添加轻微阴影
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-  }
-
-  // 隐藏右侧头像
-  .avatar-right {
-    visibility: hidden;
-    width: 0;
-    min-width: 0;
-    padding: 0;
-    margin: 0;
   }
 }
 
