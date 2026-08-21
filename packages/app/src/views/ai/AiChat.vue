@@ -62,6 +62,19 @@ const md = new MarkdownIt({
   breaks: true,
 })
 
+// 保存原始 fence（代码块）渲染器
+const originalFence = md.renderer.rules.fence!
+
+// 自定义 fence 渲染器：在每个代码块中注入语言标签和复制按钮
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const info = token.info ? token.info.trim() : ''
+  const rawHtml = originalFence(tokens, idx, options, env, self)
+  const langLabel = info || 'code'
+  const copyBtn = `<button class="code-copy-btn" aria-label="复制代码" type="button"><svg class="code-copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span class="code-copy-text">复制</span></button>`
+  return rawHtml.replace(/^<pre/, `<pre data-code-block><span class="code-block-lang">${langLabel}</span>${copyBtn}`)
+}
+
 // 定义消息类型接口
 interface Message {
   // 消息角色，用户或 AI 助手
@@ -189,6 +202,51 @@ function renderMarkdown(content: string): string {
   if (!content) return ''
   // 使用 markdown-it 实例将 Markdown 渲染为 HTML
   return md.render(content)
+}
+
+// 事件委托：处理代码块复制按钮的点击
+async function onCodeBlockClick(event: MouseEvent) {
+  const target = (event.target as HTMLElement).closest('.code-copy-btn') as HTMLElement | null
+  if (!target) return
+
+  const pre = target.closest('pre[data-code-block]') as HTMLElement | null
+  if (!pre) return
+
+  const codeEl = pre.querySelector('code')
+  if (!codeEl) return
+
+  const text = codeEl.textContent || ''
+  if (!text) {
+    showToast('代码内容为空')
+    return
+  }
+
+  const textEl = target.querySelector('.code-copy-text')
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    target.classList.add('copied')
+    if (textEl) textEl.textContent = '已复制'
+    showToast('已复制')
+
+    setTimeout(() => {
+      target.classList.remove('copied')
+      if (textEl) textEl.textContent = '复制'
+    }, 1500)
+  } catch {
+    showToast('复制失败，请手动选择')
+  }
 }
 
 // 发送消息的异步函数（非流式，带历史上下文）
@@ -585,6 +643,7 @@ onUnmounted(() => {
             v-if="msg.role === 'assistant'"
             class="message-content markdown-body"
             v-html="renderMarkdown(msg.content)"
+            @click="onCodeBlockClick"
           ></div>
           <!-- 用户消息内容：纯文本显示 -->
           <div v-else class="message-content">{{ msg.content }}</div>
@@ -850,6 +909,93 @@ onUnmounted(() => {
       color: inherit;
       // 字体大小继承父元素
       font-size: inherit;
+    }
+  }
+
+  // 带复制按钮的代码块容器
+  pre[data-code-block] {
+    // 相对定位，用于子元素绝对定位
+    position: relative;
+    // 顶部内边距留出语言标签和复制按钮空间
+    padding-top: 36px;
+
+    // 语言标签
+    .code-block-lang {
+      // 绝对定位在左上角
+      position: absolute;
+      top: 0;
+      left: 12px;
+      // 小字号
+      font-size: 11px;
+      // 灰色文字
+      color: #636d83;
+      // 等宽字体
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      // 垂直内边距
+      padding: 4px 0;
+    }
+
+    // 复制按钮
+    .code-copy-btn {
+      // 绝对定位在右上角
+      position: absolute;
+      top: 4px;
+      right: 8px;
+      // flex 布局
+      display: flex;
+      // 垂直居中
+      align-items: center;
+      // 图标和文字间距
+      gap: 4px;
+      // 半透明背景
+      background: rgba(255, 255, 255, 0.08);
+      // 边框
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      // 圆角
+      border-radius: 6px;
+      // 内边距
+      padding: 4px 8px;
+      // 文字颜色
+      color: #abb2bf;
+      // 小字号
+      font-size: 11px;
+      // 鼠标指针
+      cursor: pointer;
+      // 默认隐藏
+      opacity: 0;
+      // 过渡动画
+      transition: opacity 0.2s ease, background 0.2s ease;
+      // 去除移动端点击高亮
+      -webkit-tap-highlight-color: transparent;
+      // 去除默认轮廓
+      outline: none;
+
+      // 悬停或激活时显示
+      &:active,
+      &:hover {
+        opacity: 1;
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      // 已复制状态
+      &.copied {
+        opacity: 1;
+        background: rgba(86, 182, 100, 0.2);
+        border-color: rgba(86, 182, 100, 0.4);
+        color: #56b664;
+      }
+    }
+
+    // 复制图标
+    .code-copy-icon {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    // 复制文字
+    .code-copy-text {
+      white-space: nowrap;
     }
   }
 
