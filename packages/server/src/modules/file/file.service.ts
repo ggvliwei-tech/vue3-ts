@@ -49,21 +49,26 @@ export class FileService {
    */
   async findAll(page = 1, limit = 10, module?: string) {
     const skip = (page - 1) * limit;
+    // 计算跳过的记录数（偏移量）
     const where: any = {};
+    // 初始化查询条件对象
     if (module) {
-      where.module = module;
+      // 如果传入了模块参数
+      where.module = module; // 按模块过滤
     }
     const [list, total] = await this.fileRepo.findAndCount({
-      where,
-      skip,
-      take: limit,
-      order: { createTime: 'DESC' },
+      // 查询数据并获取总数
+      where, // 查询条件
+      skip, // 跳过的记录数（分页偏移）
+      take: limit, // 每页数量
+      order: { createTime: 'DESC' }, // 按创建时间倒序排列
     });
     return {
-      list,
-      total,
-      page,
-      limit,
+      // 返回分页结果对象
+      list, // 当前页数据列表
+      total, // 总记录数
+      page, // 当前页码
+      limit, // 每页数量
     };
   }
 
@@ -81,9 +86,10 @@ export class FileService {
       throw new BadRequestException('文件缓冲区为空，上传失败');
     }
     // 提取文件扩展名
-    const ext = file.originalname.substring(file.originalname.lastIndexOf('.'));
+    const ext = file.originalname.substring(file.originalname.lastIndexOf('.')); // 从原始文件名中提取扩展名
     // 校验文件扩展名和 MIME 类型是否合法
     if (!ALLOW_IMAGE_EXT.test(ext) || !ALLOW_MIME.includes(file.mimetype)) {
+      // 验证扩展名和类型是否在允许列表中
       throw new BadRequestException('仅支持 jpg、png、gif、webp 图片格式');
     }
 
@@ -101,21 +107,21 @@ export class FileService {
     // 3. 调用存储策略上传文件
     const res: UploadResult = await this.storage.upload(
       { ...file, buffer: uploadBuffer }, // 传入压缩后的文件缓冲区
-      module,                            // 模块标识
+      module, // 模块标识
     );
 
     // 4. 数据库写入记录
     const record = this.fileRepo.create({
-      originalName: file.originalname,        // 原始文件名
-      saveName: res.saveName,                 // 服务器保存的文件名
+      originalName: file.originalname, // 原始文件名
+      saveName: res.saveName, // 服务器保存的文件名
       filePath: res.filePath, // 存储相对路径
-      url: res.url,                           // 可访问的 URL
-      mimeType: file.mimetype,                // 文件 MIME 类型
-      size: uploadBuffer.length,              // 压缩后的文件大小
+      url: res.url, // 可访问的 URL
+      mimeType: file.mimetype, // 文件 MIME 类型
+      size: uploadBuffer.length, // 压缩后的文件大小
       storageType: this.configService.get('STORAGE_TYPE'), // 当前使用的存储类型
-      module,                                 // 归属模块
-      uploadUserId,                           // 上传人用户ID
-      createTime: Date.now(),                 // 上传时间
+      module, // 归属模块
+      uploadUserId, // 上传人用户ID
+      createTime: Date.now(), // 上传时间
     });
     // 保存记录到数据库
     await this.fileRepo.save(record);
@@ -134,10 +140,11 @@ export class FileService {
 
     // 删除云端/本地物理文件
     if (file.filePath) {
-      await this.storage.delete(file.filePath);
+      // 如果文件路径存在
+      await this.storage.delete(file.filePath); // 调用存储策略删除物理文件
     }
     // 删除数据库记录
-    await this.fileRepo.delete(id);
-    return true;
+    await this.fileRepo.delete(id); // 根据 ID 删除数据库中的记录
+    return true; // 返回删除成功标识
   }
 }

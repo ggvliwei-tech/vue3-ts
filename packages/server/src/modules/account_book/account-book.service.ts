@@ -65,6 +65,7 @@ export class AccountBookService {
     const item = await this.accountBookRepo.findOneBy({ id, userId });
     // 如果记录不存在，抛出未找到异常
     if (!item) throw new NotFoundException('记录不存在');
+    // 返回查询结果
     return item;
   }
 
@@ -75,6 +76,7 @@ export class AccountBookService {
 
     // 如果传了新密码则加密，否则沿用旧密码
     if (dto.loginPassword) {
+      // 对密码进行 bcrypt 哈希加密
       dto.loginPassword = await bcrypt.hash(dto.loginPassword, 10);
     }
 

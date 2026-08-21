@@ -19,7 +19,10 @@ import { AccountBookEntity } from './entities/account-book.entity';
     // 导入 UserModule，用于关联用户信息
     UserModule,
   ],
-  controllers: [AccountBookController], // 注册控制器，处理路由和请求
-  providers: [AccountBookService], // 注册服务，处理数据库操作和业务逻辑
+  // 注册控制器，处理路由和请求
+  controllers: [AccountBookController],
+  // 注册服务，处理数据库操作和业务逻辑
+  providers: [AccountBookService],
 })
+// 导出账本模块类
 export class AccountBookModule {}

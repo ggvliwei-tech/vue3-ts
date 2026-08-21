@@ -7,7 +7,8 @@ import {
   UseInterceptors, // 使用拦截器的装饰器
   UseGuards, // 使用守卫的装饰器
   UploadedFiles, // 获取多文件上传参数的装饰器
-  Param, UploadedFile, // Param 获取路由参数，UploadedFile 获取单文件上传参数的装饰器
+  Param, // 获取路由参数的装饰器
+  UploadedFile, // 获取单文件上传参数的装饰器
   Query, // 查询参数装饰器
 } from '@nestjs/common';
 // 从 @nestjs/platform-express 导入文件上传拦截器
@@ -35,11 +36,11 @@ export class FileController {
   @Get()
   @ApiOperation({ summary: '分页查询文件列表' })
   async findAll(
-    @Query('page') page = 1,
-    @Query('limit') limit = 10,
-    @Query('module') module?: string,
-  ) {
-    return this.fileService.findAll(+page, +limit, module);
+    @Query('page') page = 1, // 页码参数，默认值为 1
+    @Query('limit') limit = 10, // 每页数量参数，默认值为 10
+    @Query('module') module?: string, // 模块筛选参数，可选
+  ) { // 方法参数列表结束
+    return this.fileService.findAll(+page, +limit, module); // 调用服务分页查询，+ 将字符串转为数字
   }
 
   // 单文件（原有）

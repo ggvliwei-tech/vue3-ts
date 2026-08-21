@@ -37,6 +37,7 @@ export class AccountBookController {
 
   // 接口描述：新增账号账本记录
   @Post()
+  // 接口描述：新增账号账本记录
   @ApiOperation({ summary: '新增账号账本记录' })
   // POST /account-book 路由，接收 CreateAccountBookDto 作为请求体
   create(@Body() createDto: CreateAccountBookDto, @CurrentUser() user: any) {
@@ -46,20 +47,21 @@ export class AccountBookController {
 
   // 接口描述：分页查询所有账本
   @Get()
+  // 接口描述：分页查询所有账本
   @ApiOperation({ summary: '分页查询所有账本' })
   // GET /account-book 路由，支持分页参数
   findAll(
     @Query('page') page = 1,     // 页码，默认第 1 页
     @Query('limit') limit = 10,  // 每页数量，默认 10 条
-    @CurrentUser() user: any
+    @CurrentUser() user: any     // 当前登录用户
   ) {
-
     // 调用服务层查询方法，传入用户 ID 和分页参数
     return this.accountBookService.findAll(user.id, +page, +limit);
   }
 
   // 接口描述：根据 ID 查询单条
   @Get(':id')
+  // 接口描述：根据 ID 查询单条
   @ApiOperation({ summary: '根据ID查询单条' })
   // GET /account-book/:id 路由，根据 ID 查询
   findOne(@Param('id') id: string, @CurrentUser() user: any) {
@@ -69,12 +71,13 @@ export class AccountBookController {
 
   // 接口描述：修改账本记录
   @Patch(':id')
+  // 接口描述：修改账本记录
   @ApiOperation({ summary: '修改账本记录' })
   // PATCH /account-book/:id 路由，部分更新
   update(
     @Param('id') id: string,                        // 路由参数，记录 ID
     @Body() updateDto: UpdateAccountBookDto,        // 请求体，更新数据
-    @CurrentUser() user: any                             // 当前登录用户
+    @CurrentUser() user: any                        // 当前登录用户
   ) {
     // 调用服务层更新方法，传入 ID、DTO 和用户 ID
     return this.accountBookService.update(+id, updateDto, user.id);
@@ -82,6 +85,7 @@ export class AccountBookController {
 
   // 接口描述：删除账本记录
   @Delete(':id')
+  // 接口描述：删除账本记录
   @ApiOperation({ summary: '删除账本记录' })
   // DELETE /account-book/:id 路由，删除记录
   remove(@Param('id') id: string, @CurrentUser() user: any) {
