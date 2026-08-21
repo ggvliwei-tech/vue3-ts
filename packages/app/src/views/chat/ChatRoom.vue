@@ -170,7 +170,7 @@ function setupWebSocket() {
         }
       }
       // 滚动到底部
-      scrollToBottom()
+      scrollToBottom(chatContainerRef.value)
     },
     // 收到新消息回调（其他人发的）
     onNewMessage: (msg: WSMessage) => {
@@ -179,7 +179,7 @@ function setupWebSocket() {
       // 将新消息添加到消息列表末尾
       messages.value.push({ ...msg, isSelf: false })
       // 滚动到底部
-      scrollToBottom()
+      scrollToBottom(chatContainerRef.value)
     },
     // 自己消息发送成功回调
     onMessageSent: (msg: WSMessage) => {
@@ -198,7 +198,7 @@ function setupWebSocket() {
         messages.value.push({ ...msg, isSelf: true })
       }
       // 滚动到底部
-      scrollToBottom()
+      scrollToBottom(chatContainerRef.value)
     },
     // 其他成员加入回调
     onMemberJoined: (data) => {
@@ -227,17 +227,6 @@ function setupWebSocket() {
   } catch (err: any) {
     // 连接失败时显示错误
     showToast(err.message || 'WebSocket 连接失败')
-  }
-}
-
-// 滚动聊天容器到底部的异步函数
-async function scrollToBottom() {
-  // 等待 DOM 更新完成
-  await nextTick()
-  // 如果聊天容器引用存在
-  if (chatContainerRef.value) {
-    // 将容器的滚动位置设置为最大滚动高度（即滚动到底部）
-    chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
   }
 }
 
@@ -279,7 +268,7 @@ async function handleSend() {
   sendRoomMessage(roomId.value, text)
 
   // 滚动到底部
-  await scrollToBottom()
+  await scrollToBottom(chatContainerRef.value)
 }
 
 // 返回按钮处理函数
@@ -303,11 +292,10 @@ onUnmounted(() => {
   disconnectWebSocket()
 })
 
-// 格式化时间戳为小时:分钟的函数
-function formatTime(ts: number): string {
-  const d = new Date(ts)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+// 从共享模块中导入日期格式化工具
+import { formatDate } from '@project/shared'
+// 从组合式函数中导入滚动到底部工具
+import { useScrollToBottom as scrollToBottom } from '@/composables/useScrollToBottom'
 </script>
 
 <!-- template 模板块：定义聊天室页面的 HTML 结构 -->
@@ -360,7 +348,7 @@ function formatTime(ts: number): string {
           <!-- 消息内容 -->
           <div class="message-content">{{ msg.content }}</div>
           <!-- 消息发送时间 -->
-          <div class="message-time">{{ formatTime(msg.createdAt) }}</div>
+          <div class="message-time">{{ formatDate(msg.createdAt, 'HH:mm') }}</div>
         </div>
       </div>
     </div>

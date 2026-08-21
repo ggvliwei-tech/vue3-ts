@@ -86,13 +86,8 @@ async function onConfirmCreate() {
   }
 }
 
-// 格式化时间戳为可读日期的函数
-function formatDate(ts: number): string {
-  // 创建 Date 实例
-  const d = new Date(ts)
-  // 返回格式化后的日期字符串
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+// 从共享模块中导入日期格式化工具
+import { formatDate } from '@project/shared'
 </script>
 
 <!-- template 模板块：定义房间列表页的 HTML 结构 -->

@@ -7,6 +7,15 @@
 import dayjs from 'dayjs'
 
 /**
+ * 获取 API 基础地址
+ * @returns 环境变量中配置的基础 URL，未配置时返回空字符串
+ */
+export function getBaseURL(): string {
+  // 从 Vite 环境变量中读取 API 基础地址
+  return (import.meta as any).env?.VITE_API_BASE_URL ?? ''
+}
+
+/**
  * 日期格式化函数
  * @param date 日期值，支持多种日期格式输入
  * @param format 格式化字符串，默认为 'YYYY-MM-DD HH:mm:ss'
@@ -38,4 +47,40 @@ export function generateUUID(): string {
     // 将数值转换为十六进制字符串
     return v.toString(16)
   })
+}
+
+/**
+ * 复制文本到剪贴板
+ * @param text - 要复制的文本
+ * @param opts - 可选配置，包含成功/失败回调或提示消息
+ * 优先使用 Clipboard API，降级使用 execCommand
+ */
+export async function copyToClipboard(
+  text: string,
+  opts?: {
+    onSuccess?: () => void
+    onFail?: () => void
+  },
+): Promise<void> {
+  try {
+    // 优先使用现代浏览器 Clipboard API
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      // 降级方案：使用 execCommand
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+    // 复制成功回调
+    opts?.onSuccess?.()
+  } catch {
+    // 复制失败回调
+    opts?.onFail?.()
+  }
 }

@@ -98,6 +98,9 @@ const isStreaming = ref(false)
 // 定义是否显示恢复上次会话提示的响应式数据
 const showResumeHint = ref(false)
 
+// 从组合式函数中导入滚动到底部工具
+import { useScrollToBottom as scrollToBottom } from '@/composables/useScrollToBottom'
+
 // 定义聊天容器的 DOM 引用
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 // 定义 AbortController 用于中断正在进行的 SSE 请求
@@ -134,17 +137,6 @@ onMounted(async () => {
     console.warn('[AI] 获取最近会话失败:', e)
   }
 })
-
-// 滚动聊天容器到底部的异步函数
-async function scrollToBottom() {
-  // 等待 DOM 更新完成
-  await nextTick()
-  // 如果聊天容器引用存在
-  if (chatContainerRef.value) {
-    // 将容器的滚动位置设置为最大滚动高度（即滚动到底部）
-    chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight
-  }
-}
 
 // 获取或创建 sessionId 的异步函数
 async function ensureSessionId() {

@@ -243,21 +243,12 @@ async function onSubmit() {
   }
 }
 
-// 复制网站 URL 到剪贴板的函数
-function onCopyUrl(url: string) {
+// 复制文本到剪贴板的统一函数
+function copyToClipboard(text: string) {
   // 检查浏览器是否支持剪贴板 API
   if (navigator.clipboard) {
-    // 将 URL 写入剪贴板，成功后显示提示
-    navigator.clipboard.writeText(url).then(() => showToast('已复制'))
-  }
-}
-
-// 复制登录账号到剪贴板的函数
-function onCopyAccount(account: string) {
-  // 检查浏览器是否支持剪贴板 API
-  if (navigator.clipboard) {
-    // 将账号写入剪贴板，成功后显示提示
-    navigator.clipboard.writeText(account).then(() => showToast('已复制'))
+    // 将文本写入剪贴板，成功后显示提示
+    navigator.clipboard.writeText(text).then(() => showToast('已复制'))
   }
 }
 
@@ -299,14 +290,14 @@ onMounted(() => {
               </template>
             </van-cell>
             <!-- 账号单元格，显示登录账号，点击可复制 -->
-            <van-cell title="账号" :value="item.loginAccount" @click="onCopyAccount(item.loginAccount)">
+            <van-cell title="账号" :value="item.loginAccount" @click="copyToClipboard(item.loginAccount)">
               <!-- 右侧复制图标 -->
               <template #right-icon>
                 <van-icon name="copy" />
               </template>
             </van-cell>
             <!-- 网址单元格，仅在网址不为空时显示，点击可复制 -->
-            <van-cell v-if="item.websiteUrl" title="网址" :value="item.websiteUrl" is-link @click="onCopyUrl(item.websiteUrl)">
+            <van-cell v-if="item.websiteUrl" title="网址" :value="item.websiteUrl" is-link @click="copyToClipboard(item.websiteUrl)">
               <!-- 右侧复制图标 -->
               <template #right-icon>
                 <van-icon name="copy" />

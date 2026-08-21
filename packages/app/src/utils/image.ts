@@ -3,6 +3,9 @@
  * 根据环境自动拼接正确的图片访问地址
  */
 
+// 从共享模块中导入 getBaseURL 函数
+import { getBaseURL } from '@project/shared'
+
 /**
  * 获取完整的图片 URL
  * @param url - 图片相对路径（如 /api/v1/uploads/common/2026/08/13/xxx.jpg）
@@ -14,14 +17,11 @@ export function getImageUrl(url: string): string {
     return url
   }
 
-  // 开发环境或代理环境下使用相对路径
-  // 生产环境或 App 端使用完整的后端地址
   // 获取环境变量中配置的基础 API 地址
-  const baseUrl = (import.meta as any).env?.VITE_API_BASE_URL || ''
+  const baseUrl = getBaseURL()
 
   // 如果存在基础 URL（如生产环境），则将其与相对路径拼接成完整 URL
   if (baseUrl) {
-    // 有基础 URL 时，直接拼接
     return `${baseUrl}${url}`
   }
 

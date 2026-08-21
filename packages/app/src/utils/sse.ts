@@ -3,6 +3,9 @@
  * 使用 fetch + ReadableStream（因为需要携带 Authorization 头，EventSource 不支持）
  */
 
+// 从共享模块中导入 getBaseURL 函数
+import { getBaseURL } from '@project/shared'
+
 // 定义流式回调函数的接口
 interface StreamCallbacks {
   // 接收到数据块时的回调函数，参数为文本内容
@@ -11,15 +14,6 @@ interface StreamCallbacks {
   onDone: () => void
   // 发生错误时的回调函数，参数为错误对象
   onError: (error: Error) => void
-}
-
-/**
- * 获取 API 基础地址
- * @returns 环境变量中配置的基础 URL，未配置时返回空字符串
- */
-function getBaseURL(): string {
-  // 从环境变量中读取 VITE_API_BASE_URL，未设置时使用空字符串作为默认值
-  return (import.meta as any).env?.VITE_API_BASE_URL ?? ''
 }
 
 /**
