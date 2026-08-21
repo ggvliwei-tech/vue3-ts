@@ -100,7 +100,7 @@ function formatDate(ts: number): string {
   <!-- 房间列表页外层容器 -->
   <div class="room-list-page">
     <!-- Vant 导航栏组件，标题显示为"聊天室"，右侧有添加图标 -->
-    <van-nav-bar title="聊天室">
+    <van-nav-bar title="聊天室" left-arrow @click-left="router.back()">
       <!-- 右侧插槽：放置添加房间图标按钮 -->
       <template #right>
         <van-icon name="add-o" size="22" @click="showCreateRoomDialog" />
