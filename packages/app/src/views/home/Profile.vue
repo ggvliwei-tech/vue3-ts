@@ -1,5 +1,7 @@
 <!-- script setup 块：使用 Composition API 语法糖定义个人中心页面逻辑 -->
 <script setup lang="ts">
+// 从 vue 中导入 ref（响应式引用）和 onMounted（生命周期钩子）
+import { ref, onMounted } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
 // 从 vant 中导入 showDialog 对话框和 showToast 轻提示组件方法
@@ -7,6 +9,19 @@ import { showDialog, showToast } from 'vant'
 
 // 获取路由导航实例
 const router = useRouter()
+
+// 定义用户名的响应式数据
+const username = ref('')
+
+// 组件挂载时从缓存读取用户名
+onMounted(() => {
+  // 从 localStorage 中获取缓存的用户名
+  const cached = localStorage.getItem('username')
+  // 如果存在则赋值给响应式变量
+  if (cached) {
+    username.value = cached
+  }
+})
 
 // 处理退出登录的函数
 function handleLogout() {
@@ -41,6 +56,14 @@ function handleLogout() {
 
     <!-- 个人中心内容区域 -->
     <div class="profile-content">
+      <!-- 用户信息卡片 -->
+      <div class="user-info-card">
+        <!-- 用户头像 -->
+        <van-icon name="user-circle-o" size="56" color="#1989fa" class="user-avatar" />
+        <!-- 用户名 -->
+        <div class="user-name">{{ username || '未登录' }}</div>
+      </div>
+
       <!-- Vant 单元格组，inset 属性使卡片内缩显示 -->
       <van-cell-group inset>
         <!-- 退出登录单元格，is-link 显示右侧箭头，点击触发退出登录函数 -->
@@ -84,5 +107,35 @@ function handleLogout() {
   overflow-y: auto;
   // 上下内边距 20px
   padding: 20px 0;
+}
+
+// 用户信息卡片样式
+.user-info-card {
+  // 使用 flex 布局
+  display: flex;
+  // 子项垂直居中
+  flex-direction: column;
+  // 水平居中对齐
+  align-items: center;
+  // 底部外边距 20px
+  margin-bottom: 20px;
+  // 顶部内边距 24px
+  padding-top: 24px;
+
+  // 用户头像样式
+  .user-avatar {
+    // 底部外边距 12px
+    margin-bottom: 12px;
+  }
+
+  // 用户名样式
+  .user-name {
+    // 字体大小 18px
+    font-size: 18px;
+    // 字体颜色深灰
+    color: #323233;
+    // 字体粗细 500
+    font-weight: 500;
+  }
 }
 </style>

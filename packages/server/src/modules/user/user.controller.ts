@@ -160,6 +160,16 @@ export class UserController {
     return this.userService.toggleStatus(Number(userId));
   }
 
+  // Swagger 接口描述：获取当前登录用户信息
+  @ApiOperation({ summary: '获取当前用户信息' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('profile')
+  getProfile(@CurrentUser() user: any) {
+    // 返回当前登录用户的基本信息
+    return this.userService.findById(user.id);
+  }
+
   // Swagger 接口描述：获取用户列表（需要 Token 验证）
   @ApiOperation({ summary: '获取用户列表（需要Token）' })
   // Swagger Bearer Token 认证标识，在文档中显示 Token 输入框

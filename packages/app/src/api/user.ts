@@ -68,3 +68,11 @@ export function refreshToken() {
   // 发送 POST 请求到刷新 token 接口，设置 skipRefresh 防止递归刷新
   return post<RefreshTokenRes>('/api/v1/user/refresh-token', undefined, { skipRefresh: true })
 }
+
+/**
+ * 获取当前登录用户信息
+ */
+export function getUserProfile() {
+  // 发送 GET 请求获取当前用户信息
+  return post<{ id: number; username: string; status: number }>('/api/v1/user/profile')
+}

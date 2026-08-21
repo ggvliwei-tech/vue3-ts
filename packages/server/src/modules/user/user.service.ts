@@ -237,6 +237,18 @@ export class UserService {
     return { msg: `用户 ${user.username} 已${user.status === 1 ? '启用' : '禁用'}`, status: user.status };
   }
 
+  // 根据 ID 查询用户信息（不返回密码字段）
+  async findById(userId: number) {
+    const user = await this.userRepo.findOneBy({ id: userId });
+    if (!user) throw new NotFoundException('用户不存在');
+    return {
+      id: user.id,
+      username: user.username,
+      status: user.status,
+      createTime: user.createTime,
+    };
+  }
+
   // 查询所有用户列表（不返回密码字段，保证安全）
   async findAll() {
     // 使用 find 查询所有用户，select 指定只返回 id、username、status、createTime 字段

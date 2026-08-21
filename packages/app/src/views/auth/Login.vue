@@ -49,6 +49,8 @@ async function handleLogin() {
     })
     // 登录成功后，将服务器返回的 accessToken 存储到 localStorage 中
     localStorage.setItem('token', res.data.accessToken)
+    // 将用户名也缓存到 localStorage，方便"我的"页面展示
+    localStorage.setItem('username', res.data.userInfo.username)
     // 弹出登录成功提示
     showToast('登录成功')
     // 跳转到登录前试图访问的页面，如果没有则默认跳转到首页
