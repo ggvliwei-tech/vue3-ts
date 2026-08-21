@@ -53,7 +53,7 @@ async function handleLogin() {
       password: form.value.password,
     })
     // 将服务器返回的 accessToken 存储到 localStorage 中
-    localStorage.setItem('token', res.data.data.accessToken)
+    localStorage.setItem('token', res.data.accessToken)
     // 显示登录成功消息提示
     ElMessage.success('登录成功')
     // 跳转到之前页面或默认的仪表盘页面

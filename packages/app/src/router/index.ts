@@ -96,6 +96,27 @@ const routes: RouteRecordRaw[] = [
     // 路由元信息，设置页面标题
     meta: { title: 'AI 聊天' },
   },
+  // 聊天室模块路由配置
+  {
+    // 房间列表页面路由路径
+    path: '/rooms',
+    // 路由名称
+    name: 'RoomList',
+    // 懒加载房间列表页面组件
+    component: () => import('@/views/chat/RoomList.vue'),
+    // 路由元信息，设置页面标题
+    meta: { title: '聊天室' },
+  },
+  {
+    // 聊天室详情页面路由路径（动态路由参数 roomId）
+    path: '/chat/:roomId',
+    // 路由名称
+    name: 'ChatRoom',
+    // 懒加载聊天室页面组件
+    component: () => import('@/views/chat/ChatRoom.vue'),
+    // 路由元信息，设置页面标题
+    meta: { title: '聊天' },
+  },
 ]
 
 // 创建路由实例

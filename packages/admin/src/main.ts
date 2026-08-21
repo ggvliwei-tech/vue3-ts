@@ -26,7 +26,7 @@ setRefreshTokenCallback((callback) => {
   refreshToken()
     .then((res) => {
       // 从响应中获取新的 accessToken
-      const newToken = res.data.data.accessToken
+      const newToken = res.data.accessToken
       // 将新的 token 存储到 localStorage 中
       localStorage.setItem('token', newToken)
       // 调用回调函数，传入新 token 以重试原请求

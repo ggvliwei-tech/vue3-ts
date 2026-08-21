@@ -74,7 +74,7 @@ async function loadData(isRefresh = false) {
     // 调用获取账本列表 API，传入当前页码和每页条数
     const res = await getAccountBookList({ page: page.value, limit })
     // 从响应数据中解构出列表数据和总记录数
-    const { list, total } = res.data.data
+    const { list, total } = res.data
 
     // 如果是刷新操作则替换列表，否则追加到现有列表后面
     accountBooks.value = isRefresh ? list : [...accountBooks.value, ...list]

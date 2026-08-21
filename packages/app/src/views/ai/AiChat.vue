@@ -35,7 +35,7 @@ async function autoRefreshToken(msg: string): Promise<boolean> {
     // 调用 refreshToken 接口获取新的 token
     const res = await refreshToken()
     // 从响应中提取新的 accessToken
-    const newToken = res.data.data.accessToken
+    const newToken = res.data.accessToken
     // 将新 token 存储到 localStorage 中
     localStorage.setItem('token', newToken)
     // 刷新成功返回 true
@@ -283,9 +283,9 @@ async function sendMessage() {
     })
 
     // 兼容不同的响应结构，提取 AI 回答内容
-    const content = typeof res.data.data === 'string'
-      ? res.data.data
-      : (res.data.data as any)?.content || ''
+    const content = typeof res.data === 'string'
+      ? res.data
+      : (res.data as any)?.content || ''
 
     // 将 AI 回答添加到消息列表中
     messages.value.push({
@@ -304,9 +304,9 @@ async function sendMessage() {
         })
 
         // 提取 AI 回答内容
-        const content = typeof res.data.data === 'string'
-          ? res.data.data
-          : (res.data.data as any)?.content || ''
+        const content = typeof res.data === 'string'
+          ? res.data
+          : (res.data as any)?.content || ''
 
         // 将 AI 回答添加到消息列表中
         messages.value.push({

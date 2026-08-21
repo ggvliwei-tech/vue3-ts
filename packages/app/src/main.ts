@@ -33,7 +33,7 @@ setRefreshTokenCallback((callback) => {
   refreshToken()
     .then((res) => {
       // 从响应中提取新的 accessToken
-      const newToken = res.data.data.accessToken
+      const newToken = res.data.accessToken
       // 将新 token 存储到 localStorage 中
       localStorage.setItem('token', newToken)
       // 通过回调通知请求模块使用新的 token 重试原请求

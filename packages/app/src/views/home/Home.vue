@@ -16,8 +16,8 @@ const gridItems = [
   { text: '文件', icon: 'notes-o', route: '/file-list' },
   // AI 功能项，点击跳转到 AI 聊天页面
   { text: 'AI', icon: 'chat', route: '/ai-chat' },
-  // 聊天室功能项，当前暂无路由，点击仅显示提示
-  { text: '聊天室', icon: 'comment-o', route: '' },
+  // 聊天室功能项，点击跳转到聊天室列表页面
+  { text: '聊天室', icon: 'comment-o', route: '/rooms' },
 ]
 
 // 宫格项点击事件处理函数，接收被点击项的索引

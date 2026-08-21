@@ -48,7 +48,7 @@ async function handleLogin() {
       password: password.value,
     })
     // 登录成功后，将服务器返回的 accessToken 存储到 localStorage 中
-    localStorage.setItem('token', res.data.data.accessToken)
+    localStorage.setItem('token', res.data.accessToken)
     // 弹出登录成功提示
     showToast('登录成功')
     // 跳转到登录前试图访问的页面，如果没有则默认跳转到首页

@@ -128,9 +128,9 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
     (response: AxiosResponse<ApiRes>) => {
       // 解构获取响应体中的 data 字段（即后端返回的 JSON）
       const { data } = response
-      // 状态码为 0 表示业务成功，直接返回响应
+      // 状态码为 0 表示业务成功，直接返回响应体中的 data 字段（即 TransformInterceptor 包装后的完整数据）
       if (data.code === 0) {
-        return response
+        return data
       }
       // 状态码为 401 表示 token 过期或未授权，尝试自动刷新 token
       if (data.code === 401) {
@@ -249,9 +249,9 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
  * 通用 GET 请求方法
  * @param url 请求地址
  * @param config 请求配置
- * @returns 返回包含 API 响应的 Promise
+ * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
-export function get<T = unknown>(url: string, config?: RequestConfig): Promise<AxiosResponse<ApiRes<T>>> {
+export function get<T = unknown>(url: string, config?: RequestConfig): Promise<ApiRes<T>> {
   // 调用默认请求实例的 get 方法
   return request.get<ApiRes<T>>(url, config)
 }
@@ -261,7 +261,7 @@ export function get<T = unknown>(url: string, config?: RequestConfig): Promise<A
  * @param url 请求地址
  * @param data 请求体数据
  * @param config 请求配置
- * @returns 返回包含 API 响应的 Promise
+ * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
 export function post<T = unknown>(
   // 请求的目标 URL
@@ -270,7 +270,7 @@ export function post<T = unknown>(
   data?: unknown,
   // 可选的请求配置
   config?: RequestConfig,
-): Promise<AxiosResponse<ApiRes<T>>> {
+): Promise<ApiRes<T>> {
   // 调用默认请求实例的 post 方法
   return request.post<ApiRes<T>>(url, data, config)
 }
@@ -280,7 +280,7 @@ export function post<T = unknown>(
  * @param url 请求地址
  * @param data 请求体数据
  * @param config 请求配置
- * @returns 返回包含 API 响应的 Promise
+ * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
 export function put<T = unknown>(
   // 请求的目标 URL
@@ -289,7 +289,7 @@ export function put<T = unknown>(
   data?: unknown,
   // 可选的请求配置
   config?: RequestConfig,
-): Promise<AxiosResponse<ApiRes<T>>> {
+): Promise<ApiRes<T>> {
   // 调用默认请求实例的 put 方法
   return request.put<ApiRes<T>>(url, data, config)
 }
@@ -298,9 +298,9 @@ export function put<T = unknown>(
  * 通用 DELETE 请求方法
  * @param url 请求地址
  * @param config 请求配置
- * @returns 返回包含 API 响应的 Promise
+ * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
-export function del<T = unknown>(url: string, config?: RequestConfig): Promise<AxiosResponse<ApiRes<T>>> {
+export function del<T = unknown>(url: string, config?: RequestConfig): Promise<ApiRes<T>> {
   // 调用默认请求实例的 delete 方法（方法名为 delete，导出名为 del 避免关键字冲突）
   return request.delete<ApiRes<T>>(url, config)
 }
@@ -310,7 +310,7 @@ export function del<T = unknown>(url: string, config?: RequestConfig): Promise<A
  * @param url 请求地址
  * @param data 请求体数据
  * @param config 请求配置
- * @returns 返回包含 API 响应的 Promise
+ * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
 export function patch<T = unknown>(
   // 请求的目标 URL
@@ -319,7 +319,7 @@ export function patch<T = unknown>(
   data?: unknown,
   // 可选的请求配置
   config?: RequestConfig,
-): Promise<AxiosResponse<ApiRes<T>>> {
+): Promise<ApiRes<T>> {
   // 调用默认请求实例的 patch 方法
   return request.patch<ApiRes<T>>(url, data, config)
 }

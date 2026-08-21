@@ -23,7 +23,7 @@ async function fetchUsers() {
     // 调用获取用户列表 API
     const res = await getUserList()
     // 将服务器返回的用户数据赋值给响应式 users 数组
-    users.value = res.data.data
+    users.value = res.data
   } catch (e: any) {
     // 捕获异常，显示错误消息提示
     ElMessage.error(e.message || '获取用户列表失败')
@@ -51,7 +51,7 @@ async function handleKick(userId: number, username: string) {
     // 调用强制下线 API
     const res = await forceKick(userId)
     // 显示操作成功消息提示
-    ElMessage.success(res.data.data.msg || '已强制下线')
+    ElMessage.success(res.data.msg || '已强制下线')
   } catch (e: any) {
     // 捕获异常，显示错误消息
     ElMessage.error(e.message || '操作失败')
@@ -76,7 +76,7 @@ async function handleToggleStatus(user: User) {
     // 调用切换用户状态 API，传入用户 ID
     const res = await toggleUserStatus(user.id)
     // 显示操作成功消息提示
-    ElMessage.success(res.data.data.msg || `已${action}用户「${user.username}」`)
+    ElMessage.success(res.data.msg || `已${action}用户「${user.username}」`)
     // 重新获取用户列表以刷新数据
     await fetchUsers()
   } catch (e: any) {
