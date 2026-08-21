@@ -19,8 +19,6 @@ function getActiveTab(): string {
   const path = route.path
   // 如果路径以 '/home/profile' 开头，则激活 profile 标签
   if (path.startsWith('/home/profile')) return 'profile'
-  // 如果路径以 '/rooms' 或 '/chat' 开头，则激活 chat 标签
-  if (path.startsWith('/rooms') || path.startsWith('/chat')) return 'chat'
   // 否则默认激活 home 标签
   return 'home'
 }
@@ -41,10 +39,6 @@ function onChange(tab: string) {
   if (tab === 'home') {
     // 导航到首页页面
     router.push('/home/index')
-  // 如果切换到 chat 标签
-  } else if (tab === 'chat') {
-    // 导航到房间列表页面
-    router.push('/rooms')
   // 如果切换到 profile 标签
   } else if (tab === 'profile') {
     // 导航到个人中心页面
@@ -63,8 +57,6 @@ function onChange(tab: string) {
     <van-tabbar v-model="active" @change="onChange">
       <!-- 首页 Tab 项，name 为 home，图标为 wap-home -->
       <van-tabbar-item name="home" icon="wap-home">首页</van-tabbar-item>
-      <!-- 聊天 Tab 项，name 为 chat，图标为 chat-o -->
-      <van-tabbar-item name="chat" icon="chat-o">聊天</van-tabbar-item>
       <!-- 我的 Tab 项，name 为 profile，图标为 contact -->
       <van-tabbar-item name="profile" icon="contact">我的</van-tabbar-item>
     </van-tabbar>
