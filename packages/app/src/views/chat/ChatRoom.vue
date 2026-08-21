@@ -22,14 +22,13 @@ const route = useRoute()
 // 定义聊天消息的接口（前端展示用，包含 isSelf 标记）
 interface UIMessage extends ChatMessage {
   isSelf?: boolean   // 是否为当前用户自己发送的消息
+  isTemp?: boolean   // 是否为乐观更新的临时消息（等待 server 确认）
 }
 
 // 定义消息列表的响应式数组
 const messages = ref<UIMessage[]>([])
 // 定义输入框文本的响应式数据
 const inputText = ref('')
-// 定义是否正在加载的响应式数据
-const loading = ref(false)
 // 定义是否 WebSocket 已连接的响应式数据
 const isWsConnected = ref(false)
 // 定义房间成员列表的响应式数组
@@ -175,15 +174,29 @@ function setupWebSocket() {
     },
     // 收到新消息回调（其他人发的）
     onNewMessage: (msg: WSMessage) => {
+      // 过滤掉自己发送的消息，只添加其他人的消息
+      if (msg.senderId === myUserId.value) return
       // 将新消息添加到消息列表末尾
-      messages.value.push({ ...msg, isSelf: msg.senderId === myUserId.value })
+      messages.value.push({ ...msg, isSelf: false })
       // 滚动到底部
       scrollToBottom()
     },
     // 自己消息发送成功回调
     onMessageSent: (msg: WSMessage) => {
-      // 将确认后的消息（带数据库 ID）替换或追加到消息列表
-      messages.value.push({ ...msg, isSelf: true })
+      // 用 server 返回的真实消息替换掉最新的临时消息
+      let idx = -1
+      for (let i = messages.value.length - 1; i >= 0; i--) {
+        if (messages.value[i].isTemp) {
+          idx = i
+          break
+        }
+      }
+      if (idx !== -1) {
+        messages.value[idx] = { ...msg, isSelf: true }
+      } else {
+        // 如果没找到临时消息，则追加新消息
+        messages.value.push({ ...msg, isSelf: true })
+      }
       // 滚动到底部
       scrollToBottom()
     },
@@ -254,6 +267,7 @@ async function handleSend() {
     content: text,              // 消息内容
     createdAt: Date.now(),      // 当前时间戳
     isSelf: true,               // 标记为自己发送
+    isTemp: true,               // 标记为临时消息
   }
   // 将临时消息添加到消息列表
   messages.value.push(tempMsg)
@@ -301,7 +315,15 @@ function formatTime(ts: number): string {
   <!-- 聊天室页面外层容器 -->
   <div class="chat-room-page">
     <!-- 顶部导航栏 -->
-    <van-nav-bar :title="roomName" left-arrow @click-left="handleBack">
+    <van-nav-bar left-arrow @click-left="handleBack">
+      <!-- 自定义标题：房间名称 + 在线人数 -->
+      <template #title>
+        <span class="room-title">{{ roomName }}</span>
+        <span class="room-online">
+          <span class="online-dot-small"></span>
+          {{ onlineUserIds.size }}人在线
+        </span>
+      </template>
       <!-- 右侧插槽：放置成员面板切换按钮 -->
       <template #right>
         <van-icon name="friends-o" size="20" @click="toggleMemberPanel" />
@@ -322,7 +344,7 @@ function formatTime(ts: number): string {
 
       <!-- 遍历消息列表，渲染每条消息 -->
       <div
-        v-for="(msg, index) in messages"
+        v-for="msg in messages"
         :key="msg.id"
         class="message-row"
         :class="msg.isSelf ? 'message-self' : 'message-other'"
@@ -412,6 +434,43 @@ function formatTime(ts: number): string {
   background: #f5f5f5;
   // 隐藏溢出内容
   overflow: hidden;
+}
+
+// 导航栏标题区域样式
+.room-title {
+  // 字体大小 16px
+  font-size: 16px;
+  // 字体颜色深灰
+  color: #323233;
+  // 字体粗细 500
+  font-weight: 500;
+}
+
+// 在线人数指示器样式
+.room-online {
+  // 字体大小 11px
+  font-size: 11px;
+  // 字体颜色浅灰
+  color: #969799;
+  // 左侧间距 8px
+  margin-left: 8px;
+}
+
+// 在线状态小圆点
+.online-dot-small {
+  // 行内块元素
+  display: inline-block;
+  // 宽高 6px
+  width: 6px;
+  height: 6px;
+  // 圆角 50%
+  border-radius: 50%;
+  // 绿色表示在线
+  background: #07c160;
+  // 右侧间距 4px
+  margin-right: 4px;
+  // 垂直居中对齐
+  vertical-align: middle;
 }
 
 // 消息列表容器样式
