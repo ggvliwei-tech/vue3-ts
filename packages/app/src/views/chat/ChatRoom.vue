@@ -349,21 +349,21 @@ function formatTime(ts: number): string {
         class="message-row"
         :class="msg.isSelf ? 'message-self' : 'message-other'"
       >
-        <!-- 其他人消息时显示头像（左侧） -->
-        <div v-if="!msg.isSelf" class="avatar">
+        <!-- 左侧头像：他人消息时显示 -->
+        <div class="avatar avatar-left">
           <van-icon name="user-o" size="28" color="#1989fa" />
         </div>
         <!-- 消息气泡容器 -->
         <div class="message-bubble">
-          <!-- 其他人消息时显示发送者名称 -->
-          <div v-if="!msg.isSelf" class="sender-name">{{ msg.senderName }}</div>
+          <!-- 他人消息时显示发送者名称 -->
+          <div class="sender-name" v-show="!msg.isSelf">{{ msg.senderName }}</div>
           <!-- 消息内容 -->
           <div class="message-content">{{ msg.content }}</div>
           <!-- 消息发送时间 -->
           <div class="message-time">{{ formatTime(msg.createdAt) }}</div>
         </div>
-        <!-- 自己消息时显示头像（右侧） -->
-        <div v-if="msg.isSelf" class="avatar">
+        <!-- 右侧头像：自己消息时显示 -->
+        <div class="avatar avatar-right">
           <van-icon name="user-o" size="28" color="#1989fa" />
         </div>
       </div>
@@ -507,21 +507,31 @@ function formatTime(ts: number): string {
   margin-bottom: 12px;
   // 子元素间距 8px
   gap: 8px;
+  // 宽度占满父容器，确保 flex 方向反转有效
+  width: 100%;
 }
 
-// 自己发送的消息行样式（反转排列）
+// 自己发送的消息行样式
 .message-self {
-  // 反转 flex 排列方向（头像在右侧）
-  flex-direction: row-reverse;
-
-  // 自己消息气泡样式
+  // 气泡靠右，用左侧 margin 推开
   .message-bubble {
     // 背景色为主题蓝色
     background: #1989fa;
     // 文字颜色为白色
     color: #fff;
-    // 圆角样式（左上角直角）
+    // 圆角样式（左上角直角，模拟气泡尾巴在右侧）
     border-radius: 12px 2px 12px 12px;
+    // 左侧自动边距推到右侧
+    margin-left: auto;
+  }
+
+  // 隐藏左侧头像
+  .avatar-left {
+    visibility: hidden;
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
   }
 
   // 自己的消息时间右对齐
@@ -532,9 +542,7 @@ function formatTime(ts: number): string {
 
 // 其他人发送的消息行样式
 .message-other {
-  // 正常 flex 排列（头像在左侧）
-
-  // 其他人消息气泡样式
+  // 气泡靠左，用右侧 margin 推开
   .message-bubble {
     // 背景色为白色
     background: #fff;
@@ -544,6 +552,15 @@ function formatTime(ts: number): string {
     border-radius: 2px 12px 12px 12px;
     // 添加轻微阴影
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  }
+
+  // 隐藏右侧头像
+  .avatar-right {
+    visibility: hidden;
+    width: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
   }
 }
 
