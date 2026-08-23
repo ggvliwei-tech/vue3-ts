@@ -5,7 +5,7 @@ import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
 // 从 AI API 模块中导入聊天和会话相关函数
-import { chatWithHistory, createSession, getLastSession } from '@/api/ai'
+import { chatWithHistory, createSession, getLastSession, getSessionMessages } from '@/api/ai'
 // 从 SSE 工具模块中导入带历史上下文的流式消费函数
 import { consumeSSEWithHistory } from '@/utils/sse'
 // 从用户 API 模块中导入刷新 token 函数
@@ -114,29 +114,50 @@ onMounted(async () => {
   if (cachedSessionId) {
     // 将缓存的会话 ID 赋值给响应式变量
     sessionId.value = cachedSessionId
-    // 显示恢复会话提示
-    showResumeHint.value = true
   }
   // 再从服务端验证或更新会话信息
   try {
     // 调用获取最近会话 API
     const res = await getLastSession()
-    // 从响应中提取服务端返回的会话 ID（兼容不同响应结构）
-    const serverSessionId = (res.data as any)?.data?.sessionId
-    // 如果服务端有会话 ID 且与当前不同
-    if (serverSessionId && serverSessionId !== sessionId.value) {
+    // 从响应中提取服务端返回的会话 ID（res.data 就是 controller 返回的 { sessionId } 或 null）
+    const serverSessionId = (res.data as any)?.sessionId
+    // 如果服务端有会话 ID
+    if (serverSessionId) {
       // 更新当前会话 ID
       sessionId.value = serverSessionId
       // 将新会话 ID 缓存到 localStorage 中
       localStorage.setItem('ai:last_session_id', serverSessionId)
-      // 显示恢复会话提示
-      showResumeHint.value = true
+      // 加载该会话的历史消息
+      await loadHistoryMessages(serverSessionId)
+      // 滚动到底部
+      await scrollToBottom(chatContainerRef.value)
     }
   } catch (e) {
     // 获取最近会话失败时打印警告日志
     console.warn('[AI] 获取最近会话失败:', e)
   }
 })
+
+// 加载历史消息的异步函数
+async function loadHistoryMessages(sid: string) {
+  try {
+    // 调用 API 获取会话历史消息
+    const res = await getSessionMessages(sid)
+    // 将历史消息转换为前端消息格式并赋值给消息列表
+    if (res.data && res.data.length > 0) {
+      // 为基础时间戳（每条消息间隔 1 秒模拟时间）
+      const baseTime = Date.now() - res.data.length * 1000
+      messages.value = res.data.map((msg, index) => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: baseTime + index * 1000,
+      }))
+    }
+  } catch (e) {
+    // 加载历史消息失败时打印警告日志
+    console.warn('[AI] 加载历史消息失败:', e)
+  }
+}
 
 // 获取或创建 sessionId 的异步函数
 async function ensureSessionId() {
@@ -146,10 +167,8 @@ async function ensureSessionId() {
   try {
     // 调用创建会话 API
     const res = await createSession()
-    // 兼容不同的响应结构，尝试多种方式提取 sessionId
-    const newId = (res.data as any)?.data?.sessionId
-              || (res.data as any)?.sessionId
-              || (res as any)?.data?.sessionId
+    // 兼容不同的响应结构，提取 sessionId
+    const newId = (res.data as any)?.sessionId
     // 如果成功提取到 sessionId
     if (newId) {
       // 赋值给响应式变量

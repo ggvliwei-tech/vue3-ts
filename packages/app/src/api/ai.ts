@@ -91,6 +91,15 @@ export function getLastSession() {
 }
 
 /**
+ * 获取指定会话的历史消息
+ * @param sessionId - 会话 ID
+ */
+export function getSessionMessages(sessionId: string) {
+  // 发送 GET 请求获取指定会话的历史消息列表
+  return get<Array<{ role: 'user' | 'assistant'; content: string }>>(`/api/v1/ai/session/${sessionId}/messages`)
+}
+
+/**
  * PDF 上传到向量库
  * @param file - 要上传的 PDF 文件对象
  */

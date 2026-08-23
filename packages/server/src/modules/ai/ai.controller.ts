@@ -36,10 +36,8 @@ export class AiController {
   @Post('chat')
   // 简单单轮问答接口处理函数，接收请求体参数
   async chat(@Body() dto: ChatDto) {
-    // 调用服务层简单问答方法，传入用户问题
-    const data = await this.aiService.simpleChat(dto.question);
-    // 返回统一响应格式（code: 0 表示成功，与 TransformInterceptor 保持一致）
-    return { code: 0, data };
+    // 调用服务层简单问答方法，传入用户问题（TransformInterceptor 自动包装）
+    return this.aiService.simpleChat(dto.question);
   }
 
   // POST 路由装饰器：注册 /ai/chat/history 接口
@@ -50,8 +48,8 @@ export class AiController {
     const sessionId = dto.sessionId || randomUUID();
     // 调用服务层带历史上下文的问答方法
     const data = await this.aiService.chatWithHistory(dto.question, sessionId, user.id);
-    // 返回统一响应格式，包含 sessionId 用于前端关联（code: 0 表示成功）
-    return { code: 0, data, sessionId };
+    // 返回数据，包含 sessionId 用于前端关联（TransformInterceptor 自动包装）
+    return { data, sessionId };
   }
 
   // POST 路由装饰器：注册 /ai/rag 接口
@@ -59,9 +57,7 @@ export class AiController {
   // RAG 知识库问答接口处理函数
   async ragChat(@Body() dto: ChatDto) {
     // 调用服务层 RAG 问答方法，基于向量检索回答
-    const data = await this.aiService.ragQuery(dto.question);
-    // 返回统一响应格式（code: 0 表示成功）
-    return { code: 0, data };
+    return this.aiService.ragQuery(dto.question);
   }
 
   // GET 路由装饰器：注册 /ai/stream 接口
@@ -107,8 +103,8 @@ export class AiController {
     const sessionId = randomUUID();
     // 记录用户最近使用的会话 ID 到 Redis
     await this.aiService.recordLastSession(user.id, sessionId);
-    // 返回统一响应格式，包含新创建的 sessionId（code: 0 表示成功）
-    return { code: 0, data: { sessionId } };
+    // 返回包含 sessionId 的数据（TransformInterceptor 自动包装）
+    return { sessionId };
   }
 
   // GET 路由装饰器：注册 /ai/session/last 接口
@@ -118,9 +114,7 @@ export class AiController {
   // 获取最近会话接口处理函数
   async getLastSession(@CurrentUser() user: { id: string; username: string }) {
     // 调用服务层获取用户最近一次会话的方法
-    const lastSession = await this.aiService.getLastSession(user.id);
-    // 返回统一响应格式
-    return { code: 0, data: lastSession };
+    return this.aiService.getLastSession(user.id);
   }
 
   // POST 路由装饰器：注册 /ai/upload/pdf 接口
@@ -134,9 +128,7 @@ export class AiController {
   // PDF 上传接口处理函数，接收上传的文件
   async uploadPdf(@UploadedFile() file: Express.Multer.File) {
     // 调用服务层将 PDF 解析并存入向量库的方法
-    const result = await this.aiService.uploadPdfToVector(file.path);
-    // 返回统一响应格式，包含处理结果
-    return { code: 0, data: result };
+    return this.aiService.uploadPdfToVector(file.path);
   }
 
   // GET 路由装饰器：注册 /ai/sessions 接口
@@ -146,9 +138,7 @@ export class AiController {
   // 列出用户会话接口处理函数
   async listSessions(@CurrentUser() user: { id: string; username: string }) {
     // 调用服务层获取用户所有会话列表的方法
-    const sessions = await this.aiService.listSessions(user.id);
-    // 返回统一响应格式
-    return { code: 0, data: sessions };
+    return this.aiService.listSessions(user.id);
   }
 
   // POST 路由装饰器：注册 /ai/session/:sessionId/delete 接口
@@ -159,8 +149,8 @@ export class AiController {
   async deleteSession(@Param('sessionId') sessionId: string, @CurrentUser() user: { id: string; username: string }) {
     // 调用服务层删除指定会话的方法
     await this.aiService.deleteSession(user.id, sessionId);
-    // 返回统一响应格式，包含操作提示消息
-    return { code: 0, msg: '会话已删除' };
+    // 返回操作提示消息
+    return { msg: '会话已删除' };
   }
 
   // POST 路由装饰器：注册 /ai/sessions/clear 接口
@@ -171,8 +161,21 @@ export class AiController {
   async clearSessions(@CurrentUser() user: { id: string; username: string }) {
     // 调用服务层清空用户所有会话的方法
     await this.aiService.clearSessions(user.id);
-    // 返回统一响应格式，包含操作提示消息
-    return { code: 0, msg: '所有会话已清空' };
+    // 返回操作提示消息
+    return { msg: '所有会话已清空' };
+  }
+
+  // GET 路由装饰器：注册 /ai/session/:sessionId/messages 接口
+  @Get('session/:sessionId/messages')
+  // Swagger 操作描述：获取指定会话的历史消息
+  @ApiOperation({ summary: '获取指定会话的历史消息' })
+  // 获取会话历史消息接口处理函数
+  async getSessionMessages(
+    @Param('sessionId') sessionId: string, // 从路由参数获取会话 ID
+    @CurrentUser() user: { id: string; username: string }, // 从装饰器获取当前用户
+  ) {
+    // 调用服务层获取指定会话的历史消息
+    return this.aiService.getSessionMessages(user.id, sessionId);
   }
 
   // GET 路由装饰器：注册 /ai/stream/history 接口

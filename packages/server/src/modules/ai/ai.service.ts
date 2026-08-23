@@ -442,4 +442,21 @@ ${question}
     // 返回包含 sessionId 的对象
     return { sessionId: lastData.sessionId };
   }
+
+  // ====================== 11. 获取指定会话的历史消息 ======================
+
+  // 获取指定会话的历史消息方法：从 Redis 获取并转换为前端展示格式
+  async getSessionMessages(userId: string, sessionId: string) {
+    // 构建会话历史的 Redis Key
+    const historyKey = this.getSessionHistoryKey(userId, sessionId);
+    // 从 Redis 获取历史消息数据
+    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
+    // 如果没有历史数据，返回空数组
+    if (!historyData || historyData.length === 0) return [];
+    // 转换为前端展示格式，human -> user, ai -> assistant
+    return historyData.map((msg) => ({
+      role: msg.type === 'human' ? 'user' : 'assistant',
+      content: msg.content,
+    }));
+  }
 }
