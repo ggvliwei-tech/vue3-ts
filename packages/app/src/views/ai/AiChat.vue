@@ -11,7 +11,7 @@ import { consumeSSEWithHistory } from '@/utils/sse'
 // 从用户 API 模块中导入刷新 token 函数
 import { refreshToken } from '@/api/user'
 // 从 vant 中导入 showToast 轻提示组件方法
-import { showToast } from 'vant'
+import { showToast, showDialog } from 'vant'
 // 导入 MarkdownIt 库用于将 Markdown 渲染为 HTML
 import MarkdownIt from 'markdown-it'
 
@@ -571,7 +571,22 @@ function stopStreaming() {
 }
 
 // 清空对话的函数
-function clearChat() {
+async function clearChat() {
+  try {
+    // 弹出二次确认弹窗
+    await showDialog({
+      title: '确认清空',
+      message: '确定要清空当前对话吗？清空后将开启新的对话。',
+      showCancelButton: true,
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    // 用户点击取消，直接返回
+    return
+  }
+
+  // 用户确认后执行清空操作
   // 清空消息列表数组
   messages.value = []
   // 重置会话 ID
