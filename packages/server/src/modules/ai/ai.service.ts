@@ -2,6 +2,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 // 导入 NestJS 配置服务，用于读取环境变量
 import { ConfigService } from '@nestjs/config';
+// 导入 TypeORM 注入装饰器和 Repository 类型
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
 // 导入 LangChain OpenAI 聊天模型和嵌入模型
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
 // 导入 LangChain Ollama 聊天模型（本地部署）
@@ -14,6 +17,9 @@ import { Document } from '@langchain/core/documents';
 import { LlmTypeEnum } from './enums/llm-type.enum';
 // 导入 Redis 服务，用于会话历史持久化
 import { RedisService } from '../redis/redis.service';
+// 导入 AI 会话和消息实体类
+import { AiSessionEntity } from './entities/ai-session.entity';
+import { AiMessageEntity } from './entities/ai-message.entity';
 // 导入 Node.js 文件系统模块
 import fs from 'fs';
 // 导入 PDF 解析库
@@ -32,10 +38,14 @@ export class AiService {
   // 当前使用的 LLM 类型标识字符串
   private readonly llmType: string;
 
-  // 构造函数：注入配置服务和 Redis 服务
+  // 构造函数：注入配置服务、Redis 服务和数据库 Repository
   constructor(
     private configService: ConfigService, // 配置服务，读取 .env 环境变量
     private redisService: RedisService, // Redis 服务，用于缓存和持久化
+    @InjectRepository(AiSessionEntity)
+    private readonly sessionRepo: Repository<AiSessionEntity>, // AI 会话 Repository
+    @InjectRepository(AiMessageEntity)
+    private readonly messageRepo: Repository<AiMessageEntity>, // AI 消息 Repository
   ) {
     // 从配置中读取 LLM 类型，默认为 openai
     this.llmType = this.configService.get('LLM_TYPE') || 'openai';
@@ -95,7 +105,7 @@ export class AiService {
     return `ai:session:last:${userId}`;
   }
 
-  // 记录用户最近会话 ID 到 Redis 的公共方法
+  // 记录用户最近会话 ID 到 Redis 和 MySQL 的公共方法
   async recordLastSession(userId: string, sessionId: string) {
     // 将会话信息以 JSON 格式存入 Redis，包含 sessionId 和时间戳，过期时间 7 天
     await this.redisService.setJson(
@@ -103,6 +113,24 @@ export class AiService {
       { sessionId, updatedAt: Date.now() }, // 存储的数据：会话 ID 和更新时间
       604800, // TTL 过期时间为 604800 秒（7 天）
     );
+    // 同时写入 MySQL：查找已有记录或创建新记录
+    const userIdNum = parseInt(userId, 10);
+    let session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
+    if (session) {
+      // 已存在则更新 updatedAt
+      session.updatedAt = Date.now();
+      await this.sessionRepo.save(session);
+    } else {
+      // 不存在则创建新会话记录
+      session = this.sessionRepo.create({
+        userId: userIdNum,
+        sessionId,
+        title: '新对话',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await this.sessionRepo.save(session);
+    }
   }
 
   // ====================== 1. 单轮简单问答（无历史） ======================
@@ -160,6 +188,30 @@ export class AiService {
     ].slice(-20);                                 // 截取最后 20 条消息（保留最近 10 轮对话）
     // 将更新后的历史以 JSON 格式存入 Redis，过期时间 86400 秒（24 小时）
     await this.redisService.setJson(historyKey, updatedHistory, 86400);
+    // 同时持久化到 MySQL
+    const userIdNum = parseInt(userId, 10);
+    const now = Date.now();
+    // 确保会话记录存在
+    let session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
+    if (!session) {
+      session = this.sessionRepo.create({
+        userId: userIdNum,
+        sessionId,
+        title: '新对话',
+        createdAt: now,
+        updatedAt: now,
+      });
+      await this.sessionRepo.save(session);
+    } else {
+      session.updatedAt = now;
+      await this.sessionRepo.save(session);
+    }
+    // 写入当前轮的两条消息（user + ai）
+    const aiContent = typeof res.content === 'string' ? res.content : String(res.content);
+    await this.messageRepo.save([
+      this.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'user', content: question, createdAt: now - 1 }),
+      this.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'assistant', content: aiContent, createdAt: now }),
+    ]);
     // 更新用户最近会话记录
     await this.recordLastSession(userId, sessionId);
 
@@ -284,52 +336,50 @@ ${question}
 
   // ====================== 6. 列出用户的会话 ======================
 
-  // 列出用户所有会话方法：从 Redis 中扫描所有会话 Key
+  // 列出用户所有会话方法：从 MySQL 查询会话列表
   async listSessions(userId: string) {
-    // 获取 Redis 原生客户端实例
-    const redisClient = this.redisService.getClient();
-    // 扫描匹配当前用户会话模式的所有 Key（新格式）
-    const newKeys = await redisClient.keys(`ai:session:${userId}:*`);
-    // 扫描匹配旧格式的所有 Key（向后兼容）
-    const oldKeys = await redisClient.keys('chat_history:*');
-    // 合并新旧 Key 数组
-    const keys = [...newKeys, ...oldKeys];
-    // 初始化会话列表，包含 sessionId 和消息数量
-    const sessions: Array<{ sessionId: string; messageCount: number }> = [];
-    // 遍历所有 Key，逐条获取会话信息
-    for (const key of keys) {
-      // 从 Redis 获取 JSON 格式的会话历史数据
-      const data = await this.redisService.getJson<Array<{ type: string; content: string }>>(key);
-      // 根据 Key 格式提取 sessionId（旧格式直接替换前缀，新格式按冒号分割取后部分）
-      const sessionId = key.startsWith('chat_history:')
-        ? key.replace('chat_history:', '') // 旧格式：去掉 chat_history: 前缀
-        : key.split(':').slice(3).join(':'); // 新格式：按冒号分割后取第 4 段及之后
-      // 将会话信息推入列表，包含 sessionId 和消息条数
-      sessions.push({
-        sessionId, // 会话 ID
-        messageCount: data?.length || 0, // 消息数量，无数据则为 0
+    const userIdNum = parseInt(userId, 10);
+    // 从 MySQL 查询用户的所有会话
+    const sessions = await this.sessionRepo.find({
+      where: { userId: userIdNum },
+      order: { updatedAt: 'DESC' },
+    });
+    // 构建会话列表，包含 sessionId 和消息数量
+    const result: Array<{ sessionId: string; messageCount: number }> = [];
+    for (const session of sessions) {
+      const count = await this.messageRepo.count({ where: { sessionId: session.id } });
+      result.push({
+        sessionId: session.sessionId,
+        messageCount: count,
       });
     }
-    // 返回会话列表数组
-    return sessions;
+    // 返回会话列表
+    return result;
   }
 
   // ====================== 7. 删除单个会话 ======================
 
-  // 删除指定会话方法：从 Redis 中删除对应 Key
+  // 删除指定会话方法：从 Redis 和 MySQL 中同时删除
   async deleteSession(userId: string, sessionId: string) {
-    // 构建会话历史的 Redis Key
+    const userIdNum = parseInt(userId, 10);
+    // 删除 Redis 历史
     const historyKey = this.getSessionHistoryKey(userId, sessionId);
-    // 调用 Redis 服务的 del 方法删除该 Key
     await this.redisService.del(historyKey);
+    // 删除 MySQL 中的消息和会话
+    const session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
+    if (session) {
+      await this.messageRepo.delete({ sessionId: session.id });
+      await this.sessionRepo.delete(session.id);
+    }
     // 返回 true 表示删除成功
     return true;
   }
 
   // ====================== 8. 清空当前用户所有会话 ======================
 
-  // 清空用户所有会话方法：批量删除 Redis 中该用户的所有会话 Key
+  // 清空用户所有会话方法：批量删除 Redis 中该用户的所有会话 Key 和 MySQL 数据
   async clearSessions(userId: string) {
+    const userIdNum = parseInt(userId, 10);
     // 获取 Redis 原生客户端实例
     const redisClient = this.redisService.getClient();
     // 扫描匹配当前用户会话模式的所有 Key
@@ -341,6 +391,13 @@ ${question}
     }
     // 同时删除用户最近会话记录 Key
     await this.redisService.del(this.getLastSessionKey(userId));
+    // 删除 MySQL 中该用户的所有会话和消息
+    const sessions = await this.sessionRepo.find({ where: { userId: userIdNum } });
+    if (sessions.length > 0) {
+      const sessionIds = sessions.map(s => s.id);
+      await this.messageRepo.delete({ sessionId: In(sessionIds) });
+      await this.sessionRepo.delete({ userId: userIdNum });
+    }
     // 返回 true 表示清空成功
     return true;
   }
@@ -409,6 +466,29 @@ ${question}
         ].slice(-20); // 只保留最近 20 条消息
         // 将更新后的历史存入 Redis，过期时间 24 小时
         await self.redisService.setJson(historyKey, updatedHistory, 86400);
+        // 同时持久化到 MySQL
+        const userIdNum = parseInt(userId, 10);
+        const now = Date.now();
+        // 确保会话记录存在
+        let session = await self.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
+        if (!session) {
+          session = self.sessionRepo.create({
+            userId: userIdNum,
+            sessionId,
+            title: '新对话',
+            createdAt: now,
+            updatedAt: now,
+          });
+          await self.sessionRepo.save(session);
+        } else {
+          session.updatedAt = now;
+          await self.sessionRepo.save(session);
+        }
+        // 写入当前轮的两条消息（user + ai）
+        await self.messageRepo.save([
+          self.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'user', content: question, createdAt: now - 1 }),
+          self.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'assistant', content: fullResponse, createdAt: now }),
+        ]);
         // 更新用户最近会话记录
         await self.recordLastSession(userId, sessionId);
       }
@@ -420,42 +500,37 @@ ${question}
 
   // ====================== 10. 获取用户最近一次会话 ======================
 
-  // 获取用户最近一次会话方法：从 Redis 获取并验证会话有效性
+  // 获取用户最近一次会话方法：从 MySQL 查询最近更新的会话
   async getLastSession(userId: string): Promise<{ sessionId: string } | null> {
-    // 从 Redis 获取最近会话记录的 JSON 数据，包含 sessionId 和更新时间
-    const lastData = await this.redisService.getJson<{ sessionId: string; updatedAt: number }>(
-      this.getLastSessionKey(userId), // Redis Key
-    );
-    // 判断最近会话记录是否存在 sessionId，不存在则返回 null
-    if (!lastData?.sessionId) return null;
-    // 构建该会话的历史数据 Redis Key
-    const historyKey = this.getSessionHistoryKey(userId, lastData.sessionId);
-    // 检查历史数据 Key 在 Redis 中是否仍然存在（TTL 可能已过期）
-    const exists = await this.redisService.exists(historyKey);
-    // 如果历史数据已不存在
-    if (!exists) {
-      // 清理最近会话记录 Key
-      await this.redisService.del(this.getLastSessionKey(userId));
-      // 返回 null 表示无有效会话
-      return null;
-    }
+    const userIdNum = parseInt(userId, 10);
+    // 从 MySQL 查询最近更新的会话
+    const session = await this.sessionRepo.findOne({
+      where: { userId: userIdNum },
+      order: { updatedAt: 'DESC' },
+    });
+    // 如果没有找到会话，返回 null
+    if (!session) return null;
     // 返回包含 sessionId 的对象
-    return { sessionId: lastData.sessionId };
+    return { sessionId: session.sessionId };
   }
 
   // ====================== 11. 获取指定会话的历史消息 ======================
 
-  // 获取指定会话的历史消息方法：从 Redis 获取并转换为前端展示格式
+  // 获取指定会话的历史消息方法：从 MySQL 读取持久化数据
   async getSessionMessages(userId: string, sessionId: string) {
-    // 构建会话历史的 Redis Key
-    const historyKey = this.getSessionHistoryKey(userId, sessionId);
-    // 从 Redis 获取历史消息数据
-    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
-    // 如果没有历史数据，返回空数组
-    if (!historyData || historyData.length === 0) return [];
-    // 转换为前端展示格式，human -> user, ai -> assistant
-    return historyData.map((msg) => ({
-      role: msg.type === 'human' ? 'user' : 'assistant',
+    const userIdNum = parseInt(userId, 10);
+    // 先从 Redis 获取 session UUID 对应的 session 记录（通过 sessionId 字符串查找）
+    // 前端传的是 UUID sessionId，需要从 MySQL ai_session 表查
+    const session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
+    if (!session) return [];
+    // 从 MySQL 查询该会话的所有消息，按时间升序
+    const messages = await this.messageRepo.find({
+      where: { sessionId: session.id },
+      order: { createdAt: 'ASC' },
+    });
+    // 转换为前端展示格式
+    return messages.map((msg) => ({
+      role: msg.role,
       content: msg.content,
     }));
   }

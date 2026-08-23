@@ -112,3 +112,36 @@ CREATE TABLE IF NOT EXISTS `chat_message` (
   INDEX `idx_room` (`roomId`),
   INDEX `idx_room_created` (`roomId`, `createdAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天消息表';
+
+
+-- =============================================
+-- AI 对话模块数据库表结构
+-- 说明：TypeORM synchronize: true 时自动创建
+--       此文件用于手动建表或生产环境初始化
+-- =============================================
+
+-- 1. AI 会话表
+CREATE TABLE IF NOT EXISTS `ai_session` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `user_id` INT NOT NULL COMMENT '用户ID',
+  `session_id` VARCHAR(36) NOT NULL COMMENT '会话UUID',
+  `title` VARCHAR(100) DEFAULT '新对话' COMMENT '会话标题',
+  `created_at` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
+  `updated_at` BIGINT NOT NULL COMMENT '更新时间(毫秒时间戳)',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_session_user` (`session_id`, `user_id`),
+  KEY `idx_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI会话表';
+
+-- 2. AI 消息表
+CREATE TABLE IF NOT EXISTS `ai_message` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `session_id` INT NOT NULL COMMENT '会话ID',
+  `user_id` INT NOT NULL COMMENT '用户ID',
+  `role` VARCHAR(20) NOT NULL COMMENT '角色: user/assistant',
+  `content` VARCHAR(5000) NOT NULL COMMENT '消息内容',
+  `created_at` BIGINT NOT NULL COMMENT '发送时间(毫秒时间戳)',
+  PRIMARY KEY (`id`),
+  KEY `idx_session` (`session_id`),
+  KEY `idx_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI消息表';
