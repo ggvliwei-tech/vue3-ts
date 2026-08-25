@@ -1,5 +1,8 @@
 node_modules
 
+# Build output of all packages (regenerated on build)
+**/dist/
+
 # Auto-generated type declarations (regenerated on build/dev)
 **/auto-imports.d.ts
 **/components.d.ts

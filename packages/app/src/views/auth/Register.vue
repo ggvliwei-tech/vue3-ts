@@ -18,6 +18,8 @@ const username = ref('')
 const password = ref('')
 // 定义确认密码输入框的响应式数据
 const confirmPassword = ref('')
+// 定义手机号输入框的响应式数据
+const phone = ref('')
 // 定义注册按钮加载状态的响应式数据
 const loading = ref(false)
 
@@ -51,15 +53,26 @@ async function handleRegister() {
     // 阻止后续注册逻辑执行
     return
   }
+  // 检查手机号是否为空
+  if (!phone.value.trim()) {
+    showToast('请输入手机号')
+    return
+  }
+  // 检查手机号格式
+  if (!/^1[3-9]\d{9}$/.test(phone.value.trim())) {
+    showToast('手机号格式不正确')
+    return
+  }
 
   // 开始注册请求，将按钮状态设为加载中
   loading.value = true
   // 使用 try-catch 捕获注册请求可能抛出的异常
   try {
-    // 调用注册 API，传入去除空格的用户名和密码
+    // 调用注册 API，传入去除空格的用户名、密码和手机号
     await register({
       username: username.value.trim(),
       password: password.value,
+      phone: phone.value.trim(),
     })
     // 注册成功后弹出提示信息
     showToast('注册成功')
@@ -117,6 +130,18 @@ function goLogin() {
           label="确认密码"
           placeholder="请再次输入密码"
           :rules="[{ required: true, message: '请再次输入密码' }]"
+        />
+        <!-- 手机号输入字段 -->
+        <van-field
+          v-model="phone"
+          label="手机号"
+          placeholder="请输入 11 位手机号"
+          type="tel"
+          maxlength="11"
+          :rules="[
+            { required: true, message: '请输入手机号' },
+            { pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确' },
+          ]"
         />
       </van-cell-group>
 

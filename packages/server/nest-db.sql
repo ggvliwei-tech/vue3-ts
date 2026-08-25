@@ -18,10 +18,12 @@ CREATE TABLE `sys_user` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键ID',
   `username` VARCHAR(50) NOT NULL COMMENT '登录用户名',
   `password` VARCHAR(100) NOT NULL COMMENT '加密后密码',
+  `phone` VARCHAR(20) NOT NULL COMMENT '手机号',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '账号状态：1正常 0禁用',
   `createTime` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
   PRIMARY KEY (`id`),
-  UNIQUE INDEX `uk_sys_user_username` (`username`) COMMENT '用户名唯一约束'
+  UNIQUE INDEX `uk_sys_user_username` (`username`) COMMENT '用户名唯一约束',
+  UNIQUE INDEX `uk_sys_user_phone` (`phone`) COMMENT '手机号唯一约束'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
 
 -- 迁移：2026-08-11 RefreshToken 迁移至 Redis，删除数据库中的冗余字段

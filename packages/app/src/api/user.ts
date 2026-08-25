@@ -19,6 +19,18 @@ export interface RegisterParams {
   username: string
   // 密码
   password: string
+  // 手机号
+  phone: string
+}
+
+// 定义忘记密码请求参数的接口
+export interface ForgotPasswordParams {
+  // 注册时使用的手机号
+  phone: string
+  // 短信验证码（6位数字）
+  code: string
+  // 新密码
+  newPassword: string
 }
 
 // 定义登录响应数据的接口
@@ -75,4 +87,13 @@ export function refreshToken() {
 export function getUserProfile() {
   // 发送 GET 请求获取当前用户信息
   return post<{ id: number; username: string; status: number }>('/api/v1/user/profile')
+}
+
+/**
+ * 通过手机号 + 短信验证码重置密码
+ * @param data - 忘记密码参数（手机号 + 验证码 + 新密码）
+ */
+export function forgotPassword(data: ForgotPasswordParams) {
+  // 发送 POST 请求到忘记密码接口
+  return post<{ msg: string }>('/api/v1/user/forgot-password', data)
 }

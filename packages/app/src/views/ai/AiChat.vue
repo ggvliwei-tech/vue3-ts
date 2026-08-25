@@ -1,11 +1,11 @@
 <!-- script setup 块：使用 Composition API 语法糖定义 AI 聊天页面逻辑 -->
 <script setup lang="ts">
-// 从 vue 中导入 ref（响应式引用）、nextTick（DOM 更新后回调）、onMounted 和 onUnmounted（生命周期钩子）
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+// 从 vue 中导入 ref（响应式引用）、onMounted 和 onUnmounted（生命周期钩子）
+import { ref, onMounted, onUnmounted } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
-// 从 AI API 模块中导入聊天和会话相关函数
-import { chatWithHistory, createSession, getLastSession, getSessionMessages } from '@/api/ai'
+// 从 AI API 模块中导入会话相关函数
+import { createSession, getLastSession, getSessionMessages } from '@/api/ai'
 // 从 SSE 工具模块中导入带历史上下文的流式消费函数
 import { consumeSSEWithHistory } from '@/utils/sse'
 // 从用户 API 模块中导入刷新 token 函数
@@ -260,97 +260,6 @@ async function onCodeBlockClick(event: MouseEvent) {
   }
 }
 
-// 发送消息的异步函数（非流式，带历史上下文）
-async function sendMessage() {
-  // 获取输入框中的文本并去除首尾空格
-  const text = inputText.value.trim()
-  // 如果文本为空或正在加载中或正在流式输出，则直接返回
-  if (!text || loading.value || isStreaming.value) return
-
-  // 清空输入框内容
-  inputText.value = ''
-
-  // 将用户消息添加到消息列表中
-  messages.value.push({
-    role: 'user',
-    content: text,
-    timestamp: Date.now(),
-  })
-  // 滚动到底部显示新消息
-  await scrollToBottom()
-
-  // 设置加载状态为 true
-  loading.value = true
-
-  // 使用 try-catch 捕获请求可能抛出的异常
-  try {
-    // 确保存在有效的 sessionId
-    await ensureSessionId()
-
-    // 调用带历史上下文的聊天 API
-    const res = await chatWithHistory({
-      question: text,
-      sessionId: sessionId.value,
-    })
-
-    // 兼容不同的响应结构，提取 AI 回答内容
-    const content = typeof res.data === 'string'
-      ? res.data
-      : (res.data as any)?.content || ''
-
-    // 将 AI 回答添加到消息列表中
-    messages.value.push({
-      role: 'assistant',
-      content,
-      timestamp: Date.now(),
-    })
-  } catch (err: any) {
-    // 检查是否为 token 过期，若是则自动刷新并重试
-    if (await autoRefreshToken(err.message)) {
-      try {
-        // 刷新成功后重新发起聊天请求
-        const res = await chatWithHistory({
-          question: text,
-          sessionId: sessionId.value,
-        })
-
-        // 提取 AI 回答内容
-        const content = typeof res.data === 'string'
-          ? res.data
-          : (res.data as any)?.content || ''
-
-        // 将 AI 回答添加到消息列表中
-        messages.value.push({
-          role: 'assistant',
-          content,
-          timestamp: Date.now(),
-        })
-        return
-      } catch (retryErr: any) {
-        // 重试失败时显示错误消息
-        messages.value.push({
-          role: 'assistant',
-          content: `出错了：${retryErr.message || '请求失败'}`,
-          timestamp: Date.now(),
-        })
-        return
-      }
-    }
-
-    // token 未过期或其他错误时显示错误消息
-    messages.value.push({
-      role: 'assistant',
-      content: `出错了：${err.message || '请求失败'}`,
-      timestamp: Date.now(),
-    })
-  } finally {
-    // 无论成功还是失败，都将加载状态重置为 false
-    loading.value = false
-    // 滚动到底部
-    await scrollToBottom()
-  }
-}
-
 // 流式发送消息的异步函数（打字机效果）
 async function sendStreamMessage() {
   // 获取输入框中的文本并去除首尾空格
@@ -370,7 +279,7 @@ async function sendStreamMessage() {
     timestamp: Date.now(),
   })
   // 滚动到底部显示新消息
-  await scrollToBottom()
+  await scrollToBottom(chatContainerRef.value)
 
   // 记录即将创建的 AI 消息在列表中的索引位置
   const aiMessageIndex = messages.value.length
@@ -381,7 +290,7 @@ async function sendStreamMessage() {
     timestamp: Date.now(),
   })
   // 滚动到底部
-  await scrollToBottom()
+  await scrollToBottom(chatContainerRef.value)
 
   // 从 localStorage 中获取当前 token
   const token = localStorage.getItem('token') || ''
@@ -418,7 +327,7 @@ async function sendStreamMessage() {
                   onChunk: (c) => {
                     const t = parseSSEData(c)
                     messages.value[aiMessageIndex].content += t
-                    scrollToBottom()
+                    scrollToBottom(chatContainerRef.value)
                   },
                   // 流式完成时的回调
                   onDone: () => {
@@ -451,7 +360,7 @@ async function sendStreamMessage() {
         }
         // 正常内容：将解析后的数据追加到 AI 消息中
         messages.value[aiMessageIndex].content += parsed
-        scrollToBottom()
+        scrollToBottom(chatContainerRef.value)
       },
       // 流式完成时的回调函数
       onDone: () => {
@@ -475,7 +384,7 @@ async function sendStreamMessage() {
                 onChunk: (chunk) => {
                   const text = parseSSEData(chunk)
                   messages.value[aiMessageIndex].content += text
-                  scrollToBottom()
+                  scrollToBottom(chatContainerRef.value)
                 },
                 // 流式完成时的回调
                 onDone: () => {
@@ -526,7 +435,7 @@ async function sendStreamMessage() {
             onChunk: (chunk) => {
               const parsed = parseSSEData(chunk)
               messages.value[aiMessageIndex].content += parsed
-              scrollToBottom()
+              scrollToBottom(chatContainerRef.value)
             },
             // 流式完成时的回调
             onDone: () => {

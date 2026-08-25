@@ -69,6 +69,12 @@ function goRegister() {
   // 导航到注册页面路由
   router.push('/register')
 }
+
+// 跳转到忘记密码页面的函数
+function goForgotPassword() {
+  // 导航到忘记密码页面路由
+  router.push('/forgot-password')
+}
 </script>
 
 <!-- template 模板块：定义登录页面的 HTML 结构 -->
@@ -123,6 +129,11 @@ function goRegister() {
       <span>还没有账号？</span>
       <!-- 点击跳转到注册页面的链接 -->
       <a @click="goRegister">去注册</a>
+    </div>
+
+    <!-- 忘记密码链接 -->
+    <div class="forgot-link">
+      <a @click="goForgotPassword">忘记密码？</a>
     </div>
   </div>
 </template>
@@ -179,6 +190,18 @@ function goRegister() {
     // 左侧间距 4px
     margin-left: 4px;
     // 鼠标悬停时显示手型指针
+    cursor: pointer;
+  }
+}
+
+// 忘记密码链接样式
+.forgot-link {
+  text-align: center;
+  margin-top: 12px;
+  font-size: 14px;
+
+  a {
+    color: #1989fa;
     cursor: pointer;
   }
 }

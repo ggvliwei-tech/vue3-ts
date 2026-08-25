@@ -63,6 +63,16 @@ const routes: RouteRecordRaw[] = [
     // 路由元信息，设置页面标题
     meta: { title: '注册' },
   },
+  {
+    // 忘记密码页面路由路径
+    path: '/forgot-password',
+    // 路由名称
+    name: 'ForgotPassword',
+    // 懒加载忘记密码页面组件
+    component: () => import('@/views/auth/ForgotPassword.vue'),
+    // 路由元信息，设置页面标题
+    meta: { title: '找回密码' },
+  },
   // 账本模块路由配置
   {
     // 账本列表页面路由路径
@@ -129,7 +139,7 @@ const router = createRouter({
 
 // 路由守卫：未登录时自动跳转到登录页
 // 定义白名单路由，这些路由不需要登录即可访问
-const whiteList = ['/login', '/register']
+const whiteList = ['/login', '/register', '/forgot-password']
 
 // 注册全局前置路由守卫，每次路由跳转前都会执行
 router.beforeEach((to) => {

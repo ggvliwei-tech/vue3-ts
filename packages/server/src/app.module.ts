@@ -11,6 +11,7 @@ import { AccountBookModule } from './modules/account_book/account-book.module'; 
 import { FileModule } from './modules/file/file.module'; // 文件管理模块，处理上传下载
 import { AiModule } from './modules/ai/ai.module'; // AI 功能模块
 import { ChatModule } from './modules/chat/chat.module'; // 聊天对话模块
+import { SmsModule } from './modules/sms/sms.module'; // 短信模块
 
 @Module({ // 根模块装饰器，负责组装所有全局依赖和配置
   imports: [ // 导入的模块列表
@@ -61,7 +62,8 @@ import { ChatModule } from './modules/chat/chat.module'; // 聊天对话模块
     AccountBookModule, // 导入账本模块，管理账本相关功能
     FileModule, // 导入文件模块，处理文件上传下载
     AiModule, // 导入 AI 模块，提供 AI 相关功能
-    ChatModule // 导入聊天模块，处理聊天对话功能
+    ChatModule, // 导入聊天模块，处理聊天对话功能
+    SmsModule // 导入短信模块，处理短信验证码发送（独立路由 /sms/send-code）
   ],
   providers: [ // 全局服务提供者列表
     {

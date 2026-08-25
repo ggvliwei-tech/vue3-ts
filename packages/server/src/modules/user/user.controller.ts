@@ -32,6 +32,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 // 刷新令牌守卫，用于验证 RefreshToken 有效性
 import { RefreshTokenGuard } from '../../common/guards/refresh-token.guard';
+// 忘记密码 DTO
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 // Swagger 标签装饰器，将此控制器下的接口归类到 "用户管理模块" 分组
 @ApiTags('用户管理模块')
@@ -49,6 +51,16 @@ export class UserController {
   register(@Body() createUserDto: CreateUserDto) {
     // 调用用户服务的 create 方法创建用户并返回结果
     return this.userService.create(createUserDto);
+  }
+
+  // Swagger 接口描述：通过手机号 + 验证码重置密码
+  @ApiOperation({ summary: '通过手机号验证码重置密码' })
+  // Post 路由装饰器，忘记密码接口路径为 POST /user/forgot-password
+  @Post('forgot-password')
+  // 忘记密码方法：接收 ForgotPasswordDto 作为请求体参数
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    // 调用用户服务重置密码
+    return this.userService.resetPasswordByPhone(dto);
   }
 
   // Swagger 接口描述：用户登录，RefreshToken 存入 HttpOnly Cookie

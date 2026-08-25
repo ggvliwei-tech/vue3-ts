@@ -130,7 +130,8 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       const { data } = response
       // 状态码为 0 表示业务成功，直接返回响应体中的 data 字段（即 TransformInterceptor 包装后的完整数据）
       if (data.code === 0) {
-        return data
+        // 通过类型断言绕过 axios 拦截器签名限制：调用方实际收到的是 ApiRes 对象而非 AxiosResponse
+        return data as unknown as AxiosResponse
       }
       // 状态码为 401 表示 token 过期或未授权，尝试自动刷新 token
       if (data.code === 401) {
@@ -252,8 +253,8 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
  * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
 export function get<T = unknown>(url: string, config?: RequestConfig): Promise<ApiRes<T>> {
-  // 调用默认请求实例的 get 方法
-  return request.get<ApiRes<T>>(url, config)
+  // 调用默认请求实例的 get 方法，响应拦截器已解包为 ApiRes<T>
+  return request.get(url, config) as unknown as Promise<ApiRes<T>>
 }
 
 /**
@@ -271,8 +272,8 @@ export function post<T = unknown>(
   // 可选的请求配置
   config?: RequestConfig,
 ): Promise<ApiRes<T>> {
-  // 调用默认请求实例的 post 方法
-  return request.post<ApiRes<T>>(url, data, config)
+  // 调用默认请求实例的 post 方法，响应拦截器已解包为 ApiRes<T>
+  return request.post(url, data, config) as unknown as Promise<ApiRes<T>>
 }
 
 /**
@@ -290,8 +291,8 @@ export function put<T = unknown>(
   // 可选的请求配置
   config?: RequestConfig,
 ): Promise<ApiRes<T>> {
-  // 调用默认请求实例的 put 方法
-  return request.put<ApiRes<T>>(url, data, config)
+  // 调用默认请求实例的 put 方法，响应拦截器已解包为 ApiRes<T>
+  return request.put(url, data, config) as unknown as Promise<ApiRes<T>>
 }
 
 /**
@@ -301,8 +302,8 @@ export function put<T = unknown>(
  * @returns 返回包含 API 响应数据的 Promise（已解包，直接是 ApiRes<T>）
  */
 export function del<T = unknown>(url: string, config?: RequestConfig): Promise<ApiRes<T>> {
-  // 调用默认请求实例的 delete 方法（方法名为 delete，导出名为 del 避免关键字冲突）
-  return request.delete<ApiRes<T>>(url, config)
+  // 调用默认请求实例的 delete 方法（方法名为 delete，导出名为 del 避免关键字冲突），响应拦截器已解包为 ApiRes<T>
+  return request.delete(url, config) as unknown as Promise<ApiRes<T>>
 }
 
 /**
@@ -320,6 +321,6 @@ export function patch<T = unknown>(
   // 可选的请求配置
   config?: RequestConfig,
 ): Promise<ApiRes<T>> {
-  // 调用默认请求实例的 patch 方法
-  return request.patch<ApiRes<T>>(url, data, config)
+  // 调用默认请求实例的 patch 方法，响应拦截器已解包为 ApiRes<T>
+  return request.patch(url, data, config) as unknown as Promise<ApiRes<T>>
 }

@@ -33,4 +33,8 @@ export class User {
   // Column 装饰器定义创建时间字段，type: 'bigint' 存储毫秒级时间戳
   @Column({ type: 'bigint', comment: '创建时间(毫秒时间戳)' })
   createTime!: number;
+
+  // Column 装饰器定义手机号字段，length: 20 限制最大 20 个字符（支持国际号码），comment 为数据库字段注释
+  @Column({ length: 20, comment: '手机号' })
+  phone!: string;
 }

@@ -30,6 +30,10 @@ import { LoginUserDto } from './dto/login-user.dto';
 import { ConfigService } from '@nestjs/config';
 // RedisService Redis 服务，用于 Token 存储和黑名单管理
 import { RedisService } from '../redis/redis.service';
+// SmsService 短信服务，用于验证码校验
+import { SmsService } from '../sms/sms.service';
+// 忘记密码 DTO
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 // Injectable 装饰器标记此类为可被依赖注入的服务
 @Injectable()
@@ -45,6 +49,8 @@ export class UserService {
     private readonly configService: ConfigService,
     // 注入 Redis 服务，用于 Token 存储和缓存操作
     private readonly redisService: RedisService,
+    // 注入短信服务，用于忘记密码时的验证码校验
+    private readonly smsService: SmsService,
   ) {}
 
   // 从配置中获取 JWT 过期时间，解决 string 到 StringValue 的类型兼容问题
@@ -95,11 +101,19 @@ export class UserService {
       throw new ConflictException('用户名已注册');
     }
 
+    // 检查手机号是否已被注册
+    const existingPhone = await this.userRepo.findOne({
+      where: { phone: createUserDto.phone },
+    });
+    if (existingPhone) {
+      throw new ConflictException('手机号已注册');
+    }
+
     // 使用 bcrypt 对密码进行哈希加密，saltRounds=10 表示哈希强度
     const hashPwd = await bcrypt.hash(createUserDto.password, 10);
     // 创建用户实体实例，将 DTO 数据展开并用加密后的密码替换原始密码
     const user = this.userRepo.create({
-      ...createUserDto, // 展开 DTO 数据（包含 username 等字段）
+      ...createUserDto, // 展开 DTO 数据（包含 username、phone 等字段）
       password: hashPwd, // 使用 bcrypt 加密后的密码
       createTime: Date.now(), // 设置创建时间为当前毫秒时间戳
     });
@@ -110,7 +124,7 @@ export class UserService {
     } catch (error) {
       // 捕获数据库唯一约束冲突异常（MySQL errno 1062 表示唯一键冲突）
       if (error instanceof QueryFailedError && (error as any).driverError?.errno === 1062) {
-        throw new ConflictException('用户名已注册');
+        throw new ConflictException('用户名或手机号已注册');
       }
       // 如果不是唯一约束冲突，则抛出原始错误
       throw error;
@@ -257,7 +271,30 @@ export class UserService {
   async findAll() {
     // 使用 find 查询所有用户，select 指定只返回 id、username、status、createTime 字段
     return await this.userRepo.find({
-      select: { id: true, username: true, status: true, createTime: true },
+      select: { id: true, username: true, phone: true, status: true, createTime: true },
     });
+  }
+
+  // 通过手机号 + 验证码重置密码
+  async resetPasswordByPhone(dto: ForgotPasswordDto) {
+    // 1. 校验验证码（不存在或错误时直接抛异常）
+    const isValid = await this.smsService.verifyCode(dto.phone, dto.code);
+    if (!isValid) {
+      throw new BadRequestException('验证码错误或已过期');
+    }
+
+    // 2. 查找用户
+    const user = await this.userRepo.findOne({ where: { phone: dto.phone } });
+    if (!user) {
+      throw new NotFoundException('该手机号未注册');
+    }
+
+    // 3. 加密新密码
+    user.password = await bcrypt.hash(dto.newPassword, 10);
+    // 4. 保存到数据库
+    await this.userRepo.save(user);
+
+    // 返回成功消息
+    return { msg: '密码重置成功，请使用新密码登录' };
   }
 }

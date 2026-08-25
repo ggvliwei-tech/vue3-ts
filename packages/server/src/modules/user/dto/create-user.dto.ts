@@ -3,6 +3,8 @@ import {
   IsNotEmpty,
   // Length 长度校验装饰器，限制字符串长度在指定范围内
   Length,
+  // Matches 正则校验装饰器，使用正则表达式校验字符串格式
+  Matches,
 } from 'class-validator';
 // ApiProperty 装饰器，用于 Swagger 文档生成，描述字段信息和验证规则
 import { ApiProperty } from '@nestjs/swagger';
@@ -22,4 +24,12 @@ export class CreateUserDto {
   // IsNotEmpty 装饰器校验密码不能为空，为空时返回指定错误消息
   @IsNotEmpty({ message: '密码不能为空' })
   password: string;
+
+  // ApiProperty 装饰器为 Swagger 文档提供手机号字段描述
+  @ApiProperty({ description: '手机号' })
+  // IsNotEmpty 装饰器校验手机号不能为空
+  @IsNotEmpty({ message: '手机号不能为空' })
+  // Matches 装饰器校验手机号格式为中国大陆 11 位手机号
+  @Matches(/^1[3-9]\d{9}$/, { message: '手机号格式不正确' })
+  phone: string;
 }
