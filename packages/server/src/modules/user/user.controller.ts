@@ -140,24 +140,26 @@ export class UserController {
 
   // ===== 以下为需要 JWT 鉴权的接口 =====
 
-  // Swagger 接口描述：强制用户下线（管理员功能，无需登录）
+  // Swagger 接口描述：强制用户下线（管理员功能）
   @ApiOperation({ summary: '强制用户下线（管理员功能）' })
   // Post 路由装饰器，强制下线接口路径为 POST /user/:id/kick，:id 为用户 ID 参数
+  @UseGuards(JwtAuthGuard)
   @Post(':id/kick')
-  // 强制下线方法：接收路由参数 userId
-  async forceKick(@Param('id') userId: string) {
-    // 调用用户服务的 forceKick 方法，将字符串 userId 转为数字后传入
-    return this.userService.forceKick(Number(userId));
+  // 强制下线方法：接收路由参数 userId 和当前用户信息
+  async forceKick(@Param('id') userId: string, @CurrentUser() user: any) {
+    // 调用用户服务的 forceKick 方法，将字符串 userId 转为数字后传入，并传入操作用户信息用于权限校验
+    return this.userService.forceKick(Number(userId), user);
   }
 
-  // Swagger 接口描述：切换用户状态（启用/禁用，管理员功能，无需登录）
+  // Swagger 接口描述：切换用户状态（启用/禁用，管理员功能）
   @ApiOperation({ summary: '切换用户状态（启用/禁用）' })
   // Post 路由装饰器，切换状态接口路径为 POST /user/:id/toggle-status
+  @UseGuards(JwtAuthGuard)
   @Post(':id/toggle-status')
-  // 切换状态方法：接收路由参数 userId
-  async toggleStatus(@Param('id') userId: string) {
-    // 调用用户服务的 toggleStatus 方法，将字符串 userId 转为数字后传入
-    return this.userService.toggleStatus(Number(userId));
+  // 切换状态方法：接收路由参数 userId 和当前用户信息
+  async toggleStatus(@Param('id') userId: string, @CurrentUser() user: any) {
+    // 调用用户服务的 toggleStatus 方法，将字符串 userId 转为数字后传入，并传入操作用户信息用于权限校验
+    return this.userService.toggleStatus(Number(userId), user);
   }
 
   // Swagger 接口描述：获取当前登录用户信息

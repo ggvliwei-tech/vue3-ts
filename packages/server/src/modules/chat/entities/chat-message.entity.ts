@@ -19,8 +19,8 @@ export class ChatMessageEntity {
   @Column({ length: 50, comment: '发送者用户名' })
   senderName: string;
 
-  // 消息内容，最大长度 2000
-  @Column({ length: 2000, comment: '消息内容' })
+  // 消息内容，TEXT 类型支持长消息
+  @Column({ type: 'text', comment: '消息内容' })
   content: string;
 
   // 发送时间，毫秒时间戳

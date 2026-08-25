@@ -4,6 +4,7 @@ import { ClassSerializerInterceptor } from '@nestjs/common'; // class-transforme
 import { ConfigModule, ConfigService } from '@nestjs/config'; // 配置模块和服务，用于读取和管理环境变量
 import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，用于连接和操作数据库
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
+import { ThrottlerModule } from '@nestjs/throttler'; // 限流模块，用于接口频率限制
 import configuration from './config/configuration'; // 自定义配置加载函数，对环境变量做预处理
 import { UserModule } from './modules/user/user.module'; // 用户功能模块，处理用户相关业务逻辑
 import { AccountBookModule } from './modules/account_book/account-book.module'; // 账本功能模块
@@ -47,6 +48,14 @@ import { ChatModule } from './modules/chat/chat.module'; // 聊天对话模块
       }),
       inject: [ConfigService], // 注入 ConfigService 供 useFactory 使用
     }),
+
+    // 全局限流配置（所有模块共享）
+    ThrottlerModule.forRoot([
+      {
+        ttl: 10000, // 限流时间窗口为 10 秒
+        limit: 5,   // 时间窗口内最大允许 5 次请求
+      },
+    ]),
 
     UserModule, // 导入用户模块，注册用户相关的控制器和服务
     AccountBookModule, // 导入账本模块，管理账本相关功能

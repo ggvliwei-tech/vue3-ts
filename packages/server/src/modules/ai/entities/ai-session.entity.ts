@@ -9,23 +9,23 @@ export class AiSessionEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
-  // 用户 ID
-  @Column({ comment: '用户ID' })
+  // 用户 ID（SQL 列名为 user_id）
+  @Column({ name: 'user_id', comment: '用户ID' })
   userId: number;
 
-  // 会话 UUID
-  @Column({ length: 36, comment: '会话UUID' })
+  // 会话 UUID（SQL 列名为 session_id）
+  @Column({ name: 'session_id', length: 36, comment: '会话UUID' })
   sessionId: string;
 
-  // 会话标题
+  // 会话标题（SQL 列名为 title）
   @Column({ length: 100, default: '新对话', comment: '会话标题' })
   title: string;
 
-  // 创建时间，毫秒时间戳
-  @Column({ type: 'bigint', comment: '创建时间(毫秒时间戳)' })
+  // 创建时间，毫秒时间戳（SQL 列名为 created_at）
+  @Column({ name: 'created_at', type: 'bigint', comment: '创建时间(毫秒时间戳)' })
   createdAt: number;
 
-  // 更新时间，毫秒时间戳
-  @Column({ type: 'bigint', comment: '更新时间(毫秒时间戳)' })
+  // 更新时间，毫秒时间戳（SQL 列名为 updated_at）
+  @Column({ name: 'updated_at', type: 'bigint', comment: '更新时间(毫秒时间戳)' })
   updatedAt: number;
 }

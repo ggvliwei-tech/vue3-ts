@@ -2,8 +2,6 @@
 import { Module } from '@nestjs/common';
 // 导入 TypeORM 模块，用于注册实体 Repository
 import { TypeOrmModule } from '@nestjs/typeorm';
-// 导入用户模块，用于关联用户信息
-import { UserModule } from '../user/user.module';
 // 导入账本服务，处理业务逻辑
 import { AccountBookService } from './account-book.service';
 // 导入账本控制器，处理 HTTP 请求
@@ -16,8 +14,6 @@ import { AccountBookEntity } from './entities/account-book.entity';
   imports: [
     // 注册 AccountBookEntity 实体到当前模块
     TypeOrmModule.forFeature([AccountBookEntity]),
-    // 导入 UserModule，用于关联用户信息
-    UserModule,
   ],
   // 注册控制器，处理路由和请求
   controllers: [AccountBookController],

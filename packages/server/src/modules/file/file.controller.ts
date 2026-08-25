@@ -56,13 +56,8 @@ export class FileController {
     @CurrentUser() user: any,
   ) {
     // 调用服务的 uploadSingle 方法上传文件，归类为 'goods' 类型
-    const res = await this.fileService.uploadSingle(file, '', true, user.id);
-    // 返回统一格式的响应结果
-    return {
-      code: 200, // 状态码，200 表示成功
-      data: res.url, // 返回上传后的文件 URL
-      info: res, // 返回完整的上传结果信息
-    };
+    // TransformInterceptor 会自动包装为 {code: 0, msg, data} 格式
+    return this.fileService.uploadSingle(file, '', true, user.id);
   }
 
   // ========== 多文件上传 ==========
@@ -85,22 +80,15 @@ export class FileController {
     @UploadedFiles() files: Express.Multer.File[],
     @CurrentUser() user: any,
   ) {
-    // 判断是否有文件上传，如果没有则返回 400 错误
-    if (!files || files.length === 0) {
-      return { code: 400, msg: '未选择上传文件' };
-    }
-
-    // 循环调用单文件上传逻辑
     // 使用 Promise.all 并发执行所有文件的上传操作，提升效率
     const list = await Promise.all(
       files.map((file) => this.fileService.uploadSingle(file, '', true, user.id)),
     );
 
-    // 返回统一格式的响应结果
+    // 返回 URL 数组和完整列表，TransformInterceptor 自动包装
     return {
-      code: 200, // 状态码，200 表示成功
-      data: list.map((item) => item.url), // 返回所有文件的 URL 数组
-      list: list, // 返回完整的上传结果列表
+      urls: list.map((item) => item.url),
+      list,
     };
   }
 
@@ -112,7 +100,7 @@ export class FileController {
   async remove(@Param('id') id: string) {
     // 将 id 字符串转为数字后调用服务的删除方法
     await this.fileService.deleteFile(+id);
-    // 返回删除成功的响应
-    return { code: 200, msg: '删除成功' };
+    // TransformInterceptor 自动包装为 {code: 0, msg, data} 格式
+    return { msg: '删除成功' };
   }
 }

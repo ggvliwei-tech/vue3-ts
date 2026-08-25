@@ -206,35 +206,39 @@ export class UserService {
   }
 
   // 强制用户下线：将用户加入黑名单（立即生效）+ 删除 RefreshToken
-  async forceKick(userId: number) {
+  async forceKick(userId: number, user: any) {
+    // 仅管理员可操作
+    if (user.username !== 'admin') throw new ForbiddenException('仅管理员可操作');
     // 根据用户 ID 从数据库查询用户信息
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const target = await this.userRepo.findOneBy({ id: userId });
     // 如果用户不存在，抛出未找到异常
-    if (!user) throw new NotFoundException('用户不存在');
+    if (!target) throw new NotFoundException('用户不存在');
 
-    // 1. 将用户加入 Redis 黑名单，TTL 120 秒覆盖 AccessToken 1 分钟的有效期
-    await this.redisService.set(`blacklist:token:${userId}`, '1', 120);
+    // 1. 将用户加入 Redis 黑名单，TTL 900 秒覆盖 AccessToken 15 分钟的有效期
+    await this.redisService.set(`blacklist:token:${userId}`, '1', 900);
 
     // 2. 删除用户的 RefreshToken，阻止后续通过刷新获取新的 AccessToken
     await this.redisService.del(`refresh:token:${userId}`);
 
     // 返回强制下线成功消息，包含用户名
-    return { msg: `用户 ${user.username} 已强制下线` };
+    return { msg: `用户 ${target.username} 已强制下线` };
   }
 
   // 切换用户状态（启用/禁用）：将 status 在 0 和 1 之间切换
-  async toggleStatus(userId: number) {
+  async toggleStatus(userId: number, user: any) {
+    // 仅管理员可操作
+    if (user.username !== 'admin') throw new ForbiddenException('仅管理员可操作');
     // 根据用户 ID 从数据库查询用户信息
-    const user = await this.userRepo.findOneBy({ id: userId });
+    const target = await this.userRepo.findOneBy({ id: userId });
     // 如果用户不存在，抛出未找到异常
-    if (!user) throw new NotFoundException('用户不存在');
+    if (!target) throw new NotFoundException('用户不存在');
 
     // 切换状态：当前为 1 则设为 0（禁用），当前为 0 则设为 1（启用）
-    user.status = user.status === 1 ? 0 : 1;
+    target.status = target.status === 1 ? 0 : 1;
     // 保存更新后的用户信息到数据库
-    await this.userRepo.save(user);
+    await this.userRepo.save(target);
     // 返回操作结果消息和新的状态值
-    return { msg: `用户 ${user.username} 已${user.status === 1 ? '启用' : '禁用'}`, status: user.status };
+    return { msg: `用户 ${target.username} 已${target.status === 1 ? '启用' : '禁用'}`, status: target.status };
   }
 
   // 根据 ID 查询用户信息（不返回密码字段）
