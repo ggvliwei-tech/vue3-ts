@@ -1,14 +1,22 @@
 <!-- script setup 部分：使用组合式 API 和语法糖 -->
 <script setup lang="ts">
+// 从 vue 导入 ref 用于创建响应式数据
+import { ref } from 'vue'
 // 从 vue-router 导入 useRouter 用于程序化导航
 import { useRouter } from 'vue-router'
 // 从 element-plus 导入 ElMessage 用于显示消息提示
 import { ElMessage } from 'element-plus'
+// 从 element-plus 图标库显式导入需要的图标
+import { Monitor, UserFilled, User } from '@element-plus/icons-vue'
 // 导入用户相关的 API 方法，此处使用 logout 退出登录
 import { logout } from '@/api/user'
 
 // 获取路由器实例
 const router = useRouter()
+
+// 从 localStorage 读取当前登录用户名（登录页 Login.vue 写入）
+// 用 ref 包一层，组件 setup 时同步初始化一次；用户名变更需要重新登录才会刷新
+const currentUsername = ref(localStorage.getItem('username') || '未登录')
 
 // 定义异步退出登录处理函数
 async function handleLogout() {
@@ -18,6 +26,10 @@ async function handleLogout() {
     await logout()
     // 清除本地存储的 token
     localStorage.removeItem('token')
+    // 同步清除登录人缓存
+    localStorage.removeItem('username')
+    // 同步更新顶部显示
+    currentUsername.value = '未登录'
     // 显示退出成功消息提示
     ElMessage.success('退出成功')
     // 跳转到登录页面
@@ -25,6 +37,8 @@ async function handleLogout() {
   } catch (e: any) {
     // 即使接口调用失败，也清除本地 token 并跳转登录页
     localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    currentUsername.value = '未登录'
     router.push('/login')
   }
 }
@@ -69,8 +83,18 @@ async function handleLogout() {
       <el-header class="admin-header">
         <!-- 显示当前路由的 meta.title 作为页面标题 -->
         <span class="header-title">{{ $route.meta.title }}</span>
-        <!-- 退出登录按钮，点击时触发 handleLogout 函数 -->
-        <el-button type="danger" size="small" @click="handleLogout">退出登录</el-button>
+        <!-- 右侧操作区：当前登录人 + 退出登录按钮 -->
+        <div class="header-right">
+          <!-- 当前登录人区域，使用 Element Plus 的 dropdown 风格展示（这里简化为文字+图标） -->
+          <span class="current-user">
+            <!-- Element Plus 的 User 图标 -->
+            <el-icon><User /></el-icon>
+            <!-- 显示用户名（来自 localStorage） -->
+            <span class="username-text">{{ currentUsername }}</span>
+          </span>
+          <!-- 退出登录按钮，点击时触发 handleLogout 函数 -->
+          <el-button type="danger" size="small" @click="handleLogout">退出登录</el-button>
+        </div>
       </el-header>
 
       <!-- 主内容区域 -->
@@ -121,6 +145,32 @@ async function handleLogout() {
   font-size: 16px;
   font-weight: 500;
   color: #333;
+}
+
+// 顶部右侧操作区容器，使用 flexbox 让用户名和按钮水平排列并垂直居中
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px; // 子项之间留 16px 间距
+}
+
+// 当前登录人区域样式：图标 + 用户名
+.current-user {
+  display: flex;
+  align-items: center;
+  gap: 6px; // 图标和文字之间间距
+  font-size: 14px;
+  color: #606266;
+
+  // 用户名文字样式
+  .username-text {
+    font-weight: 500;
+    // 限制最大宽度，超出省略号显示，避免长用户名撑爆布局
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 // 主内容区域样式，设置浅灰色背景

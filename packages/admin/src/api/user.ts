@@ -86,17 +86,21 @@ export function getUserList() {
 /**
  * 强制用户下线
  */
+// 强制下线响应结构
+export interface KickRes { msg: string }
 // 导出强制用户下线函数，接收用户 ID 作为参数
 export function forceKick(userId: number) {
-  // 调用封装的 post 方法，通过 URL 路径参数传递用户 ID
-  return post(`/api/v1/user/${userId}/kick`)
+  // 调用封装的 post 方法，通过 URL 路径参数传递用户 ID，指定返回类型
+  return post<KickRes>(`/api/v1/user/${userId}/kick`)
 }
 
 /**
  * 切换用户状态（启用/禁用）
  */
+// 切换状态响应结构
+export interface ToggleStatusRes { msg: string; status: number }
 // 导出切换用户状态函数，接收用户 ID 作为参数
 export function toggleUserStatus(userId: number) {
-  // 调用封装的 post 方法，通过 URL 路径参数传递用户 ID
-  return post(`/api/v1/user/${userId}/toggle-status`)
+  // 调用封装的 post 方法，通过 URL 路径参数传递用户 ID，指定返回类型
+  return post<ToggleStatusRes>(`/api/v1/user/${userId}/toggle-status`)
 }

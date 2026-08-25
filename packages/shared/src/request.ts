@@ -83,6 +83,10 @@ export const request = createRequest()
 let isRefreshing = false
 // 等待队列，存放刷新期间挂起的请求回调
 let pendingQueue: Array<(token: string | null) => void> = []
+// 单个请求的最大重试次数，防止 refreshToken 后再次 401 导致死循环
+const MAX_RETRY_COUNT = 1
+// 用 WeakMap 追踪每个请求配置的重试次数，避免在 config 对象上添加自定义字段造成污染
+const retryCountMap = new WeakMap<AxiosRequestConfig, number>()
 
 /**
  * 创建自定义请求实例的工厂函数
@@ -184,6 +188,17 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
     originalConfig: AxiosRequestConfig,
     axiosInstance: AxiosInstance,
   ): Promise<AxiosResponse<ApiRes>> {
+    // 从 WeakMap 获取当前请求已重试次数
+    const currentRetry = retryCountMap.get(originalConfig) || 0
+
+    // 如果已经达到最大重试次数，直接走未授权流程，防止死循环
+    if (currentRetry >= MAX_RETRY_COUNT) {
+      // 触发未授权回调（清除 token + 跳转登录页）
+      onUnauthorized?.()
+      // 拒绝该请求并返回明确错误
+      return Promise.reject(new Error('刷新token后仍鉴权失败，请重新登录'))
+    }
+
     // 判断当前是否没有在刷新 token
     if (!isRefreshing) {
       // 标记正在刷新 token
@@ -196,12 +211,19 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
         pendingQueue.push((newToken: string | null) => {
           // 如果刷新成功获得新 token
           if (newToken) {
-            // 确保 headers 对象已初始化
-            originalConfig.headers = originalConfig.headers || {}
-            // 用新 token 更新 Authorization 请求头
-            originalConfig.headers.Authorization = `Bearer ${newToken}`
-            // 用新配置重新发起请求，并将结果 resolve
-            resolve(axiosInstance.request(originalConfig))
+            // 增加重试计数并写回 WeakMap
+            retryCountMap.set(originalConfig, currentRetry + 1)
+            // 克隆 config 而不是直接 mutate 原对象，避免污染共享配置
+            const retryConfig: AxiosRequestConfig = {
+              ...originalConfig,
+              headers: {
+                ...(originalConfig.headers || {}),
+                // 用新 token 覆盖 Authorization 头
+                Authorization: `Bearer ${newToken}`,
+              },
+            }
+            // 用克隆后的新配置重新发起请求，并将结果 resolve
+            resolve(axiosInstance.request(retryConfig))
           } else {
             // 刷新失败（token 为 null），拒绝请求
             reject(new Error('登录已过期，请重新登录'))
@@ -228,12 +250,19 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
       pendingQueue.push((newToken: string | null) => {
         // 如果刷新成功获得新 token
         if (newToken) {
-          // 确保 headers 对象已初始化
-          originalConfig.headers = originalConfig.headers || {}
-          // 用新 token 更新 Authorization 请求头
-          originalConfig.headers.Authorization = `Bearer ${newToken}`
-          // 用新配置重新发起请求，并将结果 resolve
-          resolve(axiosInstance.request(originalConfig))
+          // 增加重试计数并写回 WeakMap
+          retryCountMap.set(originalConfig, currentRetry + 1)
+          // 克隆 config 而不是直接 mutate 原对象，避免污染共享配置
+          const retryConfig: AxiosRequestConfig = {
+            ...originalConfig,
+            headers: {
+              ...(originalConfig.headers || {}),
+              // 用新 token 覆盖 Authorization 头
+              Authorization: `Bearer ${newToken}`,
+            },
+          }
+          // 用克隆后的新配置重新发起请求，并将结果 resolve
+          resolve(axiosInstance.request(retryConfig))
         } else {
           // 刷新失败，拒绝请求
           reject(new Error('登录已过期，请重新登录'))

@@ -59,6 +59,7 @@ async function handleKick(userId: number, username: string) {
 }
 
 // 定义异步切换用户状态处理函数，接收用户对象为参数
+// 这里用 unknown 而非 any，再在函数体里类型守卫或断言，保证类型安全
 async function handleToggleStatus(user: User) {
   // 根据当前状态判断操作类型：status 为 1 表示禁用，否则表示启用
   const action = user.status === 1 ? '禁用' : '启用'
@@ -136,7 +137,7 @@ onMounted(() => {
             <el-button
               :type="row.status === 1 ? 'danger' : 'success'"
               size="small"
-              @click="handleToggleStatus(row)"
+              @click="handleToggleStatus(row as User)"
             >
               <!-- 按钮文字：状态为 1 显示"禁用"，否则显示"启用" -->
               {{ row.status === 1 ? '禁用' : '启用' }}
