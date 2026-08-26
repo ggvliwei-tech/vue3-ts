@@ -25,6 +25,10 @@ export interface LoginRes {
     username: string
     // 用户状态（1 正常，0 禁用等）
     status: number
+    // 角色编码数组：['admin', 'editor'] / ['user']
+    roles: string[]
+    // 权限码数组：['user:list', 'book:create', ...]
+    permissions: string[]
   }
 }
 

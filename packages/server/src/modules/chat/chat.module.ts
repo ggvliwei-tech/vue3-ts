@@ -16,6 +16,8 @@ import { ChatController } from './chat.controller';
 import { ChatRoomEntity } from './entities/chat-room.entity';
 import { ChatMemberEntity } from './entities/chat-member.entity';
 import { ChatMessageEntity } from './entities/chat-message.entity';
+// 用户模块，提供 UserService 用于 status 校验
+import { UserModule } from '../user/user.module';
 
 // @Module() 装饰器定义模块元数据
 @Module({
@@ -27,6 +29,9 @@ import { ChatMessageEntity } from './entities/chat-message.entity';
     JwtModule,
     // 配置模块用于读取环境变量
     ConfigModule,
+    // 用户模块，提供 UserService（用于 WS 连接时的 status 校验）
+    // 必须导入以解决 ChatGateway → UserService 的循环依赖
+    UserModule,
   ],
   // 注册提供者可注入
   providers: [ChatGateway, ChatService],

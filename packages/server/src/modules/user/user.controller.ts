@@ -7,11 +7,13 @@ import {
   Post,
   // Body 装饰器，用于提取请求体（request body）数据
   Body,
+  // Req 装饰器，用于获取原生 Request 对象（取客户端 IP）
+  Req,
   // UseGuards 守卫装饰器，用于请求拦截和验证；Res 响应对象装饰器；Param 路由参数装饰器
   UseGuards, Res, Param,
 } from '@nestjs/common';
-// Express Response 类型，提供 cookie、clearCookie 等响应方法
-import type { Response } from 'express';
+// Express Request/Response 类型
+import type { Request, Response } from 'express';
 // ApiTags Swagger 接口分组标签装饰器
 import {
   ApiTags,
@@ -28,8 +30,12 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
 // JWT 认证守卫，用于保护需要登录验证的接口
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 权限守卫，基于 @Permissions 装饰器做细粒度校验
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 // 当前用户装饰器，用于从 JWT Token 中解析并获取用户信息
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+// 权限装饰器，声明接口所需的权限码
+import { Permissions } from '../../common/decorators/permissions.decorator';
 // 刷新令牌守卫，用于验证 RefreshToken 有效性
 import { RefreshTokenGuard } from '../../common/guards/refresh-token.guard';
 // 忘记密码 DTO
@@ -71,11 +77,21 @@ export class UserController {
   async login(
     // Body 装饰器提取请求体数据，类型为 LoginUserDto
     @Body() dto: LoginUserDto,
+    // Req 装饰器获取 Express 请求对象，用于提取客户端真实 IP 和 User-Agent
+    @Req() req: Request,
     // Res 装饰器获取 Express 响应对象，passthrough: true 表示不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
-    // 调用用户服务的 login 方法，解构获取 accessToken、refreshToken 和 userInfo
-    const { accessToken, refreshToken, userInfo } = await this.userService.login(dto);
+    // 提取客户端 IP：优先取代理转发的 X-Forwarded-For，否则取 socket.remoteAddress
+    // 兼容 Nginx/Cloudflare 等反代场景
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      'unknown'
+    // 提取 User-Agent 头，用于多设备会话展示
+    const userAgent = (req.headers['user-agent'] as string) || 'unknown'
+    // 调用用户服务的 login 方法，传入 ip + userAgent 用于 IP 限流与多设备会话
+    const { accessToken, refreshToken, userInfo } = await this.userService.login(dto, { ip, userAgent });
 
     // ========== 写入 HttpOnly Cookie ==========
     // 判断是否为生产环境，用于决定 Cookie 的 secure 属性
@@ -106,8 +122,9 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象，passthrough: true 不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
-    // 调用用户服务的 refreshToken 方法，获取新的 accessToken 和 refreshToken
-    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id);
+    // 调用用户服务的 refreshToken 方法，传入 sessionId 定位到具体设备
+    // sessionId 由 RefreshTokenGuard 从 JWT payload 中提取并挂到 req.user
+    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id, user.sessionId);
 
     // 用新的 refreshToken 覆盖旧 Cookie，实现 Token 轮换（更安全）
     // 判断是否为生产环境
@@ -138,8 +155,8 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象
     @Res({ passthrough: true }) res: Response,
   ) {
-    // 调用用户服务的 logout 方法，从 Redis 删除用户的 RefreshToken
-    await this.userService.logout(user.id);
+    // 调用用户服务的 logout 方法，删除当前 session 的 RT 和会话元数据
+    await this.userService.logout(user.id, user.sessionId);
     // 使用 res.clearCookie 清除浏览器中的 refresh_token Cookie
     res.clearCookie('refresh_token', {
       httpOnly: true, // 与设置时保持一致的 httpOnly 标志
@@ -155,23 +172,31 @@ export class UserController {
   // Swagger 接口描述：强制用户下线（管理员功能）
   @ApiOperation({ summary: '强制用户下线（管理员功能）' })
   // Post 路由装饰器，强制下线接口路径为 POST /user/:id/kick，:id 为用户 ID 参数
-  @UseGuards(JwtAuthGuard)
+  // 双重守卫：先 JWT 认证注入 roles/permissions，再 PermissionsGuard 校验 user:kick 权限码
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('user:kick')
   @Post(':id/kick')
-  // 强制下线方法：接收路由参数 userId 和当前用户信息
-  async forceKick(@Param('id') userId: string, @CurrentUser() user: any) {
-    // 调用用户服务的 forceKick 方法，将字符串 userId 转为数字后传入，并传入操作用户信息用于权限校验
-    return this.userService.forceKick(Number(userId), user);
+  // 强制下线方法：接收路由参数 userId、query 中的 sessionId（可选）以及当前用户信息
+  async forceKick(
+    @Param('id') userId: string,
+    // sessionId 可选，不传则踢全部设备
+    @Body() body: { sessionId?: string } | undefined,
+    @CurrentUser() user: any,
+  ) {
+    // 调用用户服务的 forceKick 方法；传入 body.sessionId 可指定踢某设备
+    return this.userService.forceKick(Number(userId), body?.sessionId);
   }
 
   // Swagger 接口描述：切换用户状态（启用/禁用，管理员功能）
   @ApiOperation({ summary: '切换用户状态（启用/禁用）' })
   // Post 路由装饰器，切换状态接口路径为 POST /user/:id/toggle-status
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('user:toggle-status')
   @Post(':id/toggle-status')
-  // 切换状态方法：接收路由参数 userId 和当前用户信息
-  async toggleStatus(@Param('id') userId: string, @CurrentUser() user: any) {
-    // 调用用户服务的 toggleStatus 方法，将字符串 userId 转为数字后传入，并传入操作用户信息用于权限校验
-    return this.userService.toggleStatus(Number(userId), user);
+  // 切换状态方法：接收路由参数 userId
+  async toggleStatus(@Param('id') userId: string) {
+    // 调用用户服务的 toggleStatus 方法（不再需要 user 形参，权限校验已上移）
+    return this.userService.toggleStatus(Number(userId));
   }
 
   // Swagger 接口描述：获取当前登录用户信息
@@ -184,17 +209,58 @@ export class UserController {
     return this.userService.findById(user.id);
   }
 
-  // Swagger 接口描述：获取用户列表（需要 Token 验证）
+  // Swagger 接口描述：获取用户列表（需要 Token 验证 + user:list 权限码）
   @ApiOperation({ summary: '获取用户列表（需要Token）' })
   // Swagger Bearer Token 认证标识，在文档中显示 Token 输入框
   @ApiBearerAuth()
-  // 挂载 JwtAuthGuard 守卫，请求必须携带有效的 JWT Token
-  @UseGuards(JwtAuthGuard)
+  // 挂载双重守卫：JWT 认证 + 权限校验
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('user:list')
   // Get 路由装饰器，获取用户列表接口路径为 GET /user
   @Get()
   // 查询所有用户方法：通过 @CurrentUser() 获取当前登录用户信息
   findAll(@CurrentUser() user: any) {
     // 调用用户服务的 findAll 方法返回所有用户列表
     return this.userService.findAll();
+  }
+
+  // ===== 多设备会话管理接口 =====
+
+  // Swagger 接口描述：获取当前用户的所有活跃会话列表
+  @ApiOperation({ summary: '获取当前登录用户的活跃设备列表' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  // 必须在 :id 路由之前注册，否则会被路由参数吞掉
+  @Get('me/sessions')
+  getMySessions(@CurrentUser() user: any) {
+    return this.userService.getMySessions(user.id);
+  }
+
+  // Swagger 接口描述：当前用户主动退出所有设备
+  @ApiOperation({ summary: '当前用户退出所有设备（含当前）' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+    const result = await this.userService.logoutAll(user.id)
+    // 清除当前设备的 Cookie
+    res.clearCookie('refresh_token', {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/api/v1/user',
+    })
+    return result
+  }
+
+  // Swagger 接口描述：当前用户主动退出指定设备
+  @ApiOperation({ summary: '当前用户退出指定会话（其他设备）' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Post('me/sessions/:sessionId/logout')
+  async logoutSession(
+    @Param('sessionId') sessionId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.userService.logout(user.id, sessionId)
   }
 }

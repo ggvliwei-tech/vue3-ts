@@ -353,3 +353,123 @@ export function patch<T = unknown>(
   // 调用默认请求实例的 patch 方法，响应拦截器已解包为 ApiRes<T>
   return request.patch(url, data, config) as unknown as Promise<ApiRes<T>>
 }
+
+// ============================================================
+// JWT Token 解析工具（不验证签名，仅解析 payload）
+// ============================================================
+
+/**
+ * JWT payload 结构（不完整，按需扩展）
+ */
+export interface JwtPayload {
+  // 用户 ID（subject）
+  sub: number
+  // 用户名
+  username?: string
+  // 签发时间（秒）
+  iat?: number
+  // 过期时间（秒）
+  exp?: number
+}
+
+/**
+ * 解析 JWT payload（不验证签名，仅 base64 解码）
+ * @param token JWT 字符串（支持 "Bearer xxx" 或纯 xxx）
+ * @returns 解析后的 payload 对象，失败返回 null
+ */
+export function parseJwt(token: string | null | undefined): JwtPayload | null {
+  if (!token) return null
+  // 去掉可能的前缀 "Bearer "
+  const raw = token.startsWith('Bearer ') ? token.slice(7) : token
+  const parts = raw.split('.')
+  if (parts.length !== 3) return null
+  try {
+    // base64url → base64：把 - 替换为 +，_ 替换为 /，补齐 =
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    return JSON.parse(atob(padded)) as JwtPayload
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 从 localStorage 取当前 token 并返回过期时间（毫秒时间戳）
+ * @returns 过期时间戳，0 表示无 token 或解析失败
+ */
+export function getTokenExp(): number {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null
+  const payload = parseJwt(token)
+  return payload?.exp ? payload.exp * 1000 : 0
+}
+
+/**
+ * 从 localStorage 取当前 token 并返回 userId
+ */
+export function getUserIdFromToken(): number {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null
+  return parseJwt(token)?.sub ?? 0
+}
+
+// ============================================================
+// 静默续期：基于 JWT exp 提前 N 分钟主动刷新 token
+// ============================================================
+
+/**
+ * 静默续期调度器
+ *
+ * 工作原理：
+ *  - 解析当前 token 的 exp 字段
+ *  - 在 (exp - advanceMs) 时刻触发 refreshFn
+ *  - 成功 → 调用 onToken 写入新 token → 递归调度下一次
+ *  - 失败 → 不做任何事（自然 401 流程会接管）
+ *
+ * @param refreshFn 刷新 token 的异步函数，约定返回 { data: { accessToken } } 或 Promise<{ accessToken }>
+ * @param onToken 新 token 回调，调用方需自行持久化（如写 localStorage）
+ * @param advanceMs 提前多少毫秒触发刷新，默认 5 分钟
+ * @returns cancel 取消调度的函数
+ */
+export function scheduleSilentRefresh(
+  refreshFn: () => Promise<{ data: { accessToken: string } }>,
+  onToken: (newToken: string) => void,
+  advanceMs: number = 5 * 60 * 1000,
+): () => void {
+  // 计算下次触发的延迟时间
+  const computeDelay = (): number => {
+    const exp = getTokenExp()
+    if (!exp) return 0
+    const remaining = exp - Date.now() - advanceMs
+    // 最小 0（即立即触发），最大 24 小时（防止意外长时间挂起）
+    return Math.max(0, Math.min(remaining, 24 * 60 * 60 * 1000))
+  }
+
+  let cancelled = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const run = async () => {
+    if (cancelled) return
+    try {
+      const res = await refreshFn()
+      const newToken = res?.data?.accessToken
+      if (newToken) {
+        onToken(newToken)
+        // 递归调度下次刷新
+        if (!cancelled) timer = setTimeout(run, computeDelay())
+      }
+    } catch {
+      // 静默续期失败不做任何处理，让自然 401 接管
+    }
+  }
+
+  // 仅当 token 存在且 exp 在未来时才调度
+  const delay = computeDelay()
+  if (delay > 0 && getTokenExp() > 0) {
+    timer = setTimeout(run, delay)
+  }
+
+  // 返回 cancel 函数
+  return () => {
+    cancelled = true
+    if (timer) clearTimeout(timer)
+  }
+}

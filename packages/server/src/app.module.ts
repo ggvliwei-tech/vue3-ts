@@ -6,12 +6,15 @@ import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，�
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
 import { ThrottlerModule } from '@nestjs/throttler'; // 限流模块，用于接口频率限制
 import configuration from './config/configuration'; // 自定义配置加载函数，对环境变量做预处理
+import { RbacModule } from './modules/rbac/rbac.module'; // RBAC 权限模块
 import { UserModule } from './modules/user/user.module'; // 用户功能模块，处理用户相关业务逻辑
 import { AccountBookModule } from './modules/account_book/account-book.module'; // 账本功能模块
 import { FileModule } from './modules/file/file.module'; // 文件管理模块，处理上传下载
 import { AiModule } from './modules/ai/ai.module'; // AI 功能模块
 import { ChatModule } from './modules/chat/chat.module'; // 聊天对话模块
 import { SmsModule } from './modules/sms/sms.module'; // 短信模块
+import { AuthModule } from './modules/auth/auth.module'; // 鉴权模块，提供登录风控/限流
+import { AuditModule } from './modules/audit/audit.module'; // 审计日志模块
 
 @Module({ // 根模块装饰器，负责组装所有全局依赖和配置
   imports: [ // 导入的模块列表
@@ -41,7 +44,8 @@ import { SmsModule } from './modules/sms/sms.module'; // 短信模块
         password: configService.getOrThrow<string>('DB_PWD'), // 数据库密码
         database: configService.getOrThrow<string>('DB_NAME'), // 数据库名称
         entities: ['dist/**/*.entity{.ts,.js}'], // 实体文件路径，TypeORM 自动映射表结构
-        synchronize: process.env.NODE_ENV !== 'production', // 非生产环境自动同步表结构
+        // synchronize: process.env.NODE_ENV !== 'production', // 非生产环境自动同步表结构
+        synchronize: false, // 非生产环境不自动同步表结构
         logging: false, // 关闭 SQL 日志输出
         charset: 'utf8mb4', // 使用 utf8mb4 字符集，支持 emoji 等特殊字符
         supportBigNumbers: true, // 支持大数字类型
@@ -63,7 +67,10 @@ import { SmsModule } from './modules/sms/sms.module'; // 短信模块
     FileModule, // 导入文件模块，处理文件上传下载
     AiModule, // 导入 AI 模块，提供 AI 相关功能
     ChatModule, // 导入聊天模块，处理聊天对话功能
-    SmsModule // 导入短信模块，处理短信验证码发送（独立路由 /sms/send-code）
+    SmsModule, // 导入短信模块，处理短信验证码发送（独立路由 /sms/send-code）
+    AuthModule, // 鉴权模块：登录限流/账号锁定
+    AuditModule, // 审计日志模块：记录关键操作
+    RbacModule // 导入 RBAC 模块（@Global()，提供给 JwtAuthGuard 等使用）
   ],
   providers: [ // 全局服务提供者列表
     {

@@ -9,6 +9,10 @@ import {
   Injectable,
   // NotFoundException 未找到异常，用于返回 404 状态码
   NotFoundException,
+  // HttpException 通用 HTTP 异常基类
+  HttpException,
+  // HttpStatus HTTP 状态码枚举
+  HttpStatus,
 } from '@nestjs/common';
 // InjectRepository 装饰器，用于注入 TypeORM Repository
 import { InjectRepository } from '@nestjs/typeorm';
@@ -32,6 +36,14 @@ import { ConfigService } from '@nestjs/config';
 import { RedisService } from '../redis/redis.service';
 // SmsService 短信服务，用于验证码校验
 import { SmsService } from '../sms/sms.service';
+// RbacService RBAC 服务，用于查询用户角色和权限码
+import { RbacService } from '../rbac/rbac.service';
+// LoginThrottlerService 登录风控服务，提供 IP 限流 + 失败计数 + 账号锁定
+import { LoginThrottlerService } from '../auth/login-throttler.service';
+// SessionService 多设备会话管理服务
+import { SessionService, SessionInfo } from '../auth/session.service';
+// AuditService 审计日志服务
+import { AuditService } from '../audit/audit.service';
 // 忘记密码 DTO
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
@@ -51,6 +63,14 @@ export class UserService {
     private readonly redisService: RedisService,
     // 注入短信服务，用于忘记密码时的验证码校验
     private readonly smsService: SmsService,
+    // 注入 RBAC 服务，用于查询用户角色和权限码
+    private readonly rbacService: RbacService,
+    // 注入登录风控服务，提供 IP 限流 + 失败计数 + 账号锁定
+    private readonly throttlerService: LoginThrottlerService,
+    // 注入多设备会话管理服务
+    private readonly sessionService: SessionService,
+    // 注入审计日志服务，记录关键操作
+    private readonly auditService: AuditService,
   ) {}
 
   // 从配置中获取 JWT 过期时间，解决 string 到 StringValue 的类型兼容问题
@@ -80,12 +100,18 @@ export class UserService {
   }
 
   // 从 Redis 验证 RefreshToken 是否有效，有效则返回用户信息，无效返回 null
+  // 注：本方法已被 SessionService.getRefreshToken + RefreshTokenGuard 替代，仅保留兼容调用
   async validateRefreshToken(userId: number, token: string): Promise<User | null> {
-    // 从 Redis 中获取存储的 RefreshToken，key 格式为 refresh:token:{userId}
     const stored = await this.redisService.get(`refresh:token:${userId}`);
-    // 如果 Redis 中不存在该 key 或存储的 Token 与传入的 Token 不匹配，返回 null
     if (!stored || stored !== token) return null;
-    // Token 验证通过，从数据库中查询并返回用户信息
+    return this.userRepo.findOneBy({ id: userId });
+  }
+
+  /**
+   * 根据 ID 直接查询用户实体（不做任何加工）
+   * 供 Guard 等底层场景使用，避免与 findById 的角色/权限加载耦合
+   */
+  async findUserEntity(userId: number): Promise<User | null> {
     return this.userRepo.findOneBy({ id: userId });
   }
 
@@ -132,30 +158,87 @@ export class UserService {
   }
 
   // 用户登录：验证用户名和密码，通过后签发 JWT Token
-  async login(loginDto: LoginUserDto) {
-    // 第一步：根据用户名查询数据库，查找匹配的用户
+  // 入参：loginDto 登录凭据，meta 客户端元数据（ip / userAgent）用于 IP 限流 + 会话记录
+  async login(loginDto: LoginUserDto, meta: { ip: string; userAgent: string }) {
+    const ip = meta.ip || 'unknown'
+    const userAgent = meta.userAgent || 'unknown'
+    // ========== 第一阶段：风控前置检查 ==========
+
+    // 1. IP 维度限流：同一 IP 10 秒内超过 5 次登录请求则拒绝（防爆破）
+    const ipOk = await this.throttlerService.checkIp(ip);
+    if (!ipOk) {
+      // 返回 429 状态码，提示请求过于频繁
+      throw new HttpException('登录请求过于频繁，请稍后再试', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    // 2. 用户维度账号锁定检查：累计失败 5 次会锁定 15 分钟
+    const lockRemain = await this.throttlerService.getLockRemaining(loginDto.username);
+    if (lockRemain > 0) {
+      // 返回 423 状态码（Locked），提示账号已被锁定及剩余时间（分钟）
+      throw new HttpException(
+        `账号已被锁定，请 ${Math.ceil(lockRemain / 60)} 分钟后再试`,
+        HttpStatus.LOCKED,
+      );
+    }
+
+    // ========== 第二阶段：凭据校验 ==========
+
+    // 根据用户名查询数据库，查找匹配的用户
     const user = await this.userRepo.findOne({
       where: { username: loginDto.username },
     });
-    // 如果用户不存在，返回模糊的错误提示，防止攻击者枚举有效用户名
+
+    // 用户不存在：使用相同提示 + 记录失败次数（按 username 维度，与 IP 维度独立）
     if (!user) {
+      await this.throttlerService.recordFailure(loginDto.username);
+      // 审计：登录失败（用户不存在）
+      this.auditService.log('login', {
+        username: loginDto.username, ip, userAgent, status: 0,
+        detail: { reason: '用户不存在' },
+      })
       throw new BadRequestException('账号或密码错误');
     }
 
-    // 第二步：使用 bcrypt 比对提交的密码和数据库中存储的哈希密码
+    // 使用 bcrypt 比对提交的密码和数据库中存储的哈希密码
     const isPwdOk = await bcrypt.compare(loginDto.password, user.password);
-    // 如果密码不匹配，返回模糊的错误提示
+    // 如果密码不匹配，记录失败次数（达到阈值会自动锁定）
     if (!isPwdOk) {
+      const count = await this.throttlerService.recordFailure(loginDto.username);
+      // 审计：登录失败（密码错误）
+      this.auditService.log('login', {
+        userId: user.id, username: user.username, ip, userAgent, status: 0,
+        detail: { reason: '密码错误', failCount: count },
+      })
+      // count === -1 表示刚触发锁定，附加提示用户
+      if (count === -1) {
+        throw new HttpException(
+          '账号已被锁定，请 15 分钟后再试',
+          HttpStatus.LOCKED,
+        );
+      }
       throw new BadRequestException('账号或密码错误');
     }
 
-    // 第三步：检查用户账号状态，status === 0 表示账号已被禁用
+    // 检查用户账号状态，status === 0 表示账号已被禁用
     if (user.status === 0) {
+      // 审计：登录失败（账号被禁用）
+      this.auditService.log('login', {
+        userId: user.id, username: user.username, ip, userAgent, status: 0,
+        detail: { reason: '账号被禁用' },
+      })
       throw new ForbiddenException('账号已被禁用');
     }
 
-    // 第四步：构建 JWT payload，sub 为用户 ID，username 为用户名
-    const payload = { sub: user.id, username: user.username };
+    // ========== 第三阶段：登录成功，签发 Token ==========
+
+    // 登录成功，清除该用户的所有失败计数和锁定标记
+    await this.throttlerService.clearFailures(loginDto.username);
+
+    // 生成 sessionId 标识当前设备
+    const sessionId = this.sessionService.newSessionId()
+
+    // 构建 JWT payload，sub 为用户 ID，username 为用户名，sessionId 用于多设备会话定位
+    const payload = { sub: user.id, username: user.username, sessionId };
 
     // 1. 签发 AccessToken（短时效），使用独立的 secret 和过期时间配置
     const accessToken = this.jwtService.sign(payload, {
@@ -164,84 +247,154 @@ export class UserService {
     });
 
     // 2. 签发 RefreshToken（长时效），使用独立的 secret 和过期时间配置
+    // payload 中加入 sessionId，刷新和下线时可定位到具体设备
     const refreshToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: this.getJwtExpiresIn('JWT_REFRESH_EXPIRES_IN'),
     });
-    // 将 RefreshToken 存入 Redis，设置与 JWT 一致的 TTL（自动过期清理）
+
+    // 3. 将 RefreshToken 和会话元数据写入 Redis（多设备支持）
     const ttlSeconds = this.parseJwtExpiry('JWT_REFRESH_EXPIRES_IN');
-    await this.redisService.set(`refresh:token:${user.id}`, refreshToken, ttlSeconds);
+    await this.sessionService.create(user.id, sessionId, refreshToken, meta, ttlSeconds);
+
+    // 4. 审计：登录成功（异步执行，不阻塞响应）
+    this.auditService.log('login', {
+      userId: user.id, username: user.username, ip, userAgent,
+      status: 1, resource: 'user', resourceId: user.id,
+      detail: { sessionId },
+    })
+
+    // 4. 加载用户的角色编码和权限码（用于前端展示 + 前端路由 meta 校验）
+    // 同时调用两个独立查询，Promise.all 并行加速
+    const [roles, permissions] = await Promise.all([
+      this.rbacService.getUserRoles(user.id),
+      this.rbacService.getUserPermissions(user.id),
+    ]);
+
     // 返回 Token 和用户基本信息（不包含密码）
     return {
       accessToken, // 短期有效的访问令牌
       refreshToken, // 长期有效的刷新令牌
+      sessionId, // 当前设备的会话 ID（前端可用于登出指定设备）
       userInfo: { // 用户基本信息
         id: user.id, // 用户 ID
         username: user.username, // 用户名
         status: user.status, // 用户状态
+        roles, // 角色编码数组：['admin', 'editor']
+        permissions, // 权限码数组：['user:list', 'book:create']
       },
     };
   }
 
   // 刷新 AccessToken 接口：使用有效的 RefreshToken 签发新的 AccessToken 和 RefreshToken
-  async refreshToken(userId: number) {
+  // sessionId 由 RefreshTokenGuard 从 JWT payload 中解析并挂载到 req.user
+  async refreshToken(userId: number, sessionId: string) {
     // 根据用户 ID 从数据库查询用户信息
     const user = await this.userRepo.findOneBy({ id: userId });
     // 如果用户不存在，抛出未找到异常
     if (!user) throw new NotFoundException('用户不存在');
 
-    // 构建 JWT payload，包含用户 ID 和用户名
-    const payload = { sub: user.id, username: user.username };
+    // 构建 JWT payload，包含用户 ID + 用户名 + sessionId
+    const payload = { sub: user.id, username: user.username, sessionId };
     // 签发新的 AccessToken（短时效）
     const newAccessToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: this.getJwtExpiresIn('JWT_ACCESS_EXPIRES_IN'),
     });
 
-    // 可选：刷新时轮换 RefreshToken（更安全，防止旧 RefreshToken 被滥用）
+    // 轮换 RefreshToken（更安全，防止旧 RefreshToken 被滥用）
     const newRefreshToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: this.getJwtExpiresIn('JWT_REFRESH_EXPIRES_IN'),
     });
-    // 更新 Redis 中的 RefreshToken，设置与 JWT 一致的 TTL，实现 Token 轮换
+    // 仅更新当前 sessionId 的 RT，不影响该用户其他设备
     const ttlSeconds = this.parseJwtExpiry('JWT_REFRESH_EXPIRES_IN');
-    await this.redisService.set(`refresh:token:${userId}`, newRefreshToken, ttlSeconds);
+    await this.sessionService.updateRefreshToken(userId, sessionId, newRefreshToken, ttlSeconds);
+
+    // 审计：刷新 token 成功
+    this.auditService.log('refresh', {
+      userId, username: user.username, status: 1,
+      resource: 'user', resourceId: userId,
+      detail: { sessionId },
+    })
+
     // 返回新的 AccessToken 和 RefreshToken
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
-
   }
 
-  // 退出登录：从 Redis 删除用户的 RefreshToken，使令牌立即失效
-  async logout(userId: number) {
-    // 从 Redis 中删除用户的 RefreshToken，key 格式为 refresh:token:{userId}
-    await this.redisService.del(`refresh:token:${userId}`);
-    // 返回退出成功消息
+  // 退出登录：删除当前 session 的 RT + 会话元数据
+  // sessionId 由 controller 从 req.user.sessionId 获取
+  async logout(userId: number, sessionId: string) {
+    const user = await this.userRepo.findOneBy({ id: userId })
+    await this.sessionService.remove(userId, sessionId);
+    // 审计：退出登录成功
+    this.auditService.log('logout', {
+      userId, username: user?.username, status: 1,
+      resource: 'user', resourceId: userId,
+      detail: { sessionId },
+    })
     return { msg: '退出登录成功' };
   }
 
-  // 强制用户下线：将用户加入黑名单（立即生效）+ 删除 RefreshToken
-  async forceKick(userId: number, user: any) {
-    // 仅管理员可操作
-    if (user.username !== 'admin') throw new ForbiddenException('仅管理员可操作');
+  // 退出所有设备：清空该用户所有 session + 加全局黑名单
+  async logoutAll(userId: number) {
+    const user = await this.userRepo.findOneBy({ id: userId })
+    await this.sessionService.removeAll(userId);
+    // 审计：用户主动退出全部设备
+    this.auditService.log('logout-all', {
+      userId, username: user?.username, status: 1,
+      resource: 'user', resourceId: userId,
+    })
+    return { msg: '已退出所有设备' };
+  }
+
+  // 获取当前用户的所有活跃会话（多设备列表）
+  async getMySessions(userId: number): Promise<SessionInfo[]> {
+    return this.sessionService.listSessions(userId);
+  }
+
+  // 强制用户下线：
+  //   - targetSessionId 不传：踢全部设备（加黑名单 + 清全部 RT）
+  //   - targetSessionId 传入：仅踢指定设备
+  // 注：管理员权限校验已上移到 controller 的 @Permissions('user:kick') 装饰器 + PermissionsGuard
+  async forceKick(userId: number, targetSessionId?: string) {
     // 根据用户 ID 从数据库查询用户信息
     const target = await this.userRepo.findOneBy({ id: userId });
     // 如果用户不存在，抛出未找到异常
     if (!target) throw new NotFoundException('用户不存在');
 
-    // 1. 将用户加入 Redis 黑名单，TTL 900 秒覆盖 AccessToken 15 分钟的有效期
-    await this.redisService.set(`blacklist:token:${userId}`, '1', 900);
+    if (targetSessionId) {
+      // 仅踢指定设备：删除该 session 的 RT 和元数据
+      await this.sessionService.remove(userId, targetSessionId);
+      // 审计：踢指定设备下线
+      this.auditService.log('kick', {
+        username: target.username, status: 1,
+        resource: 'user', resourceId: userId,
+        detail: { targetSessionId, scope: 'session' },
+      })
+      return { msg: `用户 ${target.username} 的设备 ${targetSessionId} 已下线` };
+    }
 
-    // 2. 删除用户的 RefreshToken，阻止后续通过刷新获取新的 AccessToken
-    await this.redisService.del(`refresh:token:${userId}`);
+    // 踢全部设备：removeAll 内部已设置 900 秒黑名单覆盖剩余 access token 有效期
+    await this.sessionService.removeAll(userId);
 
-    // 返回强制下线成功消息，包含用户名
-    return { msg: `用户 ${target.username} 已强制下线` };
+    // 清除该用户的角色/权限缓存（被踢用户的权限可能在踢前已变更）
+    await this.rbacService.clearUserCache(userId);
+
+    // 审计：踢全设备下线
+    this.auditService.log('kick', {
+      username: target.username, status: 1,
+      resource: 'user', resourceId: userId,
+      detail: { scope: 'all' },
+    })
+
+    // 返回强制下线成功消息
+    return { msg: `用户 ${target.username} 已全设备下线` };
   }
 
   // 切换用户状态（启用/禁用）：将 status 在 0 和 1 之间切换
-  async toggleStatus(userId: number, user: any) {
-    // 仅管理员可操作
-    if (user.username !== 'admin') throw new ForbiddenException('仅管理员可操作');
+  // 注：管理员权限校验已上移到 controller 的 @Permissions('user:toggle-status') 装饰器
+  async toggleStatus(userId: number) {
     // 根据用户 ID 从数据库查询用户信息
     const target = await this.userRepo.findOneBy({ id: userId });
     // 如果用户不存在，抛出未找到异常
@@ -251,6 +404,16 @@ export class UserService {
     target.status = target.status === 1 ? 0 : 1;
     // 保存更新后的用户信息到数据库
     await this.userRepo.save(target);
+    // 如果是禁用，主动吊销该用户的所有 session，避免已签发的 access token 仍可访问
+    if (target.status === 0) {
+      await this.sessionService.removeAll(target.id);
+    }
+    // 审计：状态切换
+    this.auditService.log('toggle-status', {
+      username: target.username, status: 1,
+      resource: 'user', resourceId: userId,
+      detail: { newStatus: target.status },
+    })
     // 返回操作结果消息和新的状态值
     return { msg: `用户 ${target.username} 已${target.status === 1 ? '启用' : '禁用'}`, status: target.status };
   }
@@ -259,11 +422,19 @@ export class UserService {
   async findById(userId: number) {
     const user = await this.userRepo.findOneBy({ id: userId });
     if (!user) throw new NotFoundException('用户不存在');
+    // 同步加载角色和权限码
+    const [roles, permissions] = await Promise.all([
+      this.rbacService.getUserRoles(userId),
+      this.rbacService.getUserPermissions(userId),
+    ]);
     return {
       id: user.id,
       username: user.username,
       status: user.status,
+      phone: user.phone,
       createTime: user.createTime,
+      roles,           // 角色编码数组
+      permissions,     // 权限码数组
     };
   }
 
@@ -280,12 +451,22 @@ export class UserService {
     // 1. 校验验证码（不存在或错误时直接抛异常）
     const isValid = await this.smsService.verifyCode(dto.phone, dto.code);
     if (!isValid) {
+      // 审计：重置密码失败（验证码错误）
+      this.auditService.log('reset-password', {
+        username: dto.phone, status: 0,
+        detail: { reason: '验证码错误', phone: dto.phone },
+      })
       throw new BadRequestException('验证码错误或已过期');
     }
 
     // 2. 查找用户
     const user = await this.userRepo.findOne({ where: { phone: dto.phone } });
     if (!user) {
+      // 审计：重置密码失败（手机号未注册）
+      this.auditService.log('reset-password', {
+        username: dto.phone, status: 0,
+        detail: { reason: '手机号未注册', phone: dto.phone },
+      })
       throw new NotFoundException('该手机号未注册');
     }
 
@@ -293,6 +474,15 @@ export class UserService {
     user.password = await bcrypt.hash(dto.newPassword, 10);
     // 4. 保存到数据库
     await this.userRepo.save(user);
+    // 5. 重置成功后踢下线所有设备（防止攻击者用旧 token 继续访问）
+    await this.sessionService.removeAll(user.id);
+
+    // 审计：重置密码成功
+    this.auditService.log('reset-password', {
+      userId: user.id, username: user.username, status: 1,
+      resource: 'user', resourceId: user.id,
+      detail: { phone: dto.phone },
+    })
 
     // 返回成功消息
     return { msg: '密码重置成功，请使用新密码登录' };

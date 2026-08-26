@@ -8,8 +8,8 @@ import { createApp } from 'vue'
 import App from './App.vue'
 // 导入路由实例
 import router from './router'
-// 从共享模块导入请求工具中的刷新 token 回调和未授权回调设置函数
-import { setRefreshTokenCallback, setUnauthorizedCallback } from '@project/shared/request'
+// 从共享模块导入请求工具中的刷新 token 回调、未授权回调设置函数以及静默续期工具
+import { setRefreshTokenCallback, setUnauthorizedCallback, scheduleSilentRefresh } from '@project/shared/request'
 // 导入用户相关的 API 方法，其中包含 refreshToken 方法
 import { refreshToken } from '@/api/user'
 
@@ -50,6 +50,19 @@ setUnauthorizedCallback(() => {
   // 跳转到登录页面
   router.push('/login')
 })
+
+// 启动静默续期：基于 JWT exp 提前 5 分钟主动刷新 access token
+// 仅当用户已登录（token 存在）时才调度
+if (localStorage.getItem('token')) {
+  scheduleSilentRefresh(
+    refreshToken,
+    (newToken) => {
+      // 写入新 token 到 localStorage
+      localStorage.setItem('token', newToken)
+    },
+    5 * 60 * 1000, // 提前 5 分钟
+  )
+}
 
 // 创建 Vue 应用实例，挂载根组件 App，注册路由，并挂载到 id 为 app 的 DOM 元素上
 createApp(App).use(router).mount('#app')

@@ -114,6 +114,48 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.client.ttl(key);
   }
 
+  // 自增 key 的值（不存在则从 0 开始），返回自增后的新值
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  // 设置 key 的值，仅当 key 不存在时（SETNX），返回 1 成功 / 0 已存在
+  async setnx(key: string, value: string, ttl?: number): Promise<number> {
+    // SETNX + EXPIRE 不是原子操作，使用 SET key value NX EX seconds 单命令实现
+    const result = ttl
+      ? await this.client.set(key, value, 'EX', ttl, 'NX')
+      : await this.client.set(key, value, 'NX')
+    return result === 'OK' ? 1 : 0
+  }
+
+  // ====================== Hash 操作封装（多设备会话） ======================
+
+  // 设置 Hash 字段值（HSET key field value），返回新增字段数量
+  async hset(key: string, field: string, value: string): Promise<number> {
+    return this.client.hset(key, field, value)
+  }
+
+  // 获取 Hash 单个字段值（HGET key field）
+  async hget(key: string, field: string): Promise<string | null> {
+    return this.client.hget(key, field)
+  }
+
+  // 获取 Hash 所有字段和值（HGETALL key），返回对象
+  async hgetall(key: string): Promise<Record<string, string>> {
+    return this.client.hgetall(key)
+  }
+
+  // 删除 Hash 一个或多个字段（HDEL），返回删除字段数量
+  async hdel(key: string, ...fields: string[]): Promise<number> {
+    if (fields.length === 0) return 0
+    return this.client.hdel(key, ...fields)
+  }
+
+  // 获取 Hash 所有字段名（HKEYS）
+  async hkeys(key: string): Promise<string[]> {
+    return this.client.hkeys(key)
+  }
+
   // JSON 序列化/反序列化便捷方法
 
   // 从 Redis 获取 key 的值并解析为 JSON 对象

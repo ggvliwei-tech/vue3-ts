@@ -18,6 +18,10 @@ import { ConfigService } from '@nestjs/config';
 import { ChatService } from './chat.service';
 // 导入发送消息 DTO，用于 WebSocket 消息校验
 import { SendMessageDto } from './dto/send-message.dto';
+// Redis 服务，用于黑名单检查
+import { RedisService } from '../redis/redis.service';
+// 用户服务，用于 status 校验
+import { UserService } from '../user/user.service';
 
 // @WebSocketGateway() 装饰器声明此类为 WebSocket 网关，配置命名空间和跨域
 @WebSocketGateway({
@@ -44,6 +48,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,         // 注入 JWT 服务，用于验证 Token
     private readonly configService: ConfigService,   // 注入配置服务，用于读取 JWT 密钥
     private readonly chatService: ChatService,       // 注入聊天服务，用于房间管理和消息持久化
+    private readonly redisService: RedisService,     // 注入 Redis 服务，用于黑名单检查
+    private readonly userService: UserService,       // 注入用户服务，用于 status 校验
   ) {}
 
   // handleConnection 方法在客户端连接时自动触发
@@ -78,6 +84,32 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // 使用配置文件中的 JWT_ACCESS_SECRET 作为密钥
         secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
       });
+
+      // 安全加固：检查 Redis 黑名单（与 JwtAuthGuard 保持一致）
+      // 如果用户被踢下线或触发 RT 复用检测，blacklist:token:{sub} 会存在
+      const isBlacklisted = await this.redisService.exists(`blacklist:token:${payload.sub}`)
+      if (isBlacklisted) {
+        this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 已在黑名单中`);
+        client.emit('error', { code: 401, msg: '账号已被强制下线，请重新登录' });
+        client.disconnect();
+        return;
+      }
+
+      // 安全加固：检查用户 status（账号是否被禁用）
+      // 不依赖 JWT payload，因为 token 签发后状态可能已变
+      const user = await this.userService.findUserEntity(payload.sub);
+      if (!user) {
+        this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 不存在`);
+        client.emit('error', { code: 401, msg: '用户不存在' });
+        client.disconnect();
+        return;
+      }
+      if (user.status === 0) {
+        this.logger.warn(`WS 连接被拒: 用户 ${user.username} 已被禁用`);
+        client.emit('error', { code: 401, msg: '账号已被禁用，请联系管理员' });
+        client.disconnect();
+        return;
+      }
 
       // 将 Token 载荷绑定到 socket 的 data 上，后续可通过 client.data.user 获取 { sub, username }
       client.data = { user: payload };

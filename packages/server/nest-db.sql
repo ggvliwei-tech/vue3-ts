@@ -147,3 +147,123 @@ CREATE TABLE IF NOT EXISTS `ai_message` (
   KEY `idx_session` (`session_id`),
   KEY `idx_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI消息表';
+
+
+-- =============================================
+-- RBAC 权限模块（角色 / 权限 / 关联表）
+-- 说明：完整 RBAC 模型，支持细粒度权限控制
+-- =============================================
+
+-- 1. 角色表
+CREATE TABLE IF NOT EXISTS `sys_role` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `code` VARCHAR(50) NOT NULL COMMENT '角色编码：admin/editor/user',
+  `name` VARCHAR(50) NOT NULL COMMENT '角色名称',
+  `description` VARCHAR(255) DEFAULT NULL COMMENT '角色描述',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '状态：1启用 0禁用',
+  `createTime` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_role_code` (`code`) COMMENT '角色编码唯一约束'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统角色表';
+
+-- 2. 权限表
+CREATE TABLE IF NOT EXISTS `sys_permission` (
+  `id` INT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `code` VARCHAR(100) NOT NULL COMMENT '权限编码：user:list/user:kick/...',
+  `name` VARCHAR(100) NOT NULL COMMENT '权限名称',
+  `module` VARCHAR(50) NOT NULL COMMENT '所属模块：user/book/file/ai',
+  `description` VARCHAR(255) DEFAULT NULL COMMENT '权限描述',
+  `createTime` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_perm_code` (`code`) COMMENT '权限编码唯一约束',
+  KEY `idx_module` (`module`) COMMENT '模块索引'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统权限表';
+
+-- 3. 用户-角色关联表
+CREATE TABLE IF NOT EXISTS `sys_user_role` (
+  `user_id` INT NOT NULL COMMENT '用户ID',
+  `role_id` INT NOT NULL COMMENT '角色ID',
+  `createTime` BIGINT NOT NULL COMMENT '创建时间(毫秒时间戳)',
+  PRIMARY KEY (`user_id`, `role_id`),
+  KEY `idx_ur_role` (`role_id`) COMMENT '角色反向查询索引'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户-角色关联表';
+
+-- 4. 角色-权限关联表
+CREATE TABLE IF NOT EXISTS `sys_role_permission` (
+  `role_id` INT NOT NULL COMMENT '角色ID',
+  `permission_id` INT NOT NULL COMMENT '权限ID',
+  PRIMARY KEY (`role_id`, `permission_id`),
+  KEY `idx_rp_perm` (`permission_id`) COMMENT '权限反向查询索引'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色-权限关联表';
+
+-- 初始化 3 个内置角色
+INSERT IGNORE INTO `sys_role` (`code`, `name`, `description`, `status`, `createTime`) VALUES
+('admin', '管理员', '系统最高权限，可访问所有功能', 1, UNIX_TIMESTAMP() * 1000),
+('editor', '编辑', '可管理账本和文件，不可操作用户', 1, UNIX_TIMESTAMP() * 1000),
+('user', '普通用户', '基础访问权限，仅可查看账本和使用 AI 对话', 1, UNIX_TIMESTAMP() * 1000);
+
+-- 初始化权限码（按模块分组）
+INSERT IGNORE INTO `sys_permission` (`code`, `name`, `module`, `description`, `createTime`) VALUES
+('user:list', '查看用户列表', 'user', '查看系统中所有用户', UNIX_TIMESTAMP() * 1000),
+('user:kick', '强制用户下线', 'user', '踢出指定用户的活跃会话', UNIX_TIMESTAMP() * 1000),
+('user:toggle-status', '启停用户', 'user', '启用/禁用指定用户', UNIX_TIMESTAMP() * 1000),
+('user:audit', '查看审计日志', 'user', '查看系统审计日志', UNIX_TIMESTAMP() * 1000),
+('user:session', '查看多设备会话', 'user', '查看用户的活跃设备列表', UNIX_TIMESTAMP() * 1000),
+('book:list', '查看账本', 'book', '查看账本列表', UNIX_TIMESTAMP() * 1000),
+('book:create', '创建账本', 'book', '创建新账本', UNIX_TIMESTAMP() * 1000),
+('book:update', '修改账本', 'book', '修改账本信息', UNIX_TIMESTAMP() * 1000),
+('book:delete', '删除账本', 'book', '删除账本', UNIX_TIMESTAMP() * 1000),
+('file:upload', '上传文件', 'file', '上传文件', UNIX_TIMESTAMP() * 1000),
+('file:delete', '删除文件', 'file', '删除文件', UNIX_TIMESTAMP() * 1000),
+('ai:chat', 'AI 对话', 'ai', '使用 AI 聊天功能', UNIX_TIMESTAMP() * 1000);
+
+-- 角色-权限分配：admin 全部权限
+INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
+SELECT r.id, p.id FROM `sys_role` r CROSS JOIN `sys_permission` p WHERE r.code = 'admin';
+
+-- editor：除 user 模块外的所有权限
+INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
+SELECT r.id, p.id FROM `sys_role` r, `sys_permission` p
+WHERE r.code = 'editor' AND p.module != 'user';
+
+-- user：仅基础读权限
+INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
+SELECT r.id, p.id FROM `sys_role` r, `sys_permission` p
+WHERE r.code = 'user' AND p.code IN ('book:list', 'ai:chat');
+
+-- 默认把 admin 账号绑定到 admin 角色
+INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`, `createTime`)
+SELECT u.id, r.id, UNIX_TIMESTAMP() * 1000
+FROM `sys_user` u, `sys_role` r
+WHERE u.username = 'admin' AND r.code = 'admin';
+
+-- 默认把普通注册用户绑到 user 角色（如果还没绑任何角色）
+INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`, `createTime`)
+SELECT u.id, r.id, UNIX_TIMESTAMP() * 1000
+FROM `sys_user` u, `sys_role` r
+WHERE u.username != 'admin' AND r.code = 'user'
+  AND NOT EXISTS (SELECT 1 FROM `sys_user_role` ur WHERE ur.user_id = u.id);
+
+
+-- =============================================
+-- 审计日志表
+-- 记录登录、退出、敏感操作等关键事件
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS `sys_audit_log` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `user_id` INT DEFAULT NULL COMMENT '操作用户ID（未登录为 NULL）',
+  `username` VARCHAR(50) DEFAULT NULL COMMENT '操作用户名',
+  `action` VARCHAR(50) NOT NULL COMMENT '动作：login/logout/refresh/kick/toggle-status/reset-password/...',
+  `resource` VARCHAR(50) DEFAULT NULL COMMENT '操作对象类型',
+  `resource_id` VARCHAR(50) DEFAULT NULL COMMENT '操作对象ID',
+  `ip` VARCHAR(45) DEFAULT NULL COMMENT '客户端IP（兼容IPv6）',
+  `user_agent` VARCHAR(255) DEFAULT NULL COMMENT '浏览器UA',
+  `status` TINYINT NOT NULL COMMENT '1成功 0失败',
+  `detail` JSON DEFAULT NULL COMMENT '扩展信息',
+  `createTime` BIGINT NOT NULL COMMENT '操作时间(毫秒时间戳)',
+  PRIMARY KEY (`id`),
+  KEY `idx_audit_user` (`user_id`),
+  KEY `idx_audit_action` (`action`),
+  KEY `idx_audit_time` (`createTime`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志表';

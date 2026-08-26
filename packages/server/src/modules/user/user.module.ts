@@ -4,6 +4,12 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 // 短信模块，提供验证码服务
 import { SmsModule } from '../sms/sms.module';
+// RBAC 模块，提供角色和权限查询
+import { RbacModule } from '../rbac/rbac.module';
+// 鉴权模块，提供登录风控/限流/账号锁定
+import { AuthModule } from '../auth/auth.module';
+// 审计日志模块，提供 AuditService 用于记录关键操作
+import { AuditModule } from '../audit/audit.module';
 // 用户服务，处理数据库操作和业务逻辑
 import { UserService } from './user.service';
 // 用户控制器，处理 HTTP 请求和路由
@@ -19,6 +25,12 @@ import { User } from './entities/user.entity';
     TypeOrmModule.forFeature([User]),
     // 导入短信模块，UserService 需要注入 SmsService
     SmsModule,
+    // 导入鉴权模块，提供 LoginThrottlerService（IP 限流 / 失败计数 / 账号锁定）
+    AuthModule,
+    // 导入审计模块，提供 AuditService（登录/踢下线/状态切换等关键操作埋点）
+    AuditModule,
+    // 导入 RBAC 模块，提供 RbacService（登录时查询角色和权限）
+    RbacModule,
   ],
   controllers: [UserController], // 注册控制器，负责处理 HTTP 路由和请求响应
   providers: [UserService], // 注册服务提供者，负责数据库操作和业务逻辑

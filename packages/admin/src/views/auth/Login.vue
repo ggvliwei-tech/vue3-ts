@@ -56,6 +56,10 @@ async function handleLogin() {
     localStorage.setItem('token', res.data.accessToken)
     // 将用户名也缓存到 localStorage，方便 AdminLayout 顶部展示当前登录人
     localStorage.setItem('username', res.data.userInfo.username)
+    // 缓存角色编码数组（用于前端路由 meta 权限校验）
+    localStorage.setItem('roles', JSON.stringify(res.data.userInfo.roles))
+    // 缓存权限码数组（用于按钮级权限控制）
+    localStorage.setItem('permissions', JSON.stringify(res.data.userInfo.permissions))
     // 显示登录成功消息提示
     ElMessage.success('登录成功')
     // 跳转到之前页面或默认的仪表盘页面

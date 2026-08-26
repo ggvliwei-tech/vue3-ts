@@ -6,46 +6,58 @@ import { createRouter, createWebHistory } from 'vue-router'
 // 导入 vue-router 提供的路由记录原始类型定义
 import type { RouteRecordRaw } from 'vue-router'
 
+// 扩展 vue-router 的 meta 类型，添加自定义字段
+declare module 'vue-router' {
+  interface RouteMeta {
+    // 页面标题（用于 AdminLayout 顶部显示）
+    title?: string
+    // 是否公开路由（如登录页），true 表示无需登录
+    public?: boolean
+    // 允许访问的角色编码（任一即可），未配置表示仅需登录
+    roles?: string[]
+    // 需要的权限码（任一即可），未配置表示不校验权限码
+    permissions?: string[]
+  }
+}
+
 // 定义路由配置数组，类型为 RouteRecordRaw[]
 const routes: RouteRecordRaw[] = [
   {
-    // 定义登录页面的路由路径
     path: '/login',
-    // 定义路由名称，用于编程式导航
     name: 'Login',
-    // 使用动态导入实现路由懒加载，导入登录页面组件
     component: () => import('@/views/auth/Login.vue'),
-    // 路由元信息，title 用于显示页面标题，public 标记为公开路由无需登录
     meta: { title: '登录', public: true },
   },
   {
-    // 定义根路径，匹配所有非登录路由
+    path: '/403',
+    name: 'Forbidden',
+    component: () => import('@/views/error/Forbidden.vue'),
+    meta: { title: '无权限' },
+  },
+  {
     path: '/',
-    // 使用动态导入加载管理后台布局组件
     component: () => import('@/components/AdminLayout.vue'),
-    // 默认重定向到 dashboard 页面
     redirect: '/dashboard',
-    // 定义子路由
     children: [
       {
-        // 仪表盘页面路径，完整路径为 /dashboard
         path: 'dashboard',
-        // 路由名称
         name: 'Dashboard',
-        // 使用动态导入加载仪表盘页面组件
         component: () => import('@/views/dashboard/Dashboard.vue'),
-        // 路由元信息，设置页面标题
         meta: { title: '仪表盘' },
       },
       {
-        // 用户管理页面路径，完整路径为 /users
+        // 用户管理：需要 user:list 权限码
         path: 'users',
-        // 路由名称
         name: 'UserManage',
-        // 使用动态导入加载用户管理页面组件
         component: () => import('@/views/user/UserManage.vue'),
-        // 路由元信息，设置页面标题
-        meta: { title: '用户管理' },
+        meta: { title: '用户管理', permissions: ['user:list'] },
+      },
+      {
+        // 审计日志：需要 user:audit 权限码（仅 admin 可见）
+        path: 'audit',
+        name: 'AuditLog',
+        component: () => import('@/views/audit/AuditLog.vue'),
+        meta: { title: '审计日志', permissions: ['user:audit'] },
       },
     ],
   },
@@ -53,22 +65,48 @@ const routes: RouteRecordRaw[] = [
 
 // 创建路由实例
 const router = createRouter({
-  // 使用 HTML5 history 模式，URL 中不包含 # 号
   history: createWebHistory(),
-  // 传入前面定义的路由配置
   routes,
 })
 
-// 路由守卫：在每次路由跳转前执行，检查用户登录状态
+// 工具函数：从 localStorage 安全读取 JSON 数组
+function readJsonArray(key: string): string[] {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+// 路由守卫：依次校验登录态、角色、权限码
 router.beforeEach((to) => {
-  // 如果目标路由标记为公开路由（如登录页），直接放行
+  // 1. 公开路由（登录页）直接放行
   if (to.meta.public) return true
-  // 检查 localStorage 中是否存在 token，兼容非浏览器环境
+
+  // 2. 校验登录态
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : ''
-  // 如果存在 token，说明已登录，允许跳转
-  if (token) return true
-  // 否则未登录，重定向到登录页，并携带当前路径作为 redirect 参数以便登录后跳回
-  return { path: '/login', query: { redirect: to.fullPath } }
+  if (!token) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  // 3. 校验角色（meta.roles 是 OR 语义：拥有任一即可）
+  if (to.meta.roles && to.meta.roles.length > 0) {
+    const userRoles = readJsonArray('roles')
+    const hasRole = userRoles.some((r) => to.meta.roles!.includes(r))
+    if (!hasRole) return { path: '/403' }
+  }
+
+  // 4. 校验权限码（meta.permissions 是 OR 语义：拥有任一即可）
+  if (to.meta.permissions && to.meta.permissions.length > 0) {
+    const userPerms = readJsonArray('permissions')
+    const hasPerm = userPerms.some((p) => to.meta.permissions!.includes(p))
+    if (!hasPerm) return { path: '/403' }
+  }
+
+  return true
 })
 
 // 导出路由实例，供 main.ts 使用
