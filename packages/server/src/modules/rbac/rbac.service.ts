@@ -108,6 +108,39 @@ export class RbacService {
   }
 
   /**
+   * 批量获取用户的角色编码（用户列表场景）
+   *
+   * 单 SQL 一次查所有 userId 的角色，前端用一次 IN (...) 即可渲染 N 行
+   * 不走 Redis 缓存（列表页短生命周期，缓存收益低 / 一致性收益高）
+   *
+   * @param userIds 用户 ID 列表
+   * @returns Map<userId, roleCodes[]>
+   */
+  async getRolesByUserIds(
+    userIds: number[],
+  ): Promise<Map<number, string[]>> {
+    const result = new Map<number, string[]>()
+    // 空数组短路，避免 IN () 语法错误
+    if (userIds.length === 0) return result
+
+    const rows = await this.userRoleRepo
+      .createQueryBuilder('ur')
+      .innerJoin(RoleEntity, 'r', 'r.id = ur.role_id')
+      .where('ur.user_id IN (:...userIds)', { userIds })
+      .andWhere('r.status = 1')
+      .select(['ur.user_id AS userId', 'r.code AS code'])
+      .getRawMany<{ userId: number; code: string }>()
+
+    // 初始化每个 userId 空数组，避免前端拿不到 key
+    for (const id of userIds) result.set(id, [])
+    for (const row of rows) {
+      const list = result.get(row.userId)
+      if (list) list.push(row.code)
+    }
+    return result
+  }
+
+  /**
    * 获取用户的所有权限码（带缓存，Redis 故障时降级到 DB）
    * @param userId 用户 ID
    * @returns 权限码数组，如 ['user:list', 'book:create']

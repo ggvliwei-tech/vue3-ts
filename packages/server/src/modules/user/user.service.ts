@@ -71,8 +71,12 @@ export class UserService {
     return this.userCrudService.findById(userId)
   }
 
-  findAll(page = 1, pageSize = 20) {
-    return this.userCrudService.findAll(page, pageSize)
+  findAll(
+    page = 1,
+    pageSize = 20,
+    filters: { keyword?: string; status?: 0 | 1 } = {},
+  ) {
+    return this.userCrudService.findAll(page, pageSize, filters)
   }
 
   toggleStatus(userId: number) {

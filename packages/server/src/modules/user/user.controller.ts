@@ -261,9 +261,13 @@ export class UserController {
   // Get 路由装饰器，获取用户列表接口路径为 GET /user
   @Get()
   // M5 + M7：使用 DTO 接分页参数；响应去掉 phone 字段
+  // 增量：DTO 新增 keyword/status 筛选，透传到 service
   findAll(@Query() dto: QueryUserListDto) {
     // 调用用户服务的 findAll 方法返回分页用户列表
-    return this.userService.findAll(dto.page ?? 1, dto.pageSize ?? 20);
+    return this.userService.findAll(dto.page ?? 1, dto.pageSize ?? 20, {
+      keyword: dto.keyword,
+      status: dto.status,
+    });
   }
 
   // ===== 多设备会话管理接口 =====

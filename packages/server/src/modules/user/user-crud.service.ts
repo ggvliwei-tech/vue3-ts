@@ -63,18 +63,47 @@ export class UserCrudService {
   }
 
   /**
-   * 查询用户列表（分页 + 不含密码 / 不含手机号）
+   * 查询用户列表（分页 + 不含密码 / 不含手机号 + 可选 keyword/status 筛选 + 含角色）
    * M7：手机号是 PII，普通列表不应回传，避免后台侧无意泄漏
    *     同时支持分页，避免 SELECT * 在用户量大时拖慢 DB
+   *
+   * 角色字段用单次 batch SQL 拉取后挂到 list 上（避免 N+1）
    */
-  async findAll(page = 1, pageSize = 20) {
-    const [list, total] = await this.userRepo.findAndCount({
-      select: { id: true, username: true, status: true, createTime: true },
-      order: { createTime: 'DESC' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    })
-    return { list, total, page, pageSize }
+  async findAll(
+    page = 1,
+    pageSize = 20,
+    filters: { keyword?: string; status?: 0 | 1 } = {},
+  ) {
+    const qb = this.userRepo
+      .createQueryBuilder('u')
+      .select(['u.id', 'u.username', 'u.status', 'u.createTime'])
+      .orderBy('u.createTime', 'DESC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize)
+
+    if (filters.keyword) {
+      // username 模糊匹配；AND keyword 转义由 TypeORM 占位符处理
+      qb.andWhere('u.username LIKE :keyword', { keyword: `%${filters.keyword}%` })
+    }
+    if (filters.status !== undefined) {
+      qb.andWhere('u.status = :status', { status: filters.status })
+    }
+
+    const [list, total] = await qb.getManyAndCount()
+
+    // 批量取这页用户对应的角色编码（单 SQL）
+    const userIds = list.map((u) => u.id)
+    const roleMap = await this.rbacService.getRolesByUserIds(userIds)
+
+    const listWithRoles = list.map((u) => ({
+      id: u.id,
+      username: u.username,
+      status: u.status,
+      createTime: u.createTime,
+      roles: roleMap.get(u.id) ?? [],
+    }))
+
+    return { list: listWithRoles, total, page, pageSize }
   }
 
   /**

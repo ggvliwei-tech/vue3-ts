@@ -4,6 +4,8 @@
 
 // 从共享模块导入封装好的 get 和 post 请求方法
 import { get, post } from '@project/shared/request'
+// 从共享模块导入统一分页响应类型（单一来源：packages/shared/src/types.ts）
+import type { PageRes } from '@project/shared'
 
 // 定义登录请求参数的接口类型
 export interface LoginParams {
@@ -48,6 +50,8 @@ export interface User {
   status: number
   // 创建时间（时间戳）
   createTime: number
+  // 当前用户拥有的角色编码列表（仅列表查询返回；findById 另有完整 roles/permissions 字段）
+  roles?: string[]
 }
 
 /**
@@ -79,12 +83,23 @@ export function refreshToken() {
 }
 
 /**
- * 获取用户列表
+ * 分页获取用户列表
+ * 后端响应结构：{ list: User[]; total: number; page: number; pageSize: number }
+ * QueryUserListDto 已有 page ?? 1 / pageSize ?? 20 默认值，params 全可选
+ *
+ * 筛选参数：
+ *  - keyword：用户名模糊匹配
+ *  - status：精确匹配 1 正常 / 0 禁用；不传查全部
  */
-// 导出获取用户列表函数
-export function getUserList() {
-  // 调用封装的 get 方法，获取用户列表数据，指定响应类型为 User 数组
-  return get<User[]>('/api/v1/user')
+// 导出分页获取用户列表函数
+export function getUserList(params?: {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  status?: 0 | 1
+}) {
+  // 调用封装的 get 方法，传入分页 + 筛选查询参数，响应类型为 PageRes<User>
+  return get<PageRes<User>>('/api/v1/user', { params })
 }
 
 /**
