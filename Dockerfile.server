@@ -1,0 +1,89 @@
+# ============================================================
+# NestJS 后端镜像 - 多阶段构建
+# ============================================================
+# 设计要点：
+#  1. 多阶段：减小最终镜像体积（devDependencies 不进生产镜像）
+#  2. pnpm workspace 模式：依赖 @project/shared 等本地包，需要先 build shared
+#  3. 生产模式：TypeScript 编译产物 dist/ + 只装 production 依赖
+#  4. 健康检查：直接复用 /health 端点
+#  5. 非 root 用户运行：提高安全性
+# ============================================================
+
+# -------- 阶段 1：构建 @project/shared --------
+# shared 是 workspace 包，server 依赖它，必须先 build
+FROM node:22-alpine AS shared-builder
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
+WORKDIR /app
+# 只拷贝 workspace 顶层文件和 shared 包源码（缓存友好）
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
+COPY packages/shared ./packages/shared
+WORKDIR /app/packages/shared
+RUN pnpm install --frozen-lockfile --prod=false
+RUN pnpm build
+
+# -------- 阶段 2：构建 server 应用 --------
+FROM node:22-alpine AS server-builder
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
+WORKDIR /app
+
+# 拷贝 workspace 顶层文件
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
+
+# 拷贝 server 包
+COPY packages/server ./packages/server
+
+# 从 shared-builder 拷贝已编译的 shared 包（含 dist）
+COPY --from=shared-builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=shared-builder /app/packages/shared/package.json ./packages/shared/package.json
+
+# 安装 server 依赖（含 devDependencies，因为需要 nest build）
+RUN pnpm install --frozen-lockfile
+
+# 编译 server
+WORKDIR /app/packages/server
+RUN pnpm build
+
+# 清理 devDependencies + 缓存（保留 runtime 必需文件）
+RUN pnpm prune --prod && \
+    rm -rf node_modules/.cache .pnpm-store logs
+
+# -------- 阶段 3：运行镜像 --------
+FROM node:22-alpine AS runtime
+# 安装 wget（用于 HEALTHCHECK）和 tini（PID 1 信号转发，实现优雅关闭）
+RUN apk add --no-cache wget tini
+
+# 创建非 root 用户
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nestjs -u 1001 -G nodejs
+
+WORKDIR /app
+
+# 设置环境变量默认值（运行时可通过 docker run -e 或 docker-compose 覆盖）
+ENV NODE_ENV=production \
+    APP_PORT=3000 \
+    APP_HOST=0.0.0.0 \
+    LOG_LEVEL=info
+
+# 拷贝生产构建产物
+COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/dist ./dist
+COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/package.json ./
+COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/node_modules ./node_modules
+# 共享包（在 node_modules 中通过 workspace 符号链接）
+COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/package.json ./node_modules/@project/shared/package.json
+COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/dist ./node_modules/@project/shared/dist
+
+# 日志目录（与 winston.config.ts 中 LOG_DIR = process.cwd()/logs 对齐）
+RUN mkdir -p /app/logs && chown -R nestjs:nodejs /app/logs
+
+USER nestjs
+
+EXPOSE 3000
+
+# HEALTHCHECK：每 30s 探测一次 /health，连续 3 次失败标记为 unhealthy
+# 生产环境 K8s 会用 readinessProbe，此 HEALTHCHECK 主要给 Docker standalone 用
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/health || exit 1
+
+# tini 作为 PID 1，正确转发 SIGTERM/SIGINT 给 Node 进程，配合 nestjs 的 enableShutdownHooks 实现优雅关闭
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/main.js"]

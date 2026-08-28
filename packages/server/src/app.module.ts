@@ -5,7 +5,9 @@ import { ConfigModule, ConfigService } from '@nestjs/config'; // 配置模块和
 import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，用于连接和操作数据库
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
 import { ThrottlerModule } from '@nestjs/throttler'; // 限流模块，用于接口频率限制
+import { WinstonModule } from 'nest-winston'; // nest-winston 日志模块
 import configuration from './config/configuration'; // 自定义配置加载函数，对环境变量做预处理
+import { winstonConfig } from './common/logger/winston.config'; // 日志输出配置（控制台 + 文件 + 错误分离）
 import { RbacModule } from './modules/rbac/rbac.module'; // RBAC 权限模块
 import { UserModule } from './modules/user/user.module'; // 用户功能模块，处理用户相关业务逻辑
 import { AccountBookModule } from './modules/account_book/account-book.module'; // 账本功能模块
@@ -16,6 +18,7 @@ import { SmsModule } from './modules/sms/sms.module'; // 短信模块
 import { AuthModule } from './modules/auth/auth.module'; // 鉴权模块，提供登录风控/限流
 import { AuditModule } from './modules/audit/audit.module'; // 审计日志模块
 import { AdminModule } from './modules/admin/admin.module'; // 管理后台模块（角色/权限/用户角色/审计/仪表盘）
+import { HealthModule } from './modules/health/health.module'; // 健康检查模块（K8s liveness/readiness 探针）
 
 @Module({ // 根模块装饰器，负责组装所有全局依赖和配置
   imports: [ // 导入的模块列表
@@ -24,6 +27,10 @@ import { AdminModule } from './modules/admin/admin.module'; // 管理后台模�
       load: [configuration], // 加载自定义配置函数，对环境变量做预处理
       envFilePath: '.env', // 指定环境变量文件路径
     }),
+
+    // 全局日志模块：替换 NestJS 默认 console logger
+    // 必须在其他可能产生日志的模块前注册
+    WinstonModule.forRoot(winstonConfig),
 
     JwtModule.registerAsync({ // JWT 模块异步注册配置
       useFactory: (configService: ConfigService): JwtModuleOptions => ({ // 工厂函数，接收依赖返回 JWT 配置
@@ -63,6 +70,7 @@ import { AdminModule } from './modules/admin/admin.module'; // 管理后台模�
       },
     ]),
 
+    HealthModule, // 健康检查模块（/health + /health/ready）
     UserModule, // 导入用户模块，注册用户相关的控制器和服务
     AccountBookModule, // 导入账本模块，管理账本相关功能
     FileModule, // 导入文件模块，处理文件上传下载
