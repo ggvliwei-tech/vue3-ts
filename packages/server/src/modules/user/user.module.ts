@@ -6,34 +6,41 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { SmsModule } from '../sms/sms.module';
 // RBAC 模块，提供角色和权限查询
 import { RbacModule } from '../rbac/rbac.module';
-// 鉴权模块，提供登录风控/限流/账号锁定
+// 鉴权模块，提供登录风控/限流/账号锁定 + 多设备会话
 import { AuthModule } from '../auth/auth.module';
-// 审计日志模块，提供 AuditService 用于记录关键操作
+// 审计日志模块，提供 AuditService / AuditSubscriber（C5：审计通过事件解耦）
 import { AuditModule } from '../audit/audit.module';
-// 用户服务，处理数据库操作和业务逻辑
+// C5 拆分后的两个服务
 import { UserService } from './user.service';
+import { AuthService } from './auth.service';
+import { UserCrudService } from './user-crud.service';
 // 用户控制器，处理 HTTP 请求和路由
 import { UserController } from './user.controller';
 // 用户实体类，映射数据库表结构
 import { User } from './entities/user.entity';
 
-// 使用 @Module 装饰器定义 UserModule 用户模块，封装用户相关功能
+/**
+ * UserModule（C5 拆分后）
+ *
+ * 提供：
+ *  - AuthService       登录 / 刷新 / 退出 / 强制下线 / 会话管理
+ *  - UserCrudService   用户注册 / 查询 / 状态切换 / 重置密码
+ *  - UserService       兼容门面（Façade），将上述两个服务组合对外暴露
+ *
+ * 控制器与其他模块只需继续注入 UserService 即可保持原行为，
+ * 新代码建议直接注入 AuthService / UserCrudService。
+ */
 @Module({
   imports: [
-    // 注册 User 实体到当前模块，使用 forFeature 只注册当前模块需要的实体
-    // 与根模块的 forRootAsync 配合使用，使 UserService 可以注入 UserRepository
     TypeOrmModule.forFeature([User]),
-    // 导入短信模块，UserService 需要注入 SmsService
     SmsModule,
-    // 导入鉴权模块，提供 LoginThrottlerService（IP 限流 / 失败计数 / 账号锁定）
     AuthModule,
-    // 导入审计模块，提供 AuditService（登录/踢下线/状态切换等关键操作埋点）
     AuditModule,
-    // 导入 RBAC 模块，提供 RbacService（登录时查询角色和权限）
     RbacModule,
   ],
-  controllers: [UserController], // 注册控制器，负责处理 HTTP 路由和请求响应
-  providers: [UserService], // 注册服务提供者，负责数据库操作和业务逻辑
-  exports: [UserService], // 导出 UserService 服务，供其他模块（如 JwtAuthGuard）注入使用
+  controllers: [UserController],
+  providers: [AuthService, UserCrudService, UserService],
+  // 全部导出：JwtAuthGuard 等底层场景可按需注入具体服务
+  exports: [AuthService, UserCrudService, UserService],
 })
 export class UserModule {}

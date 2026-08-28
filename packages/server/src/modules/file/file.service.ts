@@ -1,5 +1,5 @@
 // 导入依赖注入装饰器和异常类
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 // 导入配置服务，用于读取环境变量配置
 import { ConfigService } from '@nestjs/config';
 // 导入 Repository 注入装饰器
@@ -23,6 +23,53 @@ import { FileEntity } from './entities/file.entity';
 const ALLOW_IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp)$/i;
 // 允许上传的 MIME 类型列表
 const ALLOW_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+
+/**
+ * M11：图片文件魔术字节（magic bytes / 文件头）指纹
+ * 仅依赖文件头前 12 字节即可判断真实格式，不信任客户端上传的 mimetype / 后缀
+ * - JPEG:  FF D8 FF
+ * - PNG:   89 50 4E 47 0D 0A 1A 0A
+ * - GIF:   47 49 46 38 37/39 61 ('GIF87a' / 'GIF89a')
+ * - WEBP:  52 49 46 46 ... 57 45 42 50 ('RIFF....WEBP')
+ */
+const IMAGE_MAGIC_BYTES: Array<{ mime: string; signature: number[] }> = [
+  { mime: 'image/jpeg', signature: [0xff, 0xd8, 0xff] },
+  { mime: 'image/png', signature: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  { mime: 'image/gif', signature: [0x47, 0x49, 0x46, 0x38] },
+  { mime: 'image/webp', signature: [0x52, 0x49, 0x46, 0x46] }, // 后续 4 字节 size，再后 'WEBP'
+]
+
+/**
+ * 通过文件头前几字节检测真实 MIME 类型
+ * 不匹配任何已知签名返回 null
+ */
+function detectImageTypeByMagic(buf: Buffer): string | null {
+  for (const { mime, signature } of IMAGE_MAGIC_BYTES) {
+    if (buf.length < signature.length) continue
+    let ok = true
+    for (let i = 0; i < signature.length; i++) {
+      if (buf[i] !== signature[i]) {
+        ok = false
+        break
+      }
+    }
+    if (!ok) continue
+    // WEBP 需要进一步校验尾部 'WEBP' 标识（offset 8-11）
+    if (mime === 'image/webp') {
+      if (
+        buf.length < 12 ||
+        buf[8] !== 0x57 ||
+        buf[9] !== 0x45 ||
+        buf[10] !== 0x42 ||
+        buf[11] !== 0x50
+      ) {
+        continue
+      }
+    }
+    return mime
+  }
+  return null
+}
 
 // 标记为可注入的服务
 @Injectable()
@@ -87,10 +134,14 @@ export class FileService {
     }
     // 提取文件扩展名
     const ext = file.originalname.substring(file.originalname.lastIndexOf('.')); // 从原始文件名中提取扩展名
-    // 校验文件扩展名和 MIME 类型是否合法
-    if (!ALLOW_IMAGE_EXT.test(ext) || !ALLOW_MIME.includes(file.mimetype)) {
-      // 验证扩展名和类型是否在允许列表中
+    // M11：扩展名仅作为辅助参考，最终以魔术字节为准（防 .php.jpg 这种欺骗）
+    if (!ALLOW_IMAGE_EXT.test(ext)) {
       throw new BadRequestException('仅支持 jpg、png、gif、webp 图片格式');
+    }
+    // M11：通过文件头真实检测图片类型，不信任客户端 mimetype
+    const realMime = detectImageTypeByMagic(file.buffer);
+    if (!realMime || !ALLOW_MIME.includes(realMime)) {
+      throw new BadRequestException('文件内容与图片格式不匹配');
     }
 
     // 初始化上传缓冲区为原始文件缓冲区
@@ -130,13 +181,27 @@ export class FileService {
   }
 
   /**
-   * 删除文件（物理删除+数据库软删/硬删）
+   * 删除文件（物理删除+数据库记录）
+   * C8 修复：所有权校验 —— 仅本人或 admin 角色可删
+   * @param id 文件 ID
+   * @param currentUser 当前登录用户（id + roles）
    */
-  async deleteFile(id: number) {
+  async deleteFile(
+    id: number,
+    currentUser: { id: number; roles?: string[] },
+  ): Promise<boolean> {
     // 根据 ID 查询文件记录
     const file = await this.fileRepo.findOneBy({ id });
     // 如果文件不存在，抛出异常
     if (!file) throw new BadRequestException('文件不存在');
+
+    // C8: 所有权校验
+    // - admin 角色可删除任意文件
+    // - 其他用户只能删除自己上传的文件
+    const isAdmin = currentUser.roles?.includes('admin') ?? false
+    if (!isAdmin && file.uploadUserId !== currentUser.id) {
+      throw new ForbiddenException('只能删除自己上传的文件')
+    }
 
     // 删除云端/本地物理文件
     if (file.filePath) {

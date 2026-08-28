@@ -334,5 +334,57 @@ WHERE u.username <> 'admin'
   AND NOT EXISTS (SELECT 1 FROM `sys_user_role` ur WHERE ur.user_id = u.id);
 
 -- =============================================
+-- 17. 性能优化（M9 + M13）
+-- 17.1 sys_user.createTime 索引：用于按时间筛选 / 排序用户列表
+-- =============================================
+ALTER TABLE `sys_user`
+  ADD INDEX `idx_sys_user_createTime` (`createTime`) COMMENT '按创建时间排序';
+
+-- 17.2 sys_audit_log 复合索引 (action, createTime)：
+--     AuditService.findAll 通常同时按 action 过滤 + 按 createTime 倒序
+--     单独索引无法同时利用，等值列 + 范围列的顺序让索引最优
+ALTER TABLE `sys_audit_log`
+  ADD INDEX `idx_audit_action_time` (`action`, `createTime`) COMMENT '按动作+时间组合查询';
+
+-- 17.3 sys_audit_log 复合索引 (user_id, createTime)：
+--     "某用户的最近操作" 是高频查询场景
+ALTER TABLE `sys_audit_log`
+  ADD INDEX `idx_audit_user_time` (`user_id`, `createTime`) COMMENT '按用户+时间组合查询';
+
+-- 18. RBAC join 表外键约束（M13 补齐）
+-- 18.1 先清理孤儿数据（FK 添加前必须确保无悬挂引用）
+DELETE ur FROM `sys_user_role` ur
+  LEFT JOIN `sys_user` u ON u.id = ur.user_id
+  WHERE u.id IS NULL;
+DELETE ur FROM `sys_user_role` ur
+  LEFT JOIN `sys_role` r ON r.id = ur.role_id
+  WHERE r.id IS NULL;
+
+DELETE rp FROM `sys_role_permission` rp
+  LEFT JOIN `sys_role` r ON r.id = rp.role_id
+  WHERE r.id IS NULL;
+DELETE rp FROM `sys_role_permission` rp
+  LEFT JOIN `sys_permission` p ON p.id = rp.permission_id
+  WHERE p.id IS NULL;
+
+-- 18.2 sys_user_role FK
+ALTER TABLE `sys_user_role`
+  ADD CONSTRAINT `fk_user_role_user`
+    FOREIGN KEY (`user_id`) REFERENCES `sys_user`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_user_role_role`
+    FOREIGN KEY (`role_id`) REFERENCES `sys_role`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- 18.3 sys_role_permission FK
+ALTER TABLE `sys_role_permission`
+  ADD CONSTRAINT `fk_role_perm_role`
+    FOREIGN KEY (`role_id`) REFERENCES `sys_role`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `fk_role_perm_perm`
+    FOREIGN KEY (`permission_id`) REFERENCES `sys_permission`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- =============================================
 -- 脚本结束
 -- =============================================

@@ -6,6 +6,8 @@ import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，�
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
 import { ThrottlerModule } from '@nestjs/throttler'; // 限流模块，用于接口频率限制
 import { WinstonModule } from 'nest-winston'; // nest-winston 日志模块
+import { EventEmitterModule } from '@nestjs/event-emitter'; // C5：业务与审计解耦
+import { ScheduleModule } from '@nestjs/schedule'; // M9：审计日志定时清理
 import configuration from './config/configuration'; // 自定义配置加载函数，对环境变量做预处理
 import { winstonConfig } from './common/logger/winston.config'; // 日志输出配置（控制台 + 文件 + 错误分离）
 import { RbacModule } from './modules/rbac/rbac.module'; // RBAC 权限模块
@@ -32,6 +34,15 @@ import { HealthModule } from './modules/health/health.module'; // 健康检查�
     // 必须在其他可能产生日志的模块前注册
     WinstonModule.forRoot(winstonConfig),
 
+    // C5：全局 EventEmitter，业务服务通过 emit('audit.log') 与审计解耦
+    EventEmitterModule.forRoot({
+      // 设为全局以便任何模块都能通过 EventEmitter2 注入
+      global: true,
+    }),
+
+    // M9：开启定时任务调度（审计日志清理等 cron job）
+    ScheduleModule.forRoot(),
+
     JwtModule.registerAsync({ // JWT 模块异步注册配置
       useFactory: (configService: ConfigService): JwtModuleOptions => ({ // 工厂函数，接收依赖返回 JWT 配置
         secret: configService.getOrThrow<string>('JWT_ACCESS_SECRET'), // JWT 签名密钥，用于加密和解密 Token
@@ -57,7 +68,20 @@ import { HealthModule } from './modules/health/health.module'; // 健康检查�
         logging: false, // 关闭 SQL 日志输出
         charset: 'utf8mb4', // 使用 utf8mb4 字符集，支持 emoji 等特殊字符
         supportBigNumbers: true, // 支持大数字类型
-        bigNumberStrings: false // 关闭大数强制转字符串，保持数字类型
+        bigNumberStrings: false, // 关闭大数强制转字符串，保持数字类型
+        // ========== M10：MySQL 连接池配置 ==========
+        // 生产环境推荐：pool 大小 ≈ (CPU 核数 × 2) + 硬盘数
+        // 8C16G 单实例建议 20-30；过高会增加 DB 端 context switch
+        extra: {
+          connectionLimit: Number(configService.get('DB_POOL_SIZE') ?? 20),
+          // 空闲连接保持时间（秒），低于 MySQL wait_timeout (默认 28800) 即可
+          idleTimeout: 600,
+          // 获取连接超时（毫秒），超时主动失败而非无限等待
+          connectTimeout: 10_000,
+          // 启用 keepalive 防止被中间网络设备断开
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 30_000,
+        },
       }),
       inject: [ConfigService], // 注入 ConfigService 供 useFactory 使用
     }),

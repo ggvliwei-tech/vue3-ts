@@ -1,6 +1,6 @@
 /**
  * 共享模块统一导出入口
- * 集中导出 types、request、utils 等公共模块
+ * 集中导出 types、request、utils、stores 等公共模块
  * 其他包通过 '@project/shared' 引用此入口
  */
 
@@ -10,3 +10,5 @@ export * from './types'
 export * from './request'
 // 导出通用工具函数
 export * from './utils'
+// 导出 Pinia stores（需调用方先 install pinia）
+export * from './stores/useAuthStore'

@@ -1,537 +1,176 @@
-// 导入 NestJS 常用装饰器：Injectable(可注入服务)、BadRequestException(请求异常)
-import { Injectable, BadRequestException } from '@nestjs/common';
-// 导入 NestJS 配置服务，用于读取环境变量
-import { ConfigService } from '@nestjs/config';
-// 导入 TypeORM 注入装饰器和 Repository 类型
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-// 导入 LangChain OpenAI 聊天模型和嵌入模型
-import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
-// 导入 LangChain Ollama 聊天模型（本地部署）
-import { ChatOllama } from '@langchain/ollama';
-// 导入 LangChain 核心消息类型：人类消息、系统消息、AI 消息
-import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
-// 导入 LangChain 文档类型，用于 RAG 向量检索
-import { Document } from '@langchain/core/documents';
-// 导入 LLM 类型枚举，定义支持的模型平台
-import { LlmTypeEnum } from './enums/llm-type.enum';
-// 导入 Redis 服务，用于会话历史持久化
-import { RedisService } from '../redis/redis.service';
-// 导入 AI 会话和消息实体类
-import { AiSessionEntity } from './entities/ai-session.entity';
-import { AiMessageEntity } from './entities/ai-message.entity';
-// 导入 Node.js 文件系统模块
-import fs from 'fs';
-// 导入 PDF 解析库
-import { PDFParse } from 'pdf-parse';
-// 导入 Chroma 向量数据库客户端
-import { ChromaClient } from 'chromadb';
+/**
+ * AI 编排服务（AiService / AiOrchestratorService）
+ *
+ * C4 重构：原 537 行上帝服务拆分为三个职责单一的服务后，本类只承担
+ * "对话流程编排"职责：协调 LLMProvider / RagService / AiChatHistory
+ * 共同完成单轮、多轮、流式等不同形态的对话。
+ *
+ * 对外接口签名与拆分前完全兼容，Controller 无需改动。
+ */
+import { Injectable } from '@nestjs/common'
+import {
+  SystemMessage,
+  HumanMessage,
+  AIMessage,
+  type BaseMessage,
+} from '@langchain/core/messages'
+import { LlmProviderService } from './llm/llm-provider.service'
+import { RagService } from './rag/rag.service'
+import { AiChatHistoryService, HistoryMessage } from './chat-history/ai-chat-history.service'
 
-// Injectable 装饰器：标记该类为可注入的服务，由 NestJS 容器管理
+/** 默认系统提示词 */
+const DEFAULT_SYSTEM_PROMPT = '你是后端全栈工程师，回答简洁，提供可直接运行代码，不要冗余描述'
+/** 流式输出的轻量提示词 */
+const STREAM_SYSTEM_PROMPT = '回答简短精炼'
+
 @Injectable()
-// AI 服务类：封装所有大语言模型相关业务逻辑
 export class AiService {
-  // LLM 实例属性，支持 OpenAI 兼容接口或 Ollama 本地模型
-  private readonly llm: ChatOpenAI | ChatOllama;
-  // 文本嵌入模型属性，用于向量相似度计算（Ollama 模式下不可用）
-  private embeddings: OpenAIEmbeddings | null;
-  // 当前使用的 LLM 类型标识字符串
-  private readonly llmType: string;
-
-  // 构造函数：注入配置服务、Redis 服务和数据库 Repository
   constructor(
-    private configService: ConfigService, // 配置服务，读取 .env 环境变量
-    private redisService: RedisService, // Redis 服务，用于缓存和持久化
-    @InjectRepository(AiSessionEntity)
-    private readonly sessionRepo: Repository<AiSessionEntity>, // AI 会话 Repository
-    @InjectRepository(AiMessageEntity)
-    private readonly messageRepo: Repository<AiMessageEntity>, // AI 消息 Repository
-  ) {
-    // 从配置中读取 LLM 类型，默认为 openai
-    this.llmType = this.configService.get('LLM_TYPE') || 'openai';
-    // 判断是否为 OpenAI 类型
-    if (this.llmType === LlmTypeEnum.OPENAI) {
-      // 创建 OpenAI 兼容 API 聊天模型实例
-      this.llm = new ChatOpenAI({
-        apiKey: this.configService.get('OPENAI_API_KEY'),                                // 从配置获取 API 密钥
-        configuration: { baseURL: this.configService.get('OPENAI_BASE_URL') },           // 从配置获取 API 基础 URL（支持自定义端点）
-        model: this.configService.get('OPENAI_MODEL') || 'gpt-3.5-turbo',               // 从配置获取模型名称，默认 gpt-3.5-turbo
-        temperature: 0.6,                                                                // 温度参数 0.6，控制回复的随机性和创造性
-      });
-      // 创建 OpenAI 嵌入模型实例，用于文本向量化
-      this.embeddings = new OpenAIEmbeddings({
-        openAIApiKey: this.configService.get('OPENAI_API_KEY'), // 使用相同的 API 密钥
-        configuration: { baseURL: this.configService.get('OPENAI_BASE_URL') }, // 使用相同的 API 基础 URL
-      });
-    // 判断是否为阿里云 DashScope 类型（通义千问，OpenAI 兼容格式）
-    } else if (this.llmType === LlmTypeEnum.DASHSCOPE) {
-      // 创建 DashScope 聊天模型实例（复用 ChatOpenAI 因为接口兼容）
-      this.llm = new ChatOpenAI({
-        apiKey: this.configService.get('DASHSCOPE_API_KEY'),                             // 从配置获取 DashScope API 密钥
-        configuration: { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }, // DashScope OpenAI 兼容 API 地址
-        model: this.configService.get('DASHSCOPE_MODEL') || 'qwen-plus',                // 从配置获取模型名称，默认 qwen-plus
-        temperature: 0.6, // 温度参数 0.6，控制回复创造性
-      });
-      // 创建 DashScope 嵌入模型实例（使用相同 API key 和端点）
-      this.embeddings = new OpenAIEmbeddings({
-        openAIApiKey: this.configService.get('DASHSCOPE_API_KEY'), // DashScope API 密钥
-        configuration: { baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }, // DashScope API 地址
-      });
-    // 其他情况为 Ollama 本地模型
-    } else {
-      // 创建 Ollama 本地聊天模型实例
-      this.llm = new ChatOllama({
-        baseUrl: this.configService.get('OLLAMA_BASE_URL'),   // 从配置获取 Ollama 服务地址
-        model: this.configService.get('OLLAMA_MODEL'),        // 从配置获取 Ollama 模型名称
-        temperature: 0.6, // 温度参数 0.6
-        numCtx: 2048, // 上下文窗口大小设为 2048，降低内存占用
-      });
-      // Ollama 本地模型不支持原生 embeddings，设为 null
-      this.embeddings = null;
+    private readonly llmProvider: LlmProviderService,
+    private readonly ragService: RagService,
+    private readonly chatHistory: AiChatHistoryService,
+  ) {}
+
+  // ====================== 历史消息 → LangChain BaseMessage[] ======================
+
+  private toBaseMessages(
+    systemPrompt: string,
+    history: HistoryMessage[],
+    question: string,
+  ): BaseMessage[] {
+    const messages: BaseMessage[] = [new SystemMessage(systemPrompt)]
+    for (const m of history) {
+      if (m.type === 'human') messages.push(new HumanMessage(m.content))
+      else if (m.type === 'ai') messages.push(new AIMessage(m.content))
     }
+    messages.push(new HumanMessage(question))
+    return messages
   }
 
-  // ====================== Redis Key 辅助方法 ======================
+  // ====================== 1. 单轮问答（无历史） ======================
 
-  // 生成会话历史 Redis Key 的私有方法
-  private getSessionHistoryKey(userId: string, sessionId: string) {
-    // 返回格式化的 Key：ai:session:用户ID:会话ID
-    return `ai:session:${userId}:${sessionId}`;
+  async simpleChat(question: string): Promise<string> {
+    return this.llmProvider.invoke(DEFAULT_SYSTEM_PROMPT, question)
   }
 
-  // 生成最近会话 Redis Key 的私有方法
-  private getLastSessionKey(userId: string) {
-    // 返回格式化的 Key：ai:session:last:用户ID
-    return `ai:session:last:${userId}`;
+  // ====================== 2. 多轮对话（持久化历史） ======================
+
+  async chatWithHistory(question: string, sessionId: string, userId: string): Promise<string> {
+    const history = await this.chatHistory.getHistory(userId, sessionId)
+    const messages = this.toBaseMessages(DEFAULT_SYSTEM_PROMPT, history, question)
+    const res = await this.llmProvider.invokeWithMessages(messages)
+    const answer = typeof res.content === 'string' ? res.content : String(res.content)
+
+    await this.chatHistory.appendHistory(userId, sessionId, question, answer, history)
+    const session = await this.chatHistory.touchSession(userId, sessionId)
+    await this.chatHistory.saveTurn(session.id, userId, question, answer)
+    await this.chatHistory.setLastSession(userId, sessionId)
+
+    return answer
   }
 
-  // 记录用户最近会话 ID 到 Redis 和 MySQL 的公共方法
-  async recordLastSession(userId: string, sessionId: string) {
-    // 将会话信息以 JSON 格式存入 Redis，包含 sessionId 和时间戳，过期时间 7 天
-    await this.redisService.setJson(
-      this.getLastSessionKey(userId), // Redis Key
-      { sessionId, updatedAt: Date.now() }, // 存储的数据：会话 ID 和更新时间
-      604800, // TTL 过期时间为 604800 秒（7 天）
-    );
-    // 同时写入 MySQL：查找已有记录或创建新记录
-    const userIdNum = parseInt(userId, 10);
-    let session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
-    if (session) {
-      // 已存在则更新 updatedAt
-      session.updatedAt = Date.now();
-      await this.sessionRepo.save(session);
-    } else {
-      // 不存在则创建新会话记录
-      session = this.sessionRepo.create({
-        userId: userIdNum,
-        sessionId,
-        title: '新对话',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      await this.sessionRepo.save(session);
-    }
+  // ====================== 3. RAG 检索问答 ======================
+
+  async ragQuery(question: string): Promise<string> {
+    const prompt = await this.ragService.buildPrompt(question)
+    return this.llmProvider.invoke(DEFAULT_SYSTEM_PROMPT, prompt)
   }
 
-  // ====================== 1. 单轮简单问答（无历史） ======================
+  // ====================== 4. SSE 流式打字机（无历史） ======================
 
-  // 单轮简单问答方法：不保留上下文，直接回答当前问题
-  async simpleChat(question: string) {
-    // 构建消息数组：包含系统提示词和用户问题
-    const messages = [
-      new SystemMessage('你是后端全栈工程师，回答简洁，提供可直接运行代码，不要冗余描述'), // 系统角色设定
-      new HumanMessage(question), // 用户提问消息
-    ];
-    // 调用 LLM 的 invoke 方法，传入消息数组并等待回复
-    const res = await this.llm.invoke(messages);
-    // 返回 AI 回复的内容
-    return res.content;
+  streamChat(question: string) {
+    return this.llmProvider.stream(STREAM_SYSTEM_PROMPT, question)
   }
 
-  // ====================== 2. 多轮对话（Redis 持久化历史） ======================
+  // ====================== 5. SSE 流式打字机（带历史 + 持久化） ======================
 
-  // 带历史上下文的多轮对话方法：使用 Redis 存储会话历史
-  async chatWithHistory(question: string, sessionId: string, userId: string) {
-    // 构建 Redis 存储键，通过 userId 和 sessionId 隔离不同用户和会话
-    const historyKey = this.getSessionHistoryKey(userId, sessionId);
-    // 从 Redis 以 JSON 格式获取历史消息数组
-    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
-    // 初始化消息数组，首先放入系统提示词
-    const messages: Array<SystemMessage | HumanMessage | AIMessage> = [
-      new SystemMessage('你是后端全栈工程师，回答简洁，提供可直接运行代码，不要冗余描述'), // 系统角色设定
-    ];
-
-    // 判断是否存在历史消息数据
-    if (historyData) {
-      // 遍历历史消息数组，逐条转换为对应消息对象
-      for (const msg of historyData) {
-        // 如果是人类消息类型，创建 HumanMessage 实例
-        if (msg.type === 'human') {
-          messages.push(new HumanMessage(msg.content));
-        // 如果是 AI 消息类型，创建 AIMessage 实例
-        } else if (msg.type === 'ai') {
-          messages.push(new AIMessage(msg.content));
-        }
-      }
-    }
-
-    // 将当前用户问题追加到消息数组末尾
-    messages.push(new HumanMessage(question));
-    // 调用 LLM 的 invoke 方法，传入包含历史的完整消息数组
-    const res = await this.llm.invoke(messages);
-
-    // 构建更新后的历史消息数组
-    const updatedHistory = [
-      ...historyData || [],                       // 展开原有历史消息，如果没有则为空数组
-      { type: 'human', content: question },       // 追加当前用户问题
-      { type: 'ai', content: res.content },       // 追加当前 AI 回复
-    ].slice(-20);                                 // 截取最后 20 条消息（保留最近 10 轮对话）
-    // 将更新后的历史以 JSON 格式存入 Redis，过期时间 86400 秒（24 小时）
-    await this.redisService.setJson(historyKey, updatedHistory, 86400);
-    // 同时持久化到 MySQL
-    const userIdNum = parseInt(userId, 10);
-    const now = Date.now();
-    // 确保会话记录存在
-    let session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
-    if (!session) {
-      session = this.sessionRepo.create({
-        userId: userIdNum,
-        sessionId,
-        title: '新对话',
-        createdAt: now,
-        updatedAt: now,
-      });
-      await this.sessionRepo.save(session);
-    } else {
-      session.updatedAt = now;
-      await this.sessionRepo.save(session);
-    }
-    // 写入当前轮的两条消息（user + ai）
-    const aiContent = typeof res.content === 'string' ? res.content : String(res.content);
-    await this.messageRepo.save([
-      this.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'user', content: question, createdAt: now - 1 }),
-      this.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'assistant', content: aiContent, createdAt: now }),
-    ]);
-    // 更新用户最近会话记录
-    await this.recordLastSession(userId, sessionId);
-
-    // 返回 AI 回复内容
-    return res.content;
-  }
-
-  // ====================== 3. RAG 知识库：上传 PDF 构建向量库 ======================
-
-  // 上传 PDF 并解析后存入 Chroma 向量库的方法
-  async uploadPdfToVector(filePath: string, collectionName = 'business_docs') {
-    // 检查文件路径是否存在，不存在则抛出请求异常
-    if (!fs.existsSync(filePath)) throw new BadRequestException('文件不存在');
-    // 同步读取文件内容为 Buffer 缓冲区
-    const buffer = fs.readFileSync(filePath);
-    // 创建 PDF 解析实例，传入二进制数据
-    const parser = new PDFParse({ data: buffer });
-    // 异步调用解析器获取 PDF 文本内容
-    const pdfRes = await parser.getText();
-    // 提取解析结果中的纯文本字段
-    const text = pdfRes.text;
-
-    // 简单文本切块逻辑（替代 RecursiveCharacterTextSplitter）
-    const chunkSize = 600;       // 每个文本块最大字符数为 600
-    const chunkOverlap = 80;     // 文本块之间重叠字符数为 80，避免关键信息被截断
-    const chunks: string[] = []; // 初始化文本块数组
-    let start = 0; // 初始化起始位置索引
-    // 循环切分文本，直到覆盖全部内容
-    while (start < text.length) {
-      // 计算当前块结束位置，取起始+块大小和文本总长度的较小值
-      const end = Math.min(start + chunkSize, text.length);
-      // 将切片后的文本块推入数组
-      chunks.push(text.slice(start, end));
-      // 更新起始位置为结束位置减去重叠量，确保相邻块有重叠
-      start = end - chunkOverlap;
-    }
-
-    // 将文本块数组映射为 LangChain Document 对象数组，附带块索引元数据
-    const docs = chunks.map((chunk, i) => new Document({ pageContent: chunk, metadata: { chunk: i } }));
-
-    // 创建 Chroma 向量数据库客户端实例
-    const client = new ChromaClient({
-      host: this.configService.get('CHROMA_HOST') || 'localhost', // 从配置获取 Chroma 主机地址，默认 localhost
-      port: this.configService.get('CHROMA_PORT') || 8000, // 从配置获取 Chroma 端口号，默认 8000
-    });
-    // 获取或创建指定名称的集合（Collection）
-    const collection = await client.getOrCreateCollection({ name: collectionName });
-
-    // 提取所有文档的文本内容数组
-    const texts = docs.map(d => d.pageContent);
-    // 检查嵌入模型是否可用，不可用则抛出异常
-    if (!this.embeddings) throw new BadRequestException('当前模型不支持 embeddings');
-    // 调用嵌入模型将所有文本块转换为向量数组
-    const embeddings = await this.embeddings.embedDocuments(texts);
-
-    // 将向量化后的文档添加到 Chroma 集合中
-    await collection.add({
-      ids: docs.map((_, i) => `doc_${Date.now()}_${i}`), // 为每个文档生成唯一 ID（时间戳+索引）
-      embeddings,                                          // 向量数据数组
-      documents: texts,                                    // 原始文本内容
-      metadatas: docs.map(d => d.metadata),                // 每个文档的元数据数组
-    });
-
-    // 返回 true 表示上传和向量化成功
-    return true;
-  }
-
-  // ====================== 4. RAG 基于文档问答 ======================
-
-  // RAG 查询方法：基于向量检索知识库回答用户问题
-  async ragQuery(question: string, collectionName = 'business_docs') {
-    // 创建 Chroma 向量数据库客户端
-    const client = new ChromaClient({
-      host: this.configService.get('CHROMA_HOST') || 'localhost', // Chroma 主机地址
-      port: this.configService.get('CHROMA_PORT') || 8000, // Chroma 端口号
-    });
-    // 获取或创建指定名称的集合
-    const collection = await client.getOrCreateCollection({ name: collectionName });
-
-    // 检查嵌入模型是否可用
-    if (!this.embeddings) throw new BadRequestException('当前模型不支持 embeddings');
-    // 将用户问题文本转换为查询向量
-    const questionEmbedding = await this.embeddings.embedQuery(question);
-
-    // 在 Chroma 集合中执行向量相似度查询
-    const queryResult = await collection.query({
-      queryEmbeddings: [questionEmbedding], // 查询用的向量数组
-      nResults: 3,                          // 返回最相似的 3 个结果
-      include: ['documents'],               // 结果中包含原始文档内容
-    });
-
-    // 提取查询结果中的文档数组，取第一个查询的结果
-    const relevantDocs = queryResult.documents?.[0] || [];
-    // 将相关文档用双换行符拼接为上下文字符串
-    const context = relevantDocs.join('\n\n');
-
-    // 构建包含参考上下文的提示词模板
-    const prompt = `
-基于下面参考内容回答问题，不知道就如实回答不知道，禁止编造内容：
-【参考上下文】
-${context}
-【用户问题】
-${question}
-    `;
-
-    // 调用单轮简单问答方法，传入构建好的提示词获取回复
-    return this.simpleChat(prompt);
-  }
-
-  // ====================== 5. SSE 流式打字机输出（核心体验） ======================
-
-  // SSE 流式聊天方法：返回流式数据供前端打字机效果展示
-  async streamChat(question: string) {
-    // 调用 LLM 的 stream 方法，传入系统消息和用户问题
-    const stream = await this.llm.stream([
-      new SystemMessage('回答简短精炼'), // 系统提示词：要求回答简洁
-      new HumanMessage(question), // 用户问题
-    ]);
-    // 返回流式可迭代对象
-    return stream;
-  }
-
-  // ====================== 6. 列出用户的会话 ======================
-
-  // 列出用户所有会话方法：从 MySQL 查询会话列表
-  async listSessions(userId: string) {
-    const userIdNum = parseInt(userId, 10);
-    // 从 MySQL 查询用户的所有会话
-    const sessions = await this.sessionRepo.find({
-      where: { userId: userIdNum },
-      order: { updatedAt: 'DESC' },
-    });
-    // 构建会话列表，包含 sessionId 和消息数量
-    const result: Array<{ sessionId: string; messageCount: number }> = [];
-    for (const session of sessions) {
-      const count = await this.messageRepo.count({ where: { sessionId: session.id } });
-      result.push({
-        sessionId: session.sessionId,
-        messageCount: count,
-      });
-    }
-    // 返回会话列表
-    return result;
-  }
-
-  // ====================== 7. 删除单个会话 ======================
-
-  // 删除指定会话方法：从 Redis 和 MySQL 中同时删除
-  async deleteSession(userId: string, sessionId: string) {
-    const userIdNum = parseInt(userId, 10);
-    // 删除 Redis 历史
-    const historyKey = this.getSessionHistoryKey(userId, sessionId);
-    await this.redisService.del(historyKey);
-    // 删除 MySQL 中的消息和会话
-    const session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
-    if (session) {
-      await this.messageRepo.delete({ sessionId: session.id });
-      await this.sessionRepo.delete(session.id);
-    }
-    // 返回 true 表示删除成功
-    return true;
-  }
-
-  // ====================== 8. 清空当前用户所有会话 ======================
-
-  // 清空用户所有会话方法：批量删除 Redis 中该用户的所有会话 Key 和 MySQL 数据
-  async clearSessions(userId: string) {
-    const userIdNum = parseInt(userId, 10);
-    // 获取 Redis 原生客户端实例
-    const redisClient = this.redisService.getClient();
-    // 扫描匹配当前用户会话模式的所有 Key
-    const keys = await redisClient.keys(`ai:session:${userId}:*`);
-    // 判断是否存在匹配的 Key
-    if (keys.length > 0) {
-      // 批量删除所有匹配的 Key
-      await redisClient.del(keys);
-    }
-    // 同时删除用户最近会话记录 Key
-    await this.redisService.del(this.getLastSessionKey(userId));
-    // 删除 MySQL 中该用户的所有会话和消息
-    const sessions = await this.sessionRepo.find({ where: { userId: userIdNum } });
-    if (sessions.length > 0) {
-      const sessionIds = sessions.map(s => s.id);
-      await this.messageRepo.delete({ sessionId: In(sessionIds) });
-      await this.sessionRepo.delete({ userId: userIdNum });
-    }
-    // 返回 true 表示清空成功
-    return true;
-  }
-
-  // ====================== 9. SSE 流式输出（带历史上下文） ======================
-
-  // 带历史上下文的 SSE 流式聊天方法：流式输出的同时保存完整回复到历史
   async streamChatWithHistory(question: string, sessionId: string, userId: string) {
-    // 构建会话历史 Redis Key
-    const historyKey = this.getSessionHistoryKey(userId, sessionId);
-    // 从 Redis 获取历史消息数据
-    const historyData = await this.redisService.getJson<Array<{ type: string; content: string }>>(historyKey);
+    const history = await this.chatHistory.getHistory(userId, sessionId)
+    const messages = this.toBaseMessages(DEFAULT_SYSTEM_PROMPT, history, question)
+    const stream = await this.llmProvider.streamWithMessages(messages)
 
-    // 初始化消息数组，首先放入系统提示词
-    const messages: Array<SystemMessage | HumanMessage | AIMessage> = [
-      new SystemMessage('你是后端全栈工程师，回答简洁'), // 系统角色设定
-    ];
+    // 闭包共享变量：累积完整回复，供 finally 落库
+    let fullResponse = ''
 
-    // 判断是否存在历史消息
-    if (historyData) {
-      // 遍历历史消息，按类型转换为对应消息对象
-      for (const msg of historyData) {
-        // 如果是人类消息类型，创建 HumanMessage 并推入数组
-        if (msg.type === 'human') messages.push(new HumanMessage(msg.content));
-        // 如果是 AI 消息类型，创建 AIMessage 并推入数组
-        else if (msg.type === 'ai') messages.push(new AIMessage(msg.content));
+    async function* consume() {
+      try {
+        for await (const chunk of stream) {
+          // 兼容 string / ContentBlock[] 两种 chunk.content 形态
+          const c = chunk.content
+          const text =
+            typeof c === 'string'
+              ? c
+              : Array.isArray(c)
+                ? c
+                    .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
+                    .map((b: any) => b.text)
+                    .join('')
+                : ''
+          fullResponse += text
+          yield chunk
+        }
+      } finally {
+        // 即使消费者提前断开也要把已收到的内容持久化
+        if (fullResponse) {
+          await thisRef.persistTurn(question, fullResponse, history, userId, sessionId)
+        }
       }
     }
 
-    // 将当前用户问题追加到消息数组
-    messages.push(new HumanMessage(question));
-
-    // 调用 LLM 的 stream 方法获取流式输出
-    const stream = await this.llm.stream(messages);
-
-    // 初始化完整回复字符串，用于累积流式输出内容
-    let fullResponse = '';
-    // 保存当前实例引用（用于在异步生成器中访问 this）
-    const self = this;
-    // 定义异步生成器函数：包装原始流，在输出同时累积完整回复
-    const savedStream = (async function* () {
-      // 遍历流式输出的每个数据块
-      for await (const chunk of stream) {
-        // 提取文本内容，兼容 string 和 ContentBlock[] 两种格式
-        const content = typeof chunk.content === 'string'
-          ? chunk.content // 字符串类型直接使用
-          : Array.isArray(chunk.content) // 数组类型需要过滤和拼接
-            ? chunk.content
-                .filter((b: any) => b.type === 'text' && typeof b.text === 'string') // 过滤出纯文本类型的块
-                .map((b: any) => b.text) // 提取每个文本块的 text 字段
-                .join('') // 拼接为完整字符串
-            : ''; // 其他类型返回空字符串
-        // 将提取的内容累积到完整回复字符串中
-        fullResponse += content;
-        // 产出（yield）原始数据块供前端消费
-        yield chunk;
-      }
-      // 流式输出结束后执行以下逻辑
-      // 判断是否获取到了有效回复内容
-      if (fullResponse) {
-        // 构建更新后的历史消息数组
-        const updatedHistory = [
-          ...(historyData || []), // 展开原有历史
-          { type: 'human', content: question }, // 追加用户问题
-          { type: 'ai', content: fullResponse }, // 追加完整 AI 回复
-        ].slice(-20); // 只保留最近 20 条消息
-        // 将更新后的历史存入 Redis，过期时间 24 小时
-        await self.redisService.setJson(historyKey, updatedHistory, 86400);
-        // 同时持久化到 MySQL
-        const userIdNum = parseInt(userId, 10);
-        const now = Date.now();
-        // 确保会话记录存在
-        let session = await self.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
-        if (!session) {
-          session = self.sessionRepo.create({
-            userId: userIdNum,
-            sessionId,
-            title: '新对话',
-            createdAt: now,
-            updatedAt: now,
-          });
-          await self.sessionRepo.save(session);
-        } else {
-          session.updatedAt = now;
-          await self.sessionRepo.save(session);
-        }
-        // 写入当前轮的两条消息（user + ai）
-        await self.messageRepo.save([
-          self.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'user', content: question, createdAt: now - 1 }),
-          self.messageRepo.create({ sessionId: session.id, userId: userIdNum, role: 'assistant', content: fullResponse, createdAt: now }),
-        ]);
-        // 更新用户最近会话记录
-        await self.recordLastSession(userId, sessionId);
-      }
-    })(); // 立即执行异步生成器函数
-
-    // 返回包装后的流式生成器
-    return savedStream;
+    // 通过 thisRef 把编排服务引用传入闭包
+    const thisRef = this
+    return consume()
   }
 
-  // ====================== 10. 获取用户最近一次会话 ======================
-
-  // 获取用户最近一次会话方法：从 MySQL 查询最近更新的会话
-  async getLastSession(userId: string): Promise<{ sessionId: string } | null> {
-    const userIdNum = parseInt(userId, 10);
-    // 从 MySQL 查询最近更新的会话
-    const session = await this.sessionRepo.findOne({
-      where: { userId: userIdNum },
-      order: { updatedAt: 'DESC' },
-    });
-    // 如果没有找到会话，返回 null
-    if (!session) return null;
-    // 返回包含 sessionId 的对象
-    return { sessionId: session.sessionId };
+  /** 把完整一轮对话持久化到 Redis + MySQL */
+  private async persistTurn(
+    question: string,
+    answer: string,
+    history: HistoryMessage[],
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
+    try {
+      await this.chatHistory.appendHistory(userId, sessionId, question, answer, history)
+      const session = await this.chatHistory.touchSession(userId, sessionId)
+      await this.chatHistory.saveTurn(session.id, userId, question, answer)
+      await this.chatHistory.setLastSession(userId, sessionId)
+    } catch {
+      // 持久化失败不应阻塞 SSE 客户端；调用方已收到内容
+      // 此处静默吞掉，必要时可接入日志（避免每次都给前端抛错）
+    }
   }
 
-  // ====================== 11. 获取指定会话的历史消息 ======================
+  // ====================== 6. 会话管理 ======================
 
-  // 获取指定会话的历史消息方法：从 MySQL 读取持久化数据
-  async getSessionMessages(userId: string, sessionId: string) {
-    const userIdNum = parseInt(userId, 10);
-    // 先从 Redis 获取 session UUID 对应的 session 记录（通过 sessionId 字符串查找）
-    // 前端传的是 UUID sessionId，需要从 MySQL ai_session 表查
-    const session = await this.sessionRepo.findOne({ where: { sessionId, userId: userIdNum } });
-    if (!session) return [];
-    // 从 MySQL 查询该会话的所有消息，按时间升序
-    const messages = await this.messageRepo.find({
-      where: { sessionId: session.id },
-      order: { createdAt: 'ASC' },
-    });
-    // 转换为前端展示格式
-    return messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+  async recordLastSession(userId: string, sessionId: string): Promise<void> {
+    await this.chatHistory.setLastSession(userId, sessionId)
+    await this.chatHistory.touchSession(userId, sessionId)
+  }
+
+  listSessions(userId: string) {
+    return this.chatHistory.listSessions(userId)
+  }
+
+  getLastSession(userId: string) {
+    return this.chatHistory.getLastSession(userId)
+  }
+
+  getSessionMessages(userId: string, sessionId: string) {
+    return this.chatHistory.getMessages(userId, sessionId)
+  }
+
+  async deleteSession(userId: string, sessionId: string): Promise<boolean> {
+    return this.chatHistory.deleteSession(userId, sessionId)
+  }
+
+  async clearSessions(userId: string): Promise<void> {
+    await this.chatHistory.clearAll(userId)
+  }
+
+  // ====================== 7. RAG 入库 ======================
+
+  uploadPdfToVector(filePath: string, collectionName?: string) {
+    return this.ragService.ingestPdf(filePath, collectionName)
   }
 }

@@ -1,9 +1,12 @@
 // 从 @nestjs/common 导入 Injectable 可注入装饰器、OnModuleInit/OnModuleDestroy 生命周期钩子
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 // 从 @nestjs/config 导入配置服务，用于读取环境变量和配置文件
 import { ConfigService } from '@nestjs/config';
 // 导入 ioredis 库的 Redis 客户端类
 import Redis from 'ioredis';
+// nest-winston 日志
+import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
+import { Logger as WinstonLogger } from 'winston';
 
 // @Injectable() 装饰器使 RedisService 可被 NestJS 依赖注入容器注入
 @Injectable()
@@ -11,9 +14,15 @@ import Redis from 'ioredis';
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   // 声明私有的 Redis 客户端实例，创建后不可变
   private readonly client: Redis;
+  // 当前连接状态，供健康检查/降级判断使用
+  private _ready = false;
 
   // 构造函数，注入 ConfigService 配置服务
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @Inject(WINSTON_MODULE_NEST_PROVIDER)
+    private readonly logger: WinstonLogger,
+  ) {
     // 从配置服务中读取 REDIS_PASSWORD 环境变量
     const redisPassword = this.configService.get('REDIS_PASSWORD');
     // 创建 Redis 客户端实例，传入配置对象
@@ -26,31 +35,40 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       password: redisPassword || undefined,
       // 延迟连接，需要手动调用 connect() 才建立连接
       lazyConnect: true,
-      // 定义重连策略函数，参数 times 为重试次数
-      retryStrategy: (times) => {
-        // 如果重试次数超过 3 次，停止重试
-        if (times > 3) {
-          // 输出警告日志
-          console.warn('[Redis] 连接失败次数过多，停止重试');
-          // 返回 null 表示停止重试
-          return null;
-        }
-        // 返回重连延迟时间，每次递增 500ms，最大不超过 2000ms
-        return Math.min(times * 500, 2000);
-      },
+      // C2 修复：永远不返回 null（避免永久失联），只递增退避上限
+      // 旧实现 3 次后返回 null → Redis 闪断 2 秒后客户端永久锁死
+      // 新实现：无限重试，backoff 封顶 10 秒，配合 maxRetriesPerRequest 快速失败
+      retryStrategy: (times) => Math.min(times * 500, 10_000),
+      // 单个命令最大重试次数（避免请求无限挂起）
+      maxRetriesPerRequest: 2,
+      // 离线时不缓存请求，立即失败（让上层走降级路径）
+      enableOfflineQueue: false,
     });
 
     // 监听 Redis 连接错误事件
     this.client.on('error', (err) => {
-      // 输出错误日志，包含错误信息
-      console.error('[Redis] 连接错误:', err.message);
+      this._ready = false
+      this.logger.warn(`[Redis] 连接错误: ${err.message}`)
     });
 
     // 监听 Redis 连接成功事件
     this.client.on('ready', () => {
-      // 输出连接成功日志
-      console.log('[Redis] 连接成功');
+      this._ready = true
+      this.logger.info('[Redis] 连接成功')
     });
+
+    // 监听 end（连接关闭）
+    this.client.on('end', () => {
+      this._ready = false
+    });
+  }
+
+  /**
+   * 当前 Redis 连接是否就绪
+   * 供 rbac.service / health.controller 等做降级判断
+   */
+  isReady(): boolean {
+    return this._ready
   }
 
   // 模块初始化生命周期钩子，在应用启动时调用
@@ -168,8 +186,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       // 尝试将字符串解析为 JSON 并类型断言为 T
       return JSON.parse(data) as T;
     } catch (e) {
-      // 解析失败时输出错误日志
-      console.error(`[Redis] JSON 解析失败, key: ${key}, error: ${(e as Error).message}`);
+      // 解析失败时输出错误日志（用 winston，不污染 stdout）
+      this.logger.warn(`[Redis] JSON 解析失败, key: ${key}, error: ${(e as Error).message}`);
       // 返回 null
       return null;
     }

@@ -1,5 +1,8 @@
 // 注入装饰器
-import { Injectable } from '@nestjs/common'
+import { Inject, Injectable } from '@nestjs/common'
+// nest-winston 提供的 Logger
+import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston'
+import { Logger as WinstonLogger } from 'winston'
 // 注入 Repository 装饰器
 import { InjectRepository } from '@nestjs/typeorm'
 // TypeORM Repository
@@ -45,6 +48,8 @@ export class AuditService {
   constructor(
     @InjectRepository(AuditLog)
     private readonly auditRepo: Repository<AuditLog>,
+    @Inject(WINSTON_MODULE_NEST_PROVIDER)
+    private readonly logger: WinstonLogger,
   ) {}
 
   /**
@@ -73,8 +78,11 @@ export class AuditService {
       await this.auditRepo.save(entry)
     } catch (err) {
       // 写入失败仅打日志，不影响主业务
-      // eslint-disable-next-line no-console
-      console.error('[Audit] 写入审计日志失败:', (err as Error).message)
+      // 用 winston 写入 error-{date}.log，便于告警系统采集
+      this.logger.error(`[Audit] 写入审计日志失败: ${(err as Error).message}`, {
+        action,
+        userId: ctx.userId,
+      })
     }
   }
 
@@ -106,8 +114,9 @@ export class AuditService {
       qb.andWhere('log.user_id = :userId', { userId: filters.userId })
     }
     if (filters?.username) {
+      // 用前缀匹配（username%）使索引可用；%username% 会全表扫描
       qb.andWhere('log.username LIKE :username', {
-        username: `%${filters.username}%`,
+        username: `${filters.username}%`,
       })
     }
     if (filters?.status !== undefined) {

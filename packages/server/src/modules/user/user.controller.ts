@@ -9,8 +9,10 @@ import {
   Body,
   // Req 装饰器，用于获取原生 Request 对象（取客户端 IP）
   Req,
+  // ForbiddenException 用于 Origin 校验失败的 403 响应
+  ForbiddenException,
   // UseGuards 守卫装饰器，用于请求拦截和验证；Res 响应对象装饰器；Param 路由参数装饰器
-  UseGuards, Res, Param,
+  UseGuards, Res, Param, Query,
 } from '@nestjs/common';
 // Express Request/Response 类型
 import type { Request, Response } from 'express';
@@ -40,14 +42,43 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { RefreshTokenGuard } from '../../common/guards/refresh-token.guard';
 // 忘记密码 DTO
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
+// M5 + M7：用户列表分页参数 DTO
+import { QueryUserListDto } from './dto/query-user-list.dto';
+// C7 修复：注入 ConfigService 读取 CORS 白名单用于 Origin 校验
+import { ConfigService } from '@nestjs/config';
 
 // Swagger 标签装饰器，将此控制器下的接口归类到 "用户管理模块" 分组
 @ApiTags('用户管理模块')
 // 控制器装饰器，设置路由前缀为 /user
 @Controller('user')
 export class UserController {
+  // 允许的 Origin 列表（从 CORS_ORIGINS 环境变量读，逗号分隔）
+  private readonly allowedOrigins: string[]
   // 构造函数注入用户服务实例，private readonly 使其成为类属性
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly configService: ConfigService,
+  ) {
+    this.allowedOrigins = this.configService.get<string[]>('CORS_ORIGINS') || []
+  }
+
+  /**
+   * C7 修复：CSRF 防御 - 检查 Origin 头是否在白名单内
+   * 仅对写操作生效（login/refresh/logout），避免跨站表单提交
+   * sameSite=strict 已能挡住大部分 CSRF，这是防御纵深的第二层
+   */
+  private assertSafeOrigin(req: Request): void {
+    const origin = req.headers['origin'] || req.headers['referer']
+    if (!origin) {
+      // 浏览器发起的请求必带 Origin；缺失可能是直接 API 调用，允许通过
+      // 如需更严，可改为 throw
+      return
+    }
+    const originUrl = Array.isArray(origin) ? origin[0] : origin
+    if (!this.allowedOrigins.includes(originUrl)) {
+      throw new ForbiddenException(`非法 Origin：${originUrl}`)
+    }
+  }
 
   // Swagger 接口描述：注册用户
   @ApiOperation({ summary: '注册用户' })
@@ -82,6 +113,8 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象，passthrough: true 表示不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
+    // C7: Origin 白名单校验（防 CSRF）
+    this.assertSafeOrigin(req)
     // 提取客户端 IP：优先取代理转发的 X-Forwarded-For，否则取 socket.remoteAddress
     // 兼容 Nginx/Cloudflare 等反代场景
     const ip =
@@ -100,7 +133,9 @@ export class UserController {
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true, // JS 无法读取 Cookie，核心安全配置，防止 XSS 攻击
       secure: isProd, // 生产环境开启 Secure 标志，仅通过 HTTPS 传输 Cookie
-      sameSite: 'lax', // 防止 CSRF 跨站请求伪造攻击
+      // C7 修复：sameSite 改 'strict' 阻止任何跨站请求携带 Cookie
+      // 注意：strict 在跨域跳转场景（如 SSO）会失效，本项目没有此场景故可放心使用
+      sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000, // Cookie 有效期 7 天（毫秒），与 refreshToken 有效期一致
       path: '/api/v1/user', // Cookie 生效路径，仅刷新和登出接口可携带此 Cookie
     });
@@ -119,9 +154,13 @@ export class UserController {
   async refresh(
     // CurrentUser 装饰器从 JWT 中解析获取当前用户信息
     @CurrentUser() user: any,
+    // Req 用于 Origin 校验
+    @Req() req: Request,
     // Res 装饰器获取 Express 响应对象，passthrough: true 不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
+    // C7: Origin 白名单校验（防 CSRF）
+    this.assertSafeOrigin(req)
     // 调用用户服务的 refreshToken 方法，传入 sessionId 定位到具体设备
     // sessionId 由 RefreshTokenGuard 从 JWT payload 中提取并挂到 req.user
     const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id, user.sessionId);
@@ -133,7 +172,7 @@ export class UserController {
     res.cookie('refresh_token', newRefreshToken, {
       httpOnly: true, // JS 无法读取，防止 XSS 攻击
       secure: isProd, // 生产环境仅通过 HTTPS 传输
-      sameSite: 'lax', // 防止 CSRF 攻击
+      sameSite: 'strict', // C7 修复：严格 sameSite 防 CSRF
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 天有效期（毫秒）
       path: '/api/v1/user', // Cookie 生效路径
     });
@@ -158,9 +197,12 @@ export class UserController {
     // 调用用户服务的 logout 方法，删除当前 session 的 RT 和会话元数据
     await this.userService.logout(user.id, user.sessionId);
     // 使用 res.clearCookie 清除浏览器中的 refresh_token Cookie
+    // C7 修复：与 set 时保持一致（含 secure）
+    const isProd = process.env.NODE_ENV === 'production'
     res.clearCookie('refresh_token', {
       httpOnly: true, // 与设置时保持一致的 httpOnly 标志
-      sameSite: 'lax', // 与设置时保持一致的 sameSite 标志
+      secure: isProd, // 必须与 set 时一致，否则生产环境浏览器无法清除
+      sameSite: 'strict', // 与设置时保持一致
       path: '/api/v1/user', // 指定要清除的 Cookie 路径
     });
     // 返回退出成功消息
@@ -218,10 +260,10 @@ export class UserController {
   @Permissions('user:list')
   // Get 路由装饰器，获取用户列表接口路径为 GET /user
   @Get()
-  // 查询所有用户方法：通过 @CurrentUser() 获取当前登录用户信息
-  findAll(@CurrentUser() user: any) {
-    // 调用用户服务的 findAll 方法返回所有用户列表
-    return this.userService.findAll();
+  // M5 + M7：使用 DTO 接分页参数；响应去掉 phone 字段
+  findAll(@Query() dto: QueryUserListDto) {
+    // 调用用户服务的 findAll 方法返回分页用户列表
+    return this.userService.findAll(dto.page ?? 1, dto.pageSize ?? 20);
   }
 
   // ===== 多设备会话管理接口 =====

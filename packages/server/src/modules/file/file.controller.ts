@@ -95,11 +95,12 @@ export class FileController {
   // 删除
   // 注册 DELETE /file/:id 路由，:id 为路由参数
   @Delete(':id')
-  @ApiOperation({ summary: '删除文件' })
+  @ApiOperation({ summary: '删除文件（仅本人或 admin）' })
   // 处理删除文件的请求，id 为从路由参数中获取的文件 ID
-  async remove(@Param('id') id: string) {
-    // 将 id 字符串转为数字后调用服务的删除方法
-    await this.fileService.deleteFile(+id);
+  async remove(@Param('id') id: string, @CurrentUser() user: any) {
+    // C8 修复：传入 currentUser 用于所有权校验
+    // admin 角色可删任意文件，其他用户只能删自己上传的
+    await this.fileService.deleteFile(+id, { id: user.id, roles: user.roles });
     // TransformInterceptor 自动包装为 {code: 0, msg, data} 格式
     return { msg: '删除成功' };
   }

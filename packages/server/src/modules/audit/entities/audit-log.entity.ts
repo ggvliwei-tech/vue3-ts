@@ -1,7 +1,6 @@
 // TypeORM 装饰器
 import {
   Column,
-  CreateDateColumn,
   Entity,
   Index,
   PrimaryGeneratedColumn,
@@ -55,7 +54,10 @@ export class AuditLog {
   detail: Record<string, any> | null
 
   // 创建时间（毫秒时间戳）
+  // 注：不能用 @CreateDateColumn，它会自动写入 new Date()，而 mysql2 无法把 Date
+  // 序列化为 bigint，MySQL 8 严格模式会抛 ER_TRUNCATED_WRONG_VALUE。
+  // 改为普通列，由 service 显式写入 Date.now()。
   @Index('idx_audit_time')
-  @CreateDateColumn({ type: 'bigint', name: 'createTime' })
+  @Column({ type: 'bigint', name: 'createTime' })
   createTime: number
 }

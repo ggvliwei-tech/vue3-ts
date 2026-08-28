@@ -10,6 +10,8 @@ import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 // 导入用户相关的 API 方法，此处使用 login 登录
 import { login } from '@/api/user'
+// M1：使用 Pinia store 统一管理 token / userInfo
+import { useAuthStore } from '@project/shared/stores/useAuthStore'
 
 // 获取路由器实例，用于页面跳转
 const router = useRouter()
@@ -17,6 +19,8 @@ const router = useRouter()
 const route = useRoute()
 // 创建表单实例的 ref 引用，用于调用表单验证方法
 const formRef = ref<FormInstance>()
+// 认证 store（M1）
+const authStore = useAuthStore()
 
 // 创建表单数据的响应式对象，包含用户名和密码字段
 const form = ref({
@@ -52,14 +56,23 @@ async function handleLogin() {
       username: form.value.username.trim(),
       password: form.value.password,
     })
-    // 将服务器返回的 accessToken 存储到 localStorage 中
+    // M1：统一写入 AuthStore（同时持久化到 sessionStorage）
+    // 旧的 localStorage 'token' / 'username' / 'roles' / 'permissions' 全部废弃
+    authStore.login({
+      accessToken: res.data.accessToken,
+      userInfo: {
+        id: res.data.userInfo.id,
+        username: res.data.userInfo.username,
+        status: res.data.userInfo.status,
+        roles: res.data.userInfo.roles ?? [],
+        permissions: res.data.userInfo.permissions ?? [],
+      },
+    })
+    // 兼容旧读取方：仍然写一份到 localStorage（避免 AdminLayout 等老代码读取 'username' / 'roles' 时崩溃）
     localStorage.setItem('token', res.data.accessToken)
-    // 将用户名也缓存到 localStorage，方便 AdminLayout 顶部展示当前登录人
     localStorage.setItem('username', res.data.userInfo.username)
-    // 缓存角色编码数组（用于前端路由 meta 权限校验）
-    localStorage.setItem('roles', JSON.stringify(res.data.userInfo.roles))
-    // 缓存权限码数组（用于按钮级权限控制）
-    localStorage.setItem('permissions', JSON.stringify(res.data.userInfo.permissions))
+    localStorage.setItem('roles', JSON.stringify(res.data.userInfo.roles ?? []))
+    localStorage.setItem('permissions', JSON.stringify(res.data.userInfo.permissions ?? []))
     // 显示登录成功消息提示
     ElMessage.success('登录成功')
     // 跳转到之前页面或默认的仪表盘页面

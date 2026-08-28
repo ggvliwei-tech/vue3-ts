@@ -8,11 +8,15 @@ import { useRouter, useRoute } from 'vue-router'
 import { showToast } from 'vant'
 // 从用户 API 模块中导入 login 登录函数
 import { login } from '@/api/user'
+// M1：使用 AuthStore 统一管理 token / userInfo
+import { useAuthStore } from '@project/shared/stores/useAuthStore'
 
 // 获取路由导航实例
 const router = useRouter()
 // 获取当前路由信息对象
 const route = useRoute()
+// 认证 store
+const authStore = useAuthStore()
 
 // 定义用户名输入框的响应式数据
 const username = ref('')
@@ -47,9 +51,27 @@ async function handleLogin() {
       username: username.value.trim(),
       password: password.value,
     })
-    // 登录成功后，将服务器返回的 accessToken 存储到 localStorage 中
+    // M1：统一写入 AuthStore
+    // 注：app 端 userInfo 不强制要求 roles/permissions，仅 admin 需要做按钮级权限
+    const userInfo = res.data.userInfo as {
+      id: number
+      username: string
+      status: number
+      roles?: string[]
+      permissions?: string[]
+    }
+    authStore.login({
+      accessToken: res.data.accessToken,
+      userInfo: {
+        id: userInfo.id,
+        username: userInfo.username,
+        status: userInfo.status,
+        roles: userInfo.roles ?? [],
+        permissions: userInfo.permissions ?? [],
+      },
+    })
+    // 兼容旧读取方
     localStorage.setItem('token', res.data.accessToken)
-    // 将用户名也缓存到 localStorage，方便"我的"页面展示
     localStorage.setItem('username', res.data.userInfo.username)
     // 弹出登录成功提示
     showToast('登录成功')

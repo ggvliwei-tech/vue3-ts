@@ -80,9 +80,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // 调用 jwtService 验证 Token 有效性
+      // 安全加固：显式指定 algorithms 防止 alg=none / RS256→HS256 攻击
       const payload = this.jwtService.verify(token, {
         // 使用配置文件中的 JWT_ACCESS_SECRET 作为密钥
         secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+        // 锁定算法白名单，与 JwtAuthGuard 保持一致
+        algorithms: ['HS256'],
       });
 
       // 安全加固：检查 Redis 黑名单（与 JwtAuthGuard 保持一致）

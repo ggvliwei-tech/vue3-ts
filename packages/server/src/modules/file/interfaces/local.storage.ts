@@ -65,11 +65,19 @@ export class LocalStorage implements FileStorage {
     };
   }
 
-  // 删除本地文件
+  // 删除本地文件（C8 修复：路径穿越防护）
   async delete(filePath: string): Promise<boolean> {
-    // 拼接文件的完整物理路径
+    // 1. 先 resolve 得到绝对路径
     const fullPath = path.resolve(this.baseDir, filePath);
-    // 如果文件存在，则删除
+    // 2. 校验解析后的路径仍在 baseDir 之内
+    //    防御 ../ 路径穿越：例如 filePath = '../../../etc/passwd'
+    //    path.resolve 会"信任"相对路径，需要额外校验
+    const normalizedBase = this.baseDir.endsWith(path.sep) ? this.baseDir : this.baseDir + path.sep
+    if (!fullPath.startsWith(normalizedBase)) {
+      // 静默失败，避免泄露 baseDir 路径信息
+      throw new Error('非法的文件路径')
+    }
+    // 3. 如果文件存在，则删除
     if (fs.existsSync(fullPath)) {
       fs.unlinkSync(fullPath);
     }

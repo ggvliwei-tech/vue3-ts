@@ -21,6 +21,10 @@
     "./utils": {
       "import": "./src/utils.ts",
       "types": "./src/utils.ts"
+    },
+    "./stores/useAuthStore": {
+      "import": "./src/stores/useAuthStore.ts",
+      "types": "./src/stores/useAuthStore.ts"
     }
   },
   "scripts": {
@@ -34,7 +38,9 @@
     "lodash-es": "^4.18.1"
   },
   "devDependencies": {
+    "pinia": "^4.0.2",
     "rimraf": "^6.0.0",
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.2",
+    "vue": "^3.5.41"
   }
 }

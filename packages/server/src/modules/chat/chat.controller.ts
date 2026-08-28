@@ -1,5 +1,5 @@
-// 导入 NestJS 核心装饰器：Controller、Post、Get、Body、Query、UseGuards、Request
-import { Controller, Post, Get, Body, Query, UseGuards, Request } from '@nestjs/common';
+// 导入 NestJS 核心装饰器：Controller、Post、Get、Body、Query、UseGuards、Request、Param
+import { Controller, Post, Get, Body, Query, UseGuards, Request, Param } from '@nestjs/common';
 // 导入 JWT 认证守卫
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 // 导入 Swagger 文档装饰器
@@ -10,6 +10,7 @@ import { ChatService } from './chat.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
+import { QueryRoomListDto } from './dto/query-room-list.dto';
 
 // Swagger 标签装饰器：在文档中归类为"聊天室"
 @ApiTags('聊天室')
@@ -38,9 +39,10 @@ export class ChatController {
   // GET /chat/rooms — 获取房间列表（分页）
   @Get('rooms')
   @ApiOperation({ summary: '获取房间列表' })
-  async getRoomList(@Query('page') page = 1, @Query('limit') limit = 20) {
+  // M5：使用 DTO 替换裸 @Query，自动校验 + 转换
+  async getRoomList(@Query() dto: QueryRoomListDto) {
     // 调用服务获取分页房间列表
-    return this.chatService.getRoomList(Number(page), Number(limit));
+    return this.chatService.getRoomList(dto.page ?? 1, dto.limit ?? 20);
   }
 
   // GET /chat/my-rooms — 获取我加入的房间
@@ -88,7 +90,9 @@ export class ChatController {
   // GET /chat/room/:id — 获取房间详情
   @Get('room/:id')
   @ApiOperation({ summary: '获取房间详情' })
-  async getRoomDetail(@Query('id') id: number) {
+  // M6 修复：路由参数应为 @Param，而非 @Query
+  // @Query('id') 在 path 中永远拿不到 id 值，导致 getRoomById 永远 NaN
+  async getRoomDetail(@Param('id') id: string) {
     // 调用服务获取房间详情
     return this.chatService.getRoomById(Number(id));
   }
@@ -96,7 +100,8 @@ export class ChatController {
   // POST /chat/room/:id/delete — 删除房间
   @Post('room/:id/delete')
   @ApiOperation({ summary: '删除房间' })
-  async deleteRoom(@Query('id') id: number) {
+  // M6 修复：同上
+  async deleteRoom(@Param('id') id: string) {
     // 调用服务删除房间
     await this.chatService.deleteRoom(Number(id));
     // 返回成功标识

@@ -26,6 +26,7 @@ import { UserRoleController } from './user-role/user-role.controller'
 import { UserRoleService } from './user-role/user-role.service'
 import { AuditAdminController } from './audit/audit-admin.controller'
 import { DashboardController } from './dashboard/dashboard.controller'
+import { DashboardService } from './dashboard/dashboard.service'
 
 /**
  * 管理端模块
@@ -64,6 +65,6 @@ import { DashboardController } from './dashboard/dashboard.controller'
     AuditAdminController,
     DashboardController,
   ],
-  providers: [RoleService, PermissionService, UserRoleService],
+  providers: [RoleService, PermissionService, UserRoleService, DashboardService],
 })
 export class AdminModule {}
