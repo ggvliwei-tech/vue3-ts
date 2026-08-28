@@ -283,7 +283,22 @@ INSERT IGNORE INTO `sys_permission` (`code`, `name`, `module`, `description`, `c
   ('book:delete',         '删除账本',     'book', '删除账本',                    UNIX_TIMESTAMP() * 1000),
   ('file:upload',         '上传文件',     'file', '上传文件',                    UNIX_TIMESTAMP() * 1000),
   ('file:delete',         '删除文件',     'file', '删除文件',                    UNIX_TIMESTAMP() * 1000),
-  ('ai:chat',             'AI 对话',      'ai',   '使用 AI 聊天功能',           UNIX_TIMESTAMP() * 1000);
+  ('ai:chat',             'AI 对话',      'ai',   '使用 AI 聊天功能',           UNIX_TIMESTAMP() * 1000),
+  -- ===== 以下为管理端模块新增的权限码（admin 模块启用） =====
+  ('role:list',                '查看角色列表',     'admin', '分页查询角色列表',            UNIX_TIMESTAMP() * 1000),
+  ('role:create',              '创建角色',         'admin', '创建新角色',                  UNIX_TIMESTAMP() * 1000),
+  ('role:update',              '修改角色',         'admin', '修改角色基本信息',            UNIX_TIMESTAMP() * 1000),
+  ('role:delete',              '删除角色',         'admin', '删除角色',                    UNIX_TIMESTAMP() * 1000),
+  ('role:assign-permission',   '分配角色权限',     'admin', '给角色绑定/解绑权限',         UNIX_TIMESTAMP() * 1000),
+  ('permission:list',          '查看权限列表',     'admin', '分页查询权限码',              UNIX_TIMESTAMP() * 1000),
+  ('permission:create',        '创建权限',         'admin', '新增权限码',                  UNIX_TIMESTAMP() * 1000),
+  ('permission:update',        '修改权限',         'admin', '修改权限名称/描述',            UNIX_TIMESTAMP() * 1000),
+  ('permission:delete',        '删除权限',         'admin', '删除权限码',                  UNIX_TIMESTAMP() * 1000),
+  ('user-role:list',           '查看用户角色',     'admin', '查询用户-角色绑定关系',        UNIX_TIMESTAMP() * 1000),
+  ('user-role:assign',         '分配用户角色',     'admin', '给用户绑定/解绑角色',         UNIX_TIMESTAMP() * 1000),
+  ('user-role:remove',         '移除用户角色',     'admin', '移除用户的指定角色',          UNIX_TIMESTAMP() * 1000),
+  ('admin:audit',              '管理端审计日志',   'admin', '查询管理端操作审计日志',      UNIX_TIMESTAMP() * 1000),
+  ('dashboard:view',           '查看管理仪表盘',   'admin', '查看管理后台首页统计数据',    UNIX_TIMESTAMP() * 1000);
 
 -- 16.4 角色-权限分配：admin 拥有全部权限
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
@@ -292,11 +307,11 @@ FROM `sys_role` r
 CROSS JOIN `sys_permission` p
 WHERE r.code = 'admin';
 
--- editor：除 user 模块外的所有权限
+-- editor：除 user / admin 模块外的所有权限（账本、文件、AI）
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
 SELECT r.id, p.id
 FROM `sys_role` r, `sys_permission` p
-WHERE r.code = 'editor' AND p.module <> 'user';
+WHERE r.code = 'editor' AND p.module NOT IN ('user', 'admin');
 
 -- user：仅基础读权限
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)

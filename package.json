@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:admin": "pnpm --filter admin dev",
-    "dev:app": "pnpm --filter app dev",
+    "dev:admin": "pnpm --filter admin dev --host",
+    "dev:app": "pnpm --filter app dev --host",
     "dev:server": "pnpm --filter @project/server start:dev",
     "dev:all": "pnpm -r --parallel dev",
     "dev:full": "concurrently \"pnpm dev:server\" \"pnpm dev:all\"",

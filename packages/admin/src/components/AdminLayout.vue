@@ -7,7 +7,7 @@ import { useRouter } from 'vue-router'
 // 从 element-plus 导入 ElMessage 用于显示消息提示
 import { ElMessage } from 'element-plus'
 // 从 element-plus 图标库显式导入需要的图标
-import { Monitor, UserFilled, User } from '@element-plus/icons-vue'
+import { Monitor, UserFilled, User, Avatar, Key, Document, Setting } from '@element-plus/icons-vue'
 // 导入用户相关的 API 方法，此处使用 logout 退出登录
 import { logout } from '@/api/user'
 
@@ -67,13 +67,38 @@ async function handleLogout() {
           <!-- 菜单文字 -->
           <span>仪表盘</span>
         </el-menu-item>
-        <!-- 用户管理菜单项，点击跳转到 /users -->
-        <el-menu-item index="/users">
-          <!-- UserFilled 图标 -->
-          <el-icon><UserFilled /></el-icon>
-          <!-- 菜单文字 -->
-          <span>用户管理</span>
-        </el-menu-item>
+
+        <!-- 业务管理分组 -->
+        <el-sub-menu index="biz">
+          <template #title>
+            <el-icon><UserFilled /></el-icon>
+            <span>业务管理</span>
+          </template>
+          <el-menu-item index="/users">
+            <el-icon><Avatar /></el-icon>
+            <span>用户管理</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <!-- 系统管理分组 -->
+        <el-sub-menu index="system">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>系统管理</span>
+          </template>
+          <el-menu-item index="/roles">
+            <el-icon><User /></el-icon>
+            <span>角色管理</span>
+          </el-menu-item>
+          <el-menu-item index="/permissions">
+            <el-icon><Key /></el-icon>
+            <span>权限管理</span>
+          </el-menu-item>
+          <el-menu-item index="/audit">
+            <el-icon><Document /></el-icon>
+            <span>审计日志</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 

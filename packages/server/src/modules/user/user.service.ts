@@ -234,6 +234,12 @@ export class UserService {
     // 登录成功，清除该用户的所有失败计数和锁定标记
     await this.throttlerService.clearFailures(loginDto.username);
 
+    // 清除遗留的强制下线黑名单：
+    //   - 之前的会话可能因踢人/禁用/密码重置/退出全部设备等原因被加入黑名单（TTL 900s）
+    //   - 用户主动重新登录意味着授权意愿明确，应立即清除黑名单
+    //   - 否则登录后所有受保护接口都会被 JwtAuthGuard 误判为「已在其他地方下线」
+    await this.redisService.del(`blacklist:token:${user.id}`)
+
     // 生成 sessionId 标识当前设备
     const sessionId = this.sessionService.newSessionId()
 

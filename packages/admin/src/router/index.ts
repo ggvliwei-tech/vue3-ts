@@ -53,11 +53,25 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '用户管理', permissions: ['user:list'] },
       },
       {
-        // 审计日志：需要 user:audit 权限码（仅 admin 可见）
+        // 角色管理：需要 role:list 权限码
+        path: 'roles',
+        name: 'RoleManage',
+        component: () => import('@/views/role/RoleManage.vue'),
+        meta: { title: '角色管理', permissions: ['role:list'] },
+      },
+      {
+        // 权限管理：需要 permission:list 权限码
+        path: 'permissions',
+        name: 'PermissionManage',
+        component: () => import('@/views/permission/PermissionManage.vue'),
+        meta: { title: '权限管理', permissions: ['permission:list'] },
+      },
+      {
+        // 审计日志（管理端）：需要 admin:audit 权限码
         path: 'audit',
         name: 'AuditLog',
         component: () => import('@/views/audit/AuditLog.vue'),
-        meta: { title: '审计日志', permissions: ['user:audit'] },
+        meta: { title: '审计日志', permissions: ['admin:audit', 'user:audit'] },
       },
     ],
   },

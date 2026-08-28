@@ -15,6 +15,7 @@ import { ChatModule } from './modules/chat/chat.module'; // 聊天对话模块
 import { SmsModule } from './modules/sms/sms.module'; // 短信模块
 import { AuthModule } from './modules/auth/auth.module'; // 鉴权模块，提供登录风控/限流
 import { AuditModule } from './modules/audit/audit.module'; // 审计日志模块
+import { AdminModule } from './modules/admin/admin.module'; // 管理后台模块（角色/权限/用户角色/审计/仪表盘）
 
 @Module({ // 根模块装饰器，负责组装所有全局依赖和配置
   imports: [ // 导入的模块列表
@@ -70,6 +71,7 @@ import { AuditModule } from './modules/audit/audit.module'; // 审计日志模�
     SmsModule, // 导入短信模块，处理短信验证码发送（独立路由 /sms/send-code）
     AuthModule, // 鉴权模块：登录限流/账号锁定
     AuditModule, // 审计日志模块：记录关键操作
+    AdminModule, // 管理后台模块：/admin/role /admin/permission /admin/user-role /admin/audit /admin/dashboard
     RbacModule // 导入 RBAC 模块（@Global()，提供给 JwtAuthGuard 等使用）
   ],
   providers: [ // 全局服务提供者列表
