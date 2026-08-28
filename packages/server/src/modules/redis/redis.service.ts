@@ -1,12 +1,12 @@
 // 从 @nestjs/common 导入 Injectable 可注入装饰器、OnModuleInit/OnModuleDestroy 生命周期钩子
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import type { LoggerService } from '@nestjs/common';
 // 从 @nestjs/config 导入配置服务，用于读取环境变量和配置文件
 import { ConfigService } from '@nestjs/config';
 // 导入 ioredis 库的 Redis 客户端类
 import Redis from 'ioredis';
-// nest-winston 日志
+// nest-winston provider token（注入对象为 nest-winston 适配的 NestJS LoggerService）
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
-import { Logger as WinstonLogger } from 'winston';
 
 // @Injectable() 装饰器使 RedisService 可被 NestJS 依赖注入容器注入
 @Injectable()
@@ -21,7 +21,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private configService: ConfigService,
     @Inject(WINSTON_MODULE_NEST_PROVIDER)
-    private readonly logger: WinstonLogger,
+    private readonly logger: LoggerService,
   ) {
     // 从配置服务中读取 REDIS_PASSWORD 环境变量
     const redisPassword = this.configService.get('REDIS_PASSWORD');
@@ -54,7 +54,8 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     // 监听 Redis 连接成功事件
     this.client.on('ready', () => {
       this._ready = true
-      this.logger.info('[Redis] 连接成功')
+      // NestJS LoggerService 标准方法，不依赖 winston 的 info()
+      this.logger.log('[Redis] 连接成功')
     });
 
     // 监听 end（连接关闭）
