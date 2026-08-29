@@ -10,8 +10,9 @@ import { showToast } from 'vant'
 import { getRoomMessages, type ChatMessage, type ChatMember } from '@/api/chat'
 // 从 WebSocket 工具模块中导入连接、断开、发送、加入、离开房间的函数
 import {
-  connectWebSocket, disconnectWebSocket, sendRoomMessage,
-  joinRoom, leaveRoom, type WSMessage, type WSEventHandlers,
+  connectWebSocket, clearWebSocketHandlers,
+  sendRoomMessage, joinRoom, leaveRoom,
+  type WSMessage, type WSEventHandlers,
 } from '@/utils/websocket'
 
 // 获取路由导航实例
@@ -274,9 +275,10 @@ async function handleSend() {
 // 返回按钮处理函数
 function handleBack() {
   // 通过 WebSocket 发送离开房间事件
-  leaveRoom(roomId.value)
-  // 断开 WebSocket 连接
-  disconnectWebSocket()
+  if (roomId.value) leaveRoom(roomId.value)
+  // 清空本组件绑定的全部 socket 事件监听（socket 是单例，仅解绑 handler，不 disconnect，
+  // 让 RoomList 等其他场景继续复用同一连接，避免反复握手）
+  clearWebSocketHandlers()
   // 返回上一页
   router.back()
 }
@@ -288,8 +290,11 @@ function toggleMemberPanel() {
 
 // 组件卸载时执行的清理函数
 onUnmounted(() => {
-  // 断开 WebSocket 连接
-  disconnectWebSocket()
+  // 主动告知服务端离开房间（避免服务端 rooms 一直挂着这个 socket）
+  if (roomId.value) leaveRoom(roomId.value)
+  // 清空本组件绑定的全部 socket 事件监听，防止下次进入同 socket 时累积重复 handler
+  // （socket 是单例，不 disconnect，避免 RoomList 等场景还要重新建连）
+  clearWebSocketHandlers()
 })
 
 // 从共享模块中导入日期格式化工具

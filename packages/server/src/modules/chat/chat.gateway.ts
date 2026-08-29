@@ -175,6 +175,23 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const rooms = Array.from(client.rooms);
     // 如果不在该房间，拒绝发送
     if (!rooms.includes(roomSocketId)) {
+      this.logger.warn(
+        `WS 发送被拒: 用户 ${user.username} 不在 Socket.IO 房间 ${roomId}`,
+      );
+      client.emit('error', { code: 403, msg: '您不在该房间中' });
+      return;
+    }
+
+    // 防御兜底：再校验一次 DB 成员关系
+    // 目的：防止 DB 写入失败 / 异步竞争导致 socket.join 成功但 DB 无成员
+    // 这种情况下表面 rooms 在，实际无权发送
+    const isDbMember = await this.chatService.isUserInRoom(user.sub, roomId);
+    if (!isDbMember) {
+      this.logger.warn(
+        `WS 发送被拒: 用户 ${user.username} 在房间 ${roomId} DB 无成员记录（socket.join 与 DB 写入不一致）`,
+      );
+      // 同时把客户端从 Socket.IO 房间踢出，避免下次再误判
+      client.leave(roomSocketId);
       client.emit('error', { code: 403, msg: '您不在该房间中' });
       return;
     }
