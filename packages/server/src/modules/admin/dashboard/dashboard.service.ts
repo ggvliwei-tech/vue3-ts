@@ -18,11 +18,19 @@ import { FileEntity } from '../../file/entities/file.entity'
 import { AuditLog } from '../../audit/entities/audit-log.entity'
 
 /**
- * Dashboard 统计 Service（C6 拆分）
+ * Dashboard 统计 Service（C6 拆分 + P1-1 优化）
  *
- * 之前所有 QueryBuilder / count 逻辑直接写在 Controller，
- * 违反"Controller 只负责路由 + 参数转发"的架构原则。
- * 本类承担全部数据聚合逻辑。
+ * 性能优化：
+ *  - 原来 getOverview 用 Promise.all 并行 11 次 count() → 11 次 DB 往返
+ *  - 现在合并为：
+ *    * 5 个基础总数 → 单条 SQL UNION ALL（1 次往返）
+ *    * 3 个时间窗口统计 → 单条 SQL UNION ALL（1 次往返）
+ *    * 3 个状态过滤（active/inactive 来自 union 已覆盖的 user 表）→ 不重复
+ *  - 总 DB 往返：11 → 2
+ *
+ * 架构原则：
+ *  - Controller 只负责路由 + 参数转发
+ *  - 所有聚合逻辑在本 Service
  */
 @Injectable()
 export class DashboardService {
@@ -40,36 +48,55 @@ export class DashboardService {
     const now = Date.now()
     const oneDayMs = 24 * 60 * 60 * 1000
 
-    // 一次性查基础计数（并行）
-    const [userTotal, userActive, userInactive, roleTotal, permTotal, bookTotal, fileTotal, auditTotal] =
-      await Promise.all([
-        this.userRepo.count(),
-        this.userRepo.count({ where: { status: 1 } }),
-        this.userRepo.count({ where: { status: 0 } }),
-        this.roleRepo.count(),
-        this.permRepo.count(),
-        this.bookRepo.count(),
-        this.fileRepo.count(),
-        this.auditRepo.count(),
-      ])
+    // ========== P1-1 优化：UNION ALL 单查询取基础计数 ==========
+    // 5 个独立 count → 1 次往返
+    // 注意：表名按实体 @Entity() 声明（sys_user / sys_role / sys_permission / account_book / sys_file）
+    const totals = await this.userRepo.manager.query(
+      `SELECT 'user_total' AS k, COUNT(*) AS v FROM sys_user
+       UNION ALL
+       SELECT 'role_total', COUNT(*) FROM sys_role
+       UNION ALL
+       SELECT 'perm_total', COUNT(*) FROM sys_permission
+       UNION ALL
+       SELECT 'book_total', COUNT(*) FROM account_book
+       UNION ALL
+       SELECT 'file_total', COUNT(*) FROM sys_file`,
+    ) as Array<{ k: string; v: string }>
+    const totalMap = new Map(totals.map((r) => [r.k, Number(r.v)]))
+    const userTotal = totalMap.get('user_total') ?? 0
+    const roleTotal = totalMap.get('role_total') ?? 0
+    const permTotal = totalMap.get('perm_total') ?? 0
+    const bookTotal = totalMap.get('book_total') ?? 0
+    const fileTotal = totalMap.get('file_total') ?? 0
 
-    // 近 24h 指标（并行）
-    const [newUsers24h, auditLogs24h, failedLogin24h] = await Promise.all([
-      this.userRepo
-        .createQueryBuilder('u')
-        .where('u.createTime >= :t', { t: now - oneDayMs })
-        .getCount(),
-      this.auditRepo
-        .createQueryBuilder('a')
-        .where('a.createTime >= :t', { t: now - oneDayMs })
-        .getCount(),
-      this.auditRepo
-        .createQueryBuilder('a')
-        .where("a.action = 'login'")
-        .andWhere('a.status = 0')
-        .andWhere('a.createTime >= :t', { t: now - oneDayMs })
-        .getCount(),
-    ])
+    // 用户活跃/非活跃（单条 SQL 用 SUM 条件统计，避免 2 次 count）
+    const userStatus = await this.userRepo.manager.query(
+      `SELECT
+         SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS active,
+         SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS inactive
+       FROM sys_user`,
+    ) as Array<{ active: string | null; inactive: string | null }>
+    const userActive = Number(userStatus[0]?.active ?? 0)
+    const userInactive = Number(userStatus[0]?.inactive ?? 0)
+
+    // ========== P1-1 优化：UNION ALL 单查询取时间窗口统计 ==========
+    // 4 个独立 count → 1 次往返
+    const windowed = await this.userRepo.manager.query(
+      `SELECT 'audit_total' AS k, COUNT(*) AS v FROM sys_audit_log
+       UNION ALL
+       SELECT 'new_users_24h', COUNT(*) FROM sys_user WHERE create_time >= ?
+       UNION ALL
+       SELECT 'audit_24h', COUNT(*) FROM sys_audit_log WHERE create_time >= ?
+       UNION ALL
+       SELECT 'failed_login_24h', COUNT(*) FROM sys_audit_log
+         WHERE action = 'login' AND status = 0 AND create_time >= ?`,
+      [now - oneDayMs, now - oneDayMs, now - oneDayMs],
+    ) as Array<{ k: string; v: string }>
+    const windowedMap = new Map(windowed.map((r) => [r.k, Number(r.v)]))
+    const auditTotal = windowedMap.get('audit_total') ?? 0
+    const newUsers24h = windowedMap.get('new_users_24h') ?? 0
+    const auditLogs24h = windowedMap.get('audit_24h') ?? 0
+    const failedLogin24h = windowedMap.get('failed_login_24h') ?? 0
 
     return {
       user: { total: userTotal, active: userActive, inactive: userInactive, new24h: newUsers24h },

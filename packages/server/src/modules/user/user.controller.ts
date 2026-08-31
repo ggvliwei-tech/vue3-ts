@@ -24,6 +24,8 @@ import {
   // ApiBearerAuth Swagger Bearer Token 认证标识装饰器
   ApiBearerAuth,
 } from '@nestjs/swagger';
+// P1-3：高频管理操作专用限流（防止恶意脚本批量踢人/封号）
+import { Throttle } from '@nestjs/throttler';
 // 用户服务，注入以调用业务逻辑方法
 import { UserService } from './user.service';
 // 注册用户 DTO，定义注册请求的数据结构和校验规则
@@ -217,6 +219,8 @@ export class UserController {
   // 双重守卫：先 JWT 认证注入 roles/permissions，再 PermissionsGuard 校验 user:kick 权限码
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('user:kick')
+  // P1-3：踢人操作专用限流 —— 60 秒内最多 5 次（防脚本批量踢人）
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post(':id/kick')
   // 强制下线方法：接收路由参数 userId、query 中的 sessionId（可选）以及当前用户信息
   async forceKick(
@@ -234,6 +238,8 @@ export class UserController {
   // Post 路由装饰器，切换状态接口路径为 POST /user/:id/toggle-status
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('user:toggle-status')
+  // P1-3：状态切换专用限流 —— 60 秒内最多 10 次（防脚本批量封号）
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/toggle-status')
   // 切换状态方法：接收路由参数 userId
   async toggleStatus(@Param('id') userId: string) {

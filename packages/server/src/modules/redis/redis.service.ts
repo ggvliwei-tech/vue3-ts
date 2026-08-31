@@ -109,10 +109,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.client.set(key, value);
   }
 
-  // 删除指定 key
-  async del(key: string): Promise<number> {
+  // 删除指定 key（支持批量删除）
+  async del(...keys: string[]): Promise<number> {
+    if (keys.length === 0) return 0
     // 调用 Redis DEL 命令删除 key，返回删除的数量
-    return this.client.del(key);
+    return this.client.del(...keys);
   }
 
   // 检查指定 key 是否存在

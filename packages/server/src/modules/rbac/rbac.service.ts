@@ -12,13 +12,13 @@ import { RoleEntity } from './entities/role.entity'
 import { PermissionEntity } from './entities/permission.entity'
 import { UserRoleEntity } from './entities/user-role.entity'
 import { RolePermissionEntity } from './entities/role-permission.entity'
-// Redis 服务（用于缓存）
-import { RedisService } from '../redis/redis.service'
+// 二级缓存服务（L1 进程内 + L2 Redis，含雪崩/击穿/穿透防护）
+import { CacheService } from '../redis/cache.service'
 
 // Redis 缓存 key 前缀
-const ROLE_CACHE_KEY = 'rbac:roles:'
-const PERM_CACHE_KEY = 'rbac:perms:'
-// 缓存有效期（10 分钟），配合权限变更可主动清除
+const ROLE_CACHE_PREFIX = 'rbac:roles:'
+const PERM_CACHE_PREFIX = 'rbac:perms:'
+// 缓存有效期（10 分钟），TTL 抖动 ±20% 防雪崩
 const CACHE_TTL = 10 * 60
 
 /**
@@ -49,39 +49,11 @@ export class RbacService {
     private readonly userRoleRepo: Repository<UserRoleEntity>,
     @InjectRepository(RolePermissionEntity)
     private readonly rolePermRepo: Repository<RolePermissionEntity>,
-    private readonly redisService: RedisService,
+    // 二级缓存服务（L1 + L2 + 雪崩/击穿/穿透防护）
+    private readonly cache: CacheService,
     @Inject(WINSTON_MODULE_NEST_PROVIDER)
     private readonly logger: WinstonLogger,
   ) {}
-
-  /**
-   * 读缓存，失败返回 null（不抛异常）
-   */
-  private async readCache(key: string): Promise<string[] | null> {
-    try {
-      const cached = await this.redisService.get(key)
-      if (!cached) return null
-      return JSON.parse(cached)
-    } catch (err) {
-      this.logger.warn(
-        `[Rbac] 缓存读取失败，降级到 DB: ${(err as Error).message}`,
-      )
-      return null
-    }
-  }
-
-  /**
-   * 写缓存，失败仅记日志（不影响主流程）
-   */
-  private async writeCache(key: string, value: unknown): Promise<void> {
-    try {
-      await this.redisService.setJson(key, value, CACHE_TTL)
-    } catch (err) {
-      this.logger.warn(
-        `[Rbac] 缓存写入失败: ${(err as Error).message}`,
-      )
-    }
-  }
 
   /**
    * 获取用户的所有角色编码（带缓存，Redis 故障时降级到 DB）
@@ -89,22 +61,24 @@ export class RbacService {
    * @returns 角色编码数组，如 ['admin', 'editor']
    */
   async getUserRoles(userId: number): Promise<string[]> {
-    const cacheKey = `${ROLE_CACHE_KEY}${userId}`
-    // 1. 查缓存（Redis 不可用时静默降级）
-    const cached = await this.readCache(cacheKey)
-    if (cached) return cached
-    // 2. 查 DB：user_role JOIN role
-    const rows = await this.userRoleRepo
-      .createQueryBuilder('ur')
-      .innerJoin(RoleEntity, 'r', 'r.id = ur.role_id')
-      .where('ur.user_id = :userId', { userId })
-      .andWhere('r.status = 1')
-      .select('r.code', 'code')
-      .getRawMany<{ code: string }>()
-    const codes = rows.map((r) => r.code)
-    // 3. 写缓存（失败仅记日志）
-    await this.writeCache(cacheKey, codes)
-    return codes
+    const cacheKey = `${ROLE_CACHE_PREFIX}${userId}`
+    // getOrLoad 内部处理：L1/L2 命中返回；未命中触发 loader（in-flight 去重）
+    return (
+      (await this.cache.getOrLoad<string[]>(
+        cacheKey,
+        { ttl: CACHE_TTL, prefix: ROLE_CACHE_PREFIX },
+        async () => {
+          const rows = await this.userRoleRepo
+            .createQueryBuilder('ur')
+            .innerJoin(RoleEntity, 'r', 'r.id = ur.role_id')
+            .where('ur.user_id = :userId', { userId })
+            .andWhere('r.status = 1')
+            .select('r.code', 'code')
+            .getRawMany<{ code: string }>()
+          return rows.map((r) => r.code)
+        },
+      )) ?? []
+    )
   }
 
   /**
@@ -146,22 +120,23 @@ export class RbacService {
    * @returns 权限码数组，如 ['user:list', 'book:create']
    */
   async getUserPermissions(userId: number): Promise<string[]> {
-    const cacheKey = `${PERM_CACHE_KEY}${userId}`
-    // 1. 查缓存
-    const cached = await this.readCache(cacheKey)
-    if (cached) return cached
-    // 2. 查 DB：user_role → role_permission → permission
-    const rows = await this.userRoleRepo
-      .createQueryBuilder('ur')
-      .innerJoin(RolePermissionEntity, 'rp', 'rp.role_id = ur.role_id')
-      .innerJoin(PermissionEntity, 'p', 'p.id = rp.permission_id')
-      .where('ur.user_id = :userId', { userId })
-      .select('p.code', 'code')
-      .getRawMany<{ code: string }>()
-    const codes = rows.map((r) => r.code)
-    // 3. 写缓存
-    await this.writeCache(cacheKey, codes)
-    return codes
+    const cacheKey = `${PERM_CACHE_PREFIX}${userId}`
+    return (
+      (await this.cache.getOrLoad<string[]>(
+        cacheKey,
+        { ttl: CACHE_TTL, prefix: PERM_CACHE_PREFIX },
+        async () => {
+          const rows = await this.userRoleRepo
+            .createQueryBuilder('ur')
+            .innerJoin(RolePermissionEntity, 'rp', 'rp.role_id = ur.role_id')
+            .innerJoin(PermissionEntity, 'p', 'p.id = rp.permission_id')
+            .where('ur.user_id = :userId', { userId })
+            .select('p.code', 'code')
+            .getRawMany<{ code: string }>()
+          return rows.map((r) => r.code)
+        },
+      )) ?? []
+    )
   }
 
   /**
@@ -170,15 +145,10 @@ export class RbacService {
    * Redis 不可用时静默忽略（缓存本来就没生效）
    */
   async clearUserCache(userId: number): Promise<void> {
-    try {
-      await Promise.all([
-        this.redisService.del(`${ROLE_CACHE_KEY}${userId}`),
-        this.redisService.del(`${PERM_CACHE_KEY}${userId}`),
-      ])
-    } catch (err) {
-      this.logger.warn(
-        `[Rbac] 缓存清除失败: ${(err as Error).message}`,
-      )
-    }
+    // 同步清 L1 + L2（失败仅记日志，由 CacheService 内部吞）
+    await this.cache.del(
+      `${ROLE_CACHE_PREFIX}${userId}`,
+      `${PERM_CACHE_PREFIX}${userId}`,
+    )
   }
 }

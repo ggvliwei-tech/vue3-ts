@@ -21,6 +21,7 @@ import { AuthModule } from './modules/auth/auth.module'; // 鉴权模块，提�
 import { AuditModule } from './modules/audit/audit.module'; // 审计日志模块
 import { AdminModule } from './modules/admin/admin.module'; // 管理后台模块（角色/权限/用户角色/审计/仪表盘）
 import { HealthModule } from './modules/health/health.module'; // 健康检查模块（K8s liveness/readiness 探针）
+import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 指标模块（/metrics 端点 + HTTP 自动埋点）
 
 @Module({ // 根模块装饰器，负责组装所有全局依赖和配置
   imports: [ // 导入的模块列表
@@ -71,7 +72,7 @@ import { HealthModule } from './modules/health/health.module'; // 健康检查�
         bigNumberStrings: false, // 关闭大数强制转字符串，保持数字类型
         // ========== M10：MySQL 连接池配置 ==========
         // 生产环境推荐：pool 大小 ≈ (CPU 核数 × 2) + 硬盘数
-        // 8C16G 单实例建议 20-30；过高会增加 DB 端 context switch
+        // 8C16G 单实例建议 20-30;过高会增加 DB 端 context switch
         extra: {
           connectionLimit: Number(configService.get('DB_POOL_SIZE') ?? 20),
           // 空闲连接保持时间（秒），低于 MySQL wait_timeout (默认 28800) 即可
@@ -95,6 +96,7 @@ import { HealthModule } from './modules/health/health.module'; // 健康检查�
     ]),
 
     HealthModule, // 健康检查模块（/health + /health/ready）
+    MetricsModule, // Prometheus 指标模块（/metrics）
     UserModule, // 导入用户模块，注册用户相关的控制器和服务
     AccountBookModule, // 导入账本模块，管理账本相关功能
     FileModule, // 导入文件模块，处理文件上传下载
