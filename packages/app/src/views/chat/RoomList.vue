@@ -96,9 +96,9 @@ import { formatDate } from '@project/shared'
   <div class="room-list-page">
     <!-- Vant 导航栏组件，标题显示为"聊天室"，右侧有添加图标 -->
     <van-nav-bar title="聊天室" left-arrow @click-left="router.back()">
-      <!-- 右侧插槽：放置添加房间图标按钮 -->
+      <!-- 右侧插槽：放置添加房间图标按钮；无 chat:room-create 权限时不渲染 -->
       <template #right>
-        <van-icon name="add-o" size="22" @click="showCreateRoomDialog" />
+        <van-icon v-permission="'chat:room-create'" name="add-o" size="22" @click="showCreateRoomDialog" />
       </template>
     </van-nav-bar>
 
@@ -115,8 +115,8 @@ import { formatDate } from '@project/shared'
         image="search"
         description="暂无聊天房间"
       >
-        <!-- 空状态下的创建按钮 -->
-        <van-button type="primary" size="small" round @click="showCreateRoomDialog">
+        <!-- 空状态下的创建按钮；无 chat:room-create 权限时不渲染 -->
+        <van-button v-permission="'chat:room-create'" type="primary" size="small" round @click="showCreateRoomDialog">
           创建第一个房间
         </van-button>
       </van-empty>

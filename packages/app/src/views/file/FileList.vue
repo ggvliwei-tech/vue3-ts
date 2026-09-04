@@ -300,8 +300,9 @@ onMounted(() => {
                   <span>{{ formatDate(item.createTime) }}</span>
                 </div>
               </div>
-              <!-- 删除图标按钮，位于卡片右上角 -->
+              <!-- 删除图标按钮，位于卡片右上角；无 file:delete 权限时不渲染 -->
               <van-icon
+                v-permission="'file:delete'"
                 name="delete-o"
                 class="file-delete"
                 @click="onDelete(item)"
@@ -311,7 +312,7 @@ onMounted(() => {
 
           <!-- 当列表为空且不在加载中时，显示空状态并包含上传按钮 -->
           <van-empty v-if="!loading && fileList.length === 0" description="暂无文件数据">
-            <van-button round type="primary" @click="triggerUpload">
+            <van-button v-permission="'file:upload'" round type="primary" @click="triggerUpload">
               上传文件
             </van-button>
           </van-empty>
@@ -319,8 +320,8 @@ onMounted(() => {
       </van-pull-refresh>
     </div>
 
-    <!-- 悬浮上传按钮 -->
-    <van-button round type="primary" class="upload-btn" @click="triggerUpload">
+    <!-- 悬浮上传按钮，无 file:upload 权限时不渲染 -->
+    <van-button v-permission="'file:upload'" round type="primary" class="upload-btn" @click="triggerUpload">
       <!-- 加号图标和文字 -->
       <van-icon name="plus" /> 上传文件
     </van-button>

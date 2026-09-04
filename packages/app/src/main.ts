@@ -17,6 +17,10 @@ import { setRefreshTokenCallback, setUnauthorizedCallback } from '@project/share
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 导入用户相关的 refreshToken 接口函数
 import { refreshToken } from '@/api/user'
+// 导入权限同步函数（从后端拉取最新 roles/permissions）
+import { syncPermissions } from '@/permission'
+// 导入 v-permission 按钮级权限指令
+import { permission as vPermission } from '@/directives/permission'
 
 // 导入 Vant 命令式 API 组件的样式文件（VantResolver 按需加载不会自动引入这些样式）
 // 导入 Dialog 对话框组件样式
@@ -72,5 +76,18 @@ setUnauthorizedCallback(() => {
   router.push('/login')
 })
 
-// 创建 Vue 应用实例，注册 Pinia 和路由插件，并挂载到 id 为 app 的 DOM 元素上
-createApp(App).use(pinia).use(router).mount('#app')
+// 创建 Vue 应用实例，注册 Pinia 和路由插件
+const app = createApp(App)
+app.use(pinia)
+app.use(router)
+// 注册 v-permission 指令，供页面做按钮级权限控制
+app.directive('permission', vPermission)
+
+// 挂载前先同步一次权限：
+// sessionStorage 里缓存的是上次登录时下发的权限，而 admin 后台随时可能改角色。
+// 先拉最新的 roles/permissions 再渲染，可避免首屏用陈旧权限渲染出已被撤销的入口。
+// syncPermissions 内部已吞掉异常（未登录直接返回，请求失败沿用本地缓存），不会阻塞挂载。
+syncPermissions().finally(() => {
+  // 挂载到 id 为 app 的 DOM 元素上
+  app.mount('#app')
+})

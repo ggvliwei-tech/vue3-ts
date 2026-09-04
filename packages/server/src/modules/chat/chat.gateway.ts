@@ -22,6 +22,8 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { RedisService } from '../redis/redis.service';
 // 用户服务，用于 status 校验
 import { UserService } from '../user/user.service';
+// RBAC 服务，用于 WS 连接时校验 chat:room 权限（RbacModule 为 @Global，无需在 ChatModule 中 import）
+import { RbacService } from '../rbac/rbac.service';
 
 // @WebSocketGateway() 装饰器声明此类为 WebSocket 网关，配置命名空间和跨域
 @WebSocketGateway({
@@ -50,6 +52,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chatService: ChatService,       // 注入聊天服务，用于房间管理和消息持久化
     private readonly redisService: RedisService,     // 注入 Redis 服务，用于黑名单检查
     private readonly userService: UserService,       // 注入用户服务，用于 status 校验
+    private readonly rbacService: RbacService,       // 注入 RBAC 服务，用于 WS 连接时的权限码校验
   ) {}
 
   // handleConnection 方法在客户端连接时自动触发
@@ -110,6 +113,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (user.status === 0) {
         this.logger.warn(`WS 连接被拒: 用户 ${user.username} 已被禁用`);
         client.emit('error', { code: 401, msg: '账号已被禁用，请联系管理员' });
+        client.disconnect();
+        return;
+      }
+
+      // RBAC 校验：WS 与 REST 走的是两条链路，REST 上的 PermissionsGuard 管不到这里。
+      // 没有 chat:room 权限的用户即使拿到合法 Token 也不能建立长连接，
+      // 否则前端隐藏入口 + REST 拦截仍可被直连 socket 绕过。
+      const permissions = await this.rbacService.getUserPermissions(payload.sub);
+      if (!permissions.includes('chat:room')) {
+        this.logger.warn(`WS 连接被拒: 用户 ${user.username} 缺少 chat:room 权限`);
+        client.emit('error', { code: 403, msg: '无聊天室访问权限' });
         client.disconnect();
         return;
       }

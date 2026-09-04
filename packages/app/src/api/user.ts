@@ -2,8 +2,8 @@
  * 用户相关 API 模块
  */
 
-// 从共享请求模块中导入 post 方法
-import { post } from '@project/shared/request'
+// 从共享请求模块中导入 get / post 方法
+import { get, post } from '@project/shared/request'
 
 // 定义登录请求参数的接口
 export interface LoginParams {
@@ -45,6 +45,10 @@ export interface LoginRes {
     username: string
     // 用户状态（如 0 禁用 1 启用）
     status: number
+    // 角色编码列表（后端登录时下发，用于 app 端权限渲染）
+    roles?: string[]
+    // 权限码列表（后端登录时下发，用于 app 端权限渲染）
+    permissions?: string[]
   }
 }
 
@@ -81,12 +85,31 @@ export function refreshToken() {
   return post<RefreshTokenRes>('/api/v1/user/refresh-token', undefined, { skipRefresh: true })
 }
 
+// 定义当前用户信息的接口（与后端 /user/profile 返回结构一致）
+export interface UserProfileRes {
+  // 用户 ID
+  id: number
+  // 用户名
+  username: string
+  // 用户状态（0 禁用 / 1 启用）
+  status: number
+  // 手机号
+  phone?: string
+  // 角色编码列表（由 admin 后台分配）
+  roles: string[]
+  // 权限码列表（由 admin 后台通过「角色-权限」分配）
+  permissions: string[]
+}
+
 /**
- * 获取当前登录用户信息
+ * 获取当前登录用户信息（含最新的 roles / permissions）
+ *
+ * 权限是随 token 一起在登录时下发的，但 admin 后台随时可能调整角色，
+ * 所以 app 启动时会再拉一次 profile 覆盖本地缓存，保证权限视图不陈旧。
  */
 export function getUserProfile() {
-  // 发送 GET 请求获取当前用户信息
-  return post<{ id: number; username: string; status: number }>('/api/v1/user/profile')
+  // 发送 GET 请求获取当前用户信息（后端为 @Get('profile')）
+  return get<UserProfileRes>('/api/v1/user/profile')
 }
 
 /**

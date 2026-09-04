@@ -281,9 +281,13 @@ INSERT IGNORE INTO `sys_permission` (`code`, `name`, `module`, `description`, `c
   ('book:create',         '创建账本',     'book', '创建新账本',                  UNIX_TIMESTAMP() * 1000),
   ('book:update',         '修改账本',     'book', '修改账本信息',                UNIX_TIMESTAMP() * 1000),
   ('book:delete',         '删除账本',     'book', '删除账本',                    UNIX_TIMESTAMP() * 1000),
+  ('file:list',           '查看文件',     'file', '查看文件列表',                UNIX_TIMESTAMP() * 1000),
   ('file:upload',         '上传文件',     'file', '上传文件',                    UNIX_TIMESTAMP() * 1000),
   ('file:delete',         '删除文件',     'file', '删除文件',                    UNIX_TIMESTAMP() * 1000),
   ('ai:chat',             'AI 对话',      'ai',   '使用 AI 聊天功能',           UNIX_TIMESTAMP() * 1000),
+  ('chat:room',           '进入聊天室',   'chat', '查看房间列表/成员/历史消息并收发消息', UNIX_TIMESTAMP() * 1000),
+  ('chat:room-create',    '创建聊天室',   'chat', '创建新的聊天房间',            UNIX_TIMESTAMP() * 1000),
+  ('chat:room-delete',    '删除聊天室',   'chat', '删除聊天房间',                UNIX_TIMESTAMP() * 1000),
   -- ===== 以下为管理端模块新增的权限码（admin 模块启用） =====
   ('role:list',                '查看角色列表',     'admin', '分页查询角色列表',            UNIX_TIMESTAMP() * 1000),
   ('role:create',              '创建角色',         'admin', '创建新角色',                  UNIX_TIMESTAMP() * 1000),
@@ -307,17 +311,17 @@ FROM `sys_role` r
 CROSS JOIN `sys_permission` p
 WHERE r.code = 'admin';
 
--- editor：除 user / admin 模块外的所有权限（账本、文件、AI）
+-- editor：除 user / admin 模块外的所有权限（账本、文件、AI、聊天室）
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
 SELECT r.id, p.id
 FROM `sys_role` r, `sys_permission` p
 WHERE r.code = 'editor' AND p.module NOT IN ('user', 'admin');
 
--- user：仅基础读权限
+-- user：仅基础读权限（账本查看 + AI 对话 + 进入聊天室；不含文件模块）
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
 SELECT r.id, p.id
 FROM `sys_role` r, `sys_permission` p
-WHERE r.code = 'user' AND p.code IN ('book:list', 'ai:chat');
+WHERE r.code = 'user' AND p.code IN ('book:list', 'ai:chat', 'chat:room');
 
 -- 16.5 默认把 admin 账号绑定到 admin 角色
 INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`, `createTime`)

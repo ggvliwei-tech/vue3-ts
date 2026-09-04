@@ -283,10 +283,10 @@ onMounted(() => {
             <van-cell :title="item.websiteName" :value="item.websiteUrl" is-link>
               <!-- 右侧操作按钮区域 -->
               <template #right-icon>
-                <!-- 编辑按钮，点击触发编辑函数 -->
-                <van-button size="small" type="primary" @click="onEdit(item)">编辑</van-button>
-                <!-- 删除按钮，点击触发删除函数 -->
-                <van-button size="small" type="danger" plain @click="onDelete(item)">删除</van-button>
+                <!-- 编辑按钮，点击触发编辑函数；无 book:update 权限时不渲染 -->
+                <van-button v-permission="'book:update'" size="small" type="primary" @click="onEdit(item)">编辑</van-button>
+                <!-- 删除按钮，点击触发删除函数；无 book:delete 权限时不渲染 -->
+                <van-button v-permission="'book:delete'" size="small" type="danger" plain @click="onDelete(item)">删除</van-button>
               </template>
             </van-cell>
             <!-- 账号单元格，显示登录账号，点击可复制 -->
@@ -313,8 +313,8 @@ onMounted(() => {
       </van-pull-refresh>
     </div>
 
-    <!-- 悬浮新增按钮 -->
-    <van-button round type="primary" class="add-btn" @click="onAdd">
+    <!-- 悬浮新增按钮，无 book:create 权限时不渲染 -->
+    <van-button v-permission="'book:create'" round type="primary" class="add-btn" @click="onAdd">
       <!-- 加号图标和文字 -->
       <van-icon name="plus" /> 新增账本
     </van-button>

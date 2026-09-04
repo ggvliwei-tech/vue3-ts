@@ -1,27 +1,23 @@
 <!-- script setup 块：使用 Composition API 语法糖定义个人中心页面逻辑 -->
 <script setup lang="ts">
-// 从 vue 中导入 ref（响应式引用）和 onMounted（生命周期钩子）
-import { ref, onMounted } from 'vue'
+// 从 vue 中导入 computed 计算属性
+import { computed } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
 // 从 vant 中导入 showDialog 对话框和 showToast 轻提示组件方法
 import { showDialog, showToast } from 'vant'
+// 导入全局认证 store，作为用户信息与权限的唯一来源
+import { useAuthStore } from '@project/shared/stores/useAuthStore'
 
 // 获取路由导航实例
 const router = useRouter()
+// 获取认证 store
+const authStore = useAuthStore()
 
-// 定义用户名的响应式数据
-const username = ref('')
-
-// 组件挂载时从缓存读取用户名
-onMounted(() => {
-  // 从 localStorage 中获取缓存的用户名
-  const cached = localStorage.getItem('username')
-  // 如果存在则赋值给响应式变量
-  if (cached) {
-    username.value = cached
-  }
-})
+// 用户名：直接读 store，避免与 localStorage 里的副本不一致
+const username = computed(() => authStore.userInfo?.username ?? '')
+// 当前账号的角色列表，展示给用户便于自查为什么某些功能不可见
+const roles = computed(() => authStore.roles)
 
 // 处理退出登录的函数
 function handleLogout() {
@@ -33,8 +29,13 @@ function handleLogout() {
   })
     // 用户点击确认按钮后的处理逻辑
     .then(() => {
-      // 从 localStorage 中清除 token，使用户变为未登录状态
+      // 清空 store 中的 token 与 userInfo（含 roles/permissions）
+      // 必须清干净：否则退出后刷新页面，sessionStorage 里残留的旧 token 和权限
+      // 会让应用误判为已登录，并用上一个账号的权限渲染功能入口
+      authStore.clearAuth()
+      // 同步清除兼容用的 localStorage 副本
       localStorage.removeItem('token')
+      localStorage.removeItem('username')
       // 弹出已退出登录的轻提示
       showToast('已退出登录')
       // 导航到登录页面
@@ -62,6 +63,10 @@ function handleLogout() {
         <van-icon name="user-circle-o" size="56" color="#1989fa" class="user-avatar" />
         <!-- 用户名 -->
         <div class="user-name">{{ username || '未登录' }}</div>
+        <!-- 角色标签：让用户知道自己当前是什么角色，可见功能由此决定 -->
+        <div v-if="roles.length" class="user-roles">
+          <van-tag v-for="role in roles" :key="role" type="primary" plain>{{ role }}</van-tag>
+        </div>
       </div>
 
       <!-- Vant 单元格组，inset 属性使卡片内缩显示 -->
@@ -136,6 +141,20 @@ function handleLogout() {
     color: #323233;
     // 字体粗细 500
     font-weight: 500;
+  }
+
+  // 角色标签容器样式
+  .user-roles {
+    // 顶部外边距 8px
+    margin-top: 8px;
+    // 使用 flex 布局横向排列标签
+    display: flex;
+    // 标签之间的间距 6px
+    gap: 6px;
+    // 标签过多时换行
+    flex-wrap: wrap;
+    // 水平居中
+    justify-content: center;
   }
 }
 </style>

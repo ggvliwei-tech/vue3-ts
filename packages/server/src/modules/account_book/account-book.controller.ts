@@ -20,6 +20,9 @@ import { CreateAccountBookDto } from './dto/create-account-book.dto';
 import { UpdateAccountBookDto } from './dto/update-account-book.dto';
 // 导入 JWT 认证守卫，用于保护需要登录的接口
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 导入权限码守卫与 @Permissions 装饰器（RBAC 接口级校验）
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 // 导入当前用户装饰器，用于获取 JWT 解析后的用户信息
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -27,8 +30,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('账号账本管理')
 // 在 Swagger 文档中显示 Bearer Token 认证标识
 @ApiBearerAuth()
-// 挂载 JWT 守卫，所有接口都必须登录
-@UseGuards(JwtAuthGuard)
+// 挂载 JWT 守卫 + 权限码守卫，所有接口都必须登录并通过 @Permissions 校验
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 // 设置路由前缀为 /account-book
 @Controller('account-book')
 export class AccountBookController {
@@ -39,6 +42,7 @@ export class AccountBookController {
   @Post()
   // 接口描述：新增账号账本记录
   @ApiOperation({ summary: '新增账号账本记录' })
+  @Permissions('book:create')
   // POST /account-book 路由，接收 CreateAccountBookDto 作为请求体
   create(@Body() createDto: CreateAccountBookDto, @CurrentUser() user: any) {
     // 调用服务层创建方法，传入 DTO 和当前用户 ID
@@ -49,6 +53,7 @@ export class AccountBookController {
   @Get()
   // 接口描述：分页查询所有账本
   @ApiOperation({ summary: '分页查询所有账本' })
+  @Permissions('book:list')
   // GET /account-book 路由，支持分页参数
   findAll(
     @Query('page') page = 1,     // 页码，默认第 1 页
@@ -63,6 +68,7 @@ export class AccountBookController {
   @Get(':id')
   // 接口描述：根据 ID 查询单条
   @ApiOperation({ summary: '根据ID查询单条' })
+  @Permissions('book:list')
   // GET /account-book/:id 路由，根据 ID 查询
   findOne(@Param('id') id: string, @CurrentUser() user: any) {
     // 调用服务层查询方法，传入 ID（转为数字）和用户 ID
@@ -73,6 +79,7 @@ export class AccountBookController {
   @Patch(':id')
   // 接口描述：修改账本记录
   @ApiOperation({ summary: '修改账本记录' })
+  @Permissions('book:update')
   // PATCH /account-book/:id 路由，部分更新
   update(
     @Param('id') id: string,                        // 路由参数，记录 ID
@@ -87,6 +94,7 @@ export class AccountBookController {
   @Delete(':id')
   // 接口描述：删除账本记录
   @ApiOperation({ summary: '删除账本记录' })
+  @Permissions('book:delete')
   // DELETE /account-book/:id 路由，删除记录
   remove(@Param('id') id: string, @CurrentUser() user: any) {
     // 调用服务层删除方法，传入 ID（转为数字）和用户 ID

@@ -2,6 +2,9 @@
 import { Controller, Post, Get, Body, Query, UseGuards, Request, Param } from '@nestjs/common';
 // 导入 JWT 认证守卫
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 导入权限码守卫与 @Permissions 装饰器（RBAC 接口级校验）
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 // 导入 Swagger 文档装饰器
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 // 导入聊天服务
@@ -16,8 +19,8 @@ import { QueryRoomListDto } from './dto/query-room-list.dto';
 @ApiTags('聊天室')
 // Swagger Bearer 认证装饰器：显示 token 输入框
 @ApiBearerAuth()
-// JWT 认证守卫：所有接口需登录
-@UseGuards(JwtAuthGuard)
+// JWT 认证守卫 + 权限码守卫：所有接口需登录，并按方法上的 @Permissions 校验权限
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 // 控制器装饰器：设置 chat 为路由前缀（全局前缀 api/v1 在 main.ts 配置）
 @Controller('chat')
 // 聊天控制器类：处理所有聊天室 REST API 请求
@@ -30,6 +33,7 @@ export class ChatController {
   // POST /chat/room — 创建房间
   @Post('room')
   @ApiOperation({ summary: '创建聊天房间' })
+  @Permissions('chat:room-create')
   async createRoom(@Body() dto: CreateRoomDto, @Request() req) {
     // 调用服务创建房间，传入创建者信息
     // TransformInterceptor 会自动包装为 { code: 0, msg: '请求成功', data: room }
@@ -39,6 +43,7 @@ export class ChatController {
   // GET /chat/rooms — 获取房间列表（分页）
   @Get('rooms')
   @ApiOperation({ summary: '获取房间列表' })
+  @Permissions('chat:room')
   // M5：使用 DTO 替换裸 @Query，自动校验 + 转换
   async getRoomList(@Query() dto: QueryRoomListDto) {
     // 调用服务获取分页房间列表
@@ -48,6 +53,7 @@ export class ChatController {
   // GET /chat/my-rooms — 获取我加入的房间
   @Get('my-rooms')
   @ApiOperation({ summary: '获取我加入的房间' })
+  @Permissions('chat:room')
   async getMyRooms(@Request() req) {
     // 调用服务获取当前用户的房间列表
     return this.chatService.getUserRooms(req.user.sub);
@@ -56,6 +62,7 @@ export class ChatController {
   // POST /chat/join — 加入房间
   @Post('join')
   @ApiOperation({ summary: '加入聊天房间' })
+  @Permissions('chat:room')
   async joinRoom(@Body() dto: JoinRoomDto, @Request() req) {
     // 调用服务加入房间
     return this.chatService.joinRoom(dto.roomId, req.user.sub, req.user.username);
@@ -64,6 +71,7 @@ export class ChatController {
   // POST /chat/leave — 离开房间
   @Post('leave')
   @ApiOperation({ summary: '离开聊天房间' })
+  @Permissions('chat:room')
   async leaveRoom(@Body() dto: JoinRoomDto, @Request() req) {
     // 调用服务离开房间
     await this.chatService.leaveRoom(dto.roomId, req.user.sub);
@@ -74,6 +82,7 @@ export class ChatController {
   // GET /chat/members — 获取房间成员列表
   @Get('members')
   @ApiOperation({ summary: '获取房间成员列表' })
+  @Permissions('chat:room')
   async getMembers(@Query('roomId') roomId: number) {
     // 调用服务获取成员列表
     return this.chatService.getRoomMembers(Number(roomId));
@@ -82,6 +91,7 @@ export class ChatController {
   // GET /chat/messages — 获取房间历史消息
   @Get('messages')
   @ApiOperation({ summary: '获取房间历史消息' })
+  @Permissions('chat:room')
   async getMessages(@Query() dto: QueryMessagesDto) {
     // 调用服务获取分页消息列表
     return this.chatService.getMessages(dto);
@@ -90,6 +100,7 @@ export class ChatController {
   // GET /chat/room/:id — 获取房间详情
   @Get('room/:id')
   @ApiOperation({ summary: '获取房间详情' })
+  @Permissions('chat:room')
   // M6 修复：路由参数应为 @Param，而非 @Query
   // @Query('id') 在 path 中永远拿不到 id 值，导致 getRoomById 永远 NaN
   async getRoomDetail(@Param('id') id: string) {
@@ -100,6 +111,7 @@ export class ChatController {
   // POST /chat/room/:id/delete — 删除房间
   @Post('room/:id/delete')
   @ApiOperation({ summary: '删除房间' })
+  @Permissions('chat:room-delete')
   // M6 修复：同上
   async deleteRoom(@Param('id') id: string) {
     // 调用服务删除房间

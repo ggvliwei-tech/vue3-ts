@@ -1,38 +1,28 @@
 <!-- script setup 块：使用 Composition API 语法糖定义首页逻辑 -->
 <script setup lang="ts">
+// 从 vue 中导入 computed 计算属性
+import { computed } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
-// 从 vant 中导入 showToast 轻提示组件方法
-import { showToast } from 'vant'
+// 导入首页功能入口配置与权限判断工具
+import { HOME_ENTRIES, hasAnyPermission } from '@/permission'
+import type { HomeEntry } from '@/permission'
 
 // 获取路由导航实例
 const router = useRouter()
 
-// 定义首页功能宫格数据数组，每个对象包含文字、图标和路由
-const gridItems = [
-  // 账本功能项，点击跳转到账本列表页面
-  { text: '账本', icon: 'balance-o', route: '/account-book' },
-  // 文件功能项，点击跳转到文件管理页面
-  { text: '文件', icon: 'notes-o', route: '/file-list' },
-  // AI 功能项，点击跳转到 AI 聊天页面
-  { text: 'AI', icon: 'chat', route: '/ai-chat' },
-  // 聊天室功能项，点击跳转到聊天室列表页面
-  { text: '聊天室', icon: 'comment-o', route: '/rooms' },
-]
+// 按当前用户权限过滤功能入口：
+// 入口配置在 @/permission 中集中声明，权限由 admin 后台的「角色-权限」决定，
+// 没有权限的功能直接不渲染，而不是点进去再被后端 403 拦下。
+// 用 computed 而非常量，是为了在 syncPermissions 刷新权限后自动重新渲染。
+const gridItems = computed<HomeEntry[]>(() =>
+  HOME_ENTRIES.filter((entry) => hasAnyPermission(entry.permissions)),
+)
 
-// 宫格项点击事件处理函数，接收被点击项的索引
-function onGridClick(index: number) {
-  // 根据索引获取对应的宫格项数据
-  const item = gridItems[index]
-  // 如果该项配置了路由
-  if (item.route) {
-    // 导航到对应的路由页面
-    router.push(item.route)
-  // 如果该项没有配置路由
-  } else {
-    // 弹出轻提示显示功能名称
-    showToast(item.text)
-  }
+// 宫格项点击事件处理函数，接收被点击项数据
+function onGridClick(item: HomeEntry) {
+  // 导航到对应的路由页面
+  router.push(item.route)
 }
 </script>
 
@@ -45,17 +35,20 @@ function onGridClick(index: number) {
 
     <!-- 首页内容区域 -->
     <div class="home-content">
-      <!-- Vant 宫格组件，设置为 4 列，不显示边框 -->
-      <van-grid :column-num="4" :border="false">
-        <!-- 遍历宫格数据数组，渲染每个宫格项 -->
+      <!-- 有可用功能时渲染宫格，设置为 4 列，不显示边框 -->
+      <van-grid v-if="gridItems.length" :column-num="4" :border="false">
+        <!-- 遍历过滤后的功能入口，渲染每个宫格项 -->
         <van-grid-item
-          v-for="(item, index) in gridItems"
-          :key="index"
+          v-for="item in gridItems"
+          :key="item.route"
           :icon="item.icon"
           :text="item.text"
-          @click="onGridClick(index)"
+          @click="onGridClick(item)"
         />
       </van-grid>
+
+      <!-- 一个功能都没有权限时的兜底提示，避免首页出现大片空白 -->
+      <van-empty v-else description="暂无可用功能，请联系管理员分配权限" />
     </div>
   </div>
 </template>

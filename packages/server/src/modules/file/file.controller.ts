@@ -17,6 +17,9 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileService } from './file.service';
 // 导入 JWT 认证守卫
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+// 导入权限码守卫与 @Permissions 装饰器（RBAC 接口级校验）
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 // 导入 Swagger 认证标识和操作装饰器
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
@@ -25,7 +28,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 // Swagger 标签
 @ApiTags('文件管理')
 // 定义路由前缀为 /file，所有该控制器下的接口都会以 /file 开头
-@UseGuards(JwtAuthGuard) // 控制器级别守卫，所有接口均需登录
+// 控制器级别守卫：所有接口均需登录 + 通过 @Permissions 声明的权限码校验
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth() // Swagger 显示 Bearer Token 输入框
 @Controller('file')
 export class FileController {
@@ -35,6 +39,7 @@ export class FileController {
   // ========== 文件列表（分页） ==========
   @Get()
   @ApiOperation({ summary: '分页查询文件列表' })
+  @Permissions('file:list')
   async findAll(
     @Query('page') page = 1, // 页码参数，默认值为 1
     @Query('limit') limit = 10, // 每页数量参数，默认值为 10
@@ -46,6 +51,7 @@ export class FileController {
   // 单文件（原有）
   // 注册 POST /file/image 路由
   @Post('image')
+  @Permissions('file:upload')
   // 注册单文件上传拦截器，拦截字段名为 'file'，限制文件大小 5MB
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }),
@@ -63,6 +69,7 @@ export class FileController {
   // ========== 多文件上传 ==========
   // 注册 POST /file/images 路由
   @Post('images')
+  @Permissions('file:upload')
   // 注册多文件上传拦截器
   @UseInterceptors(
     FilesInterceptor(
@@ -96,6 +103,7 @@ export class FileController {
   // 注册 DELETE /file/:id 路由，:id 为路由参数
   @Delete(':id')
   @ApiOperation({ summary: '删除文件（仅本人或 admin）' })
+  @Permissions('file:delete')
   // 处理删除文件的请求，id 为从路由参数中获取的文件 ID
   async remove(@Param('id') id: string, @CurrentUser() user: any) {
     // C8 修复：传入 currentUser 用于所有权校验

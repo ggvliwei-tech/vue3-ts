@@ -248,7 +248,9 @@ export class UserController {
   }
 
   // Swagger 接口描述：获取当前登录用户信息
-  @ApiOperation({ summary: '获取当前用户信息' })
+  // findById 已附带 roles / permissions（实时查 RbacService，管理端改角色后会清缓存），
+  // 因此前端拉一次 profile 就能同步到最新权限，无需重新登录。
+  @ApiOperation({ summary: '获取当前用户信息（含角色与权限码）' })
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('profile')
