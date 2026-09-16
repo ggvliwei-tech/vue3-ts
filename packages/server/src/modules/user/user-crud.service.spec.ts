@@ -28,18 +28,30 @@ import { AuditEvents } from '../audit/audit.events'
 import * as bcrypt from 'bcrypt'
 import { QueryFailedError } from 'typeorm'
 
+// findAll 走 createQueryBuilder 链式调用，mock 需支持链式返回自身
+const mockQb = {
+  select: jest.fn().mockReturnThis(),
+  orderBy: jest.fn().mockReturnThis(),
+  skip: jest.fn().mockReturnThis(),
+  take: jest.fn().mockReturnThis(),
+  andWhere: jest.fn().mockReturnThis(),
+  getManyAndCount: jest.fn(),
+}
+
 const mockUserRepo = {
   findOne: jest.fn(),
   findOneBy: jest.fn(),
   find: jest.fn(),
-  findAndCount: jest.fn(async () => [[], 0]),
-  create: jest.fn((dto) => dto),
-  save: jest.fn(async (user) => ({ id: 1, ...user })),
+  findAndCount: jest.fn(),
+  createQueryBuilder: jest.fn(() => mockQb),
+  create: jest.fn((dto: any) => dto),
+  save: jest.fn(async (user: any) => ({ id: 1, ...user })),
 }
 
 const mockRbacService = {
   getUserRoles: jest.fn(async () => ['admin']),
   getUserPermissions: jest.fn(async () => ['user:list', 'user:create']),
+  getRolesByUserIds: jest.fn(async () => new Map<number, string[]>()),
   clearUserCache: jest.fn(async () => undefined),
 }
 
@@ -100,9 +112,11 @@ describe('UserCrudService', () => {
 
     it('数据库唯一约束冲突（1062）应兜底抛 ConflictException', async () => {
       mockUserRepo.findOne.mockResolvedValue(null)
-      const driverErr = { errno: 1062, code: 'ER_DUP_ENTRY' }
-      const queryErr: any = new QueryFailedError('INSERT ...', [], driverErr)
-      queryErr.driverError = driverErr
+      const driverErr = Object.assign(new Error('ER_DUP_ENTRY'), {
+        errno: 1062,
+        code: 'ER_DUP_ENTRY',
+      })
+      const queryErr = new QueryFailedError('INSERT ...', [], driverErr)
       mockUserRepo.save.mockRejectedValueOnce(queryErr)
 
       await expect(service.create(dto as any)).rejects.toThrow(ConflictException)
@@ -128,28 +142,47 @@ describe('UserCrudService', () => {
   })
 
   describe('findAll', () => {
-    it('查询时不返回 password 字段（通过 select 控制）', async () => {
-      // M7：findAll 改用 findAndCount，返回 {list, total, page, pageSize}
-      mockUserRepo.findAndCount.mockResolvedValueOnce([
+    it('查询时不返回 password / phone 字段（通过 select 控制）', async () => {
+      mockQb.getManyAndCount.mockResolvedValueOnce([
         [{ id: 1, username: 'a', status: 1, createTime: 1 }],
         1,
       ])
+      mockRbacService.getRolesByUserIds.mockResolvedValueOnce(
+        new Map<number, string[]>([[1, ['admin']]]),
+      )
+
       const result = await service.findAll(1, 20)
+
       expect(result.list).toHaveLength(1)
       expect(result.total).toBe(1)
       expect(result.page).toBe(1)
       expect(result.pageSize).toBe(20)
-      // 验证 findAndCount 调用时显式排除了 password 且不含 phone
-      expect(mockUserRepo.findAndCount).toHaveBeenCalledWith(
-        expect.objectContaining({
-          select: expect.objectContaining({
-            id: true, username: true, status: true, createTime: true,
-          }),
-        }),
-      )
-      const selectArg = mockUserRepo.findAndCount.mock.calls[0][0].select
-      expect(selectArg).not.toHaveProperty('password')
-      expect(selectArg).not.toHaveProperty('phone')
+      // 角色通过单次 batch SQL 挂载，避免 N+1
+      expect(result.list[0].roles).toEqual(['admin'])
+      expect(mockRbacService.getRolesByUserIds).toHaveBeenCalledWith([1])
+
+      // select 白名单不含 password / phone（PII 不应回传普通列表）
+      const selected = mockQb.select.mock.calls[0][0] as string[]
+      expect(selected).toEqual(['u.id', 'u.username', 'u.status', 'u.createTime'])
+      expect(selected).not.toContain('u.password')
+      expect(selected).not.toContain('u.phone')
+
+      // 分页参数正确换算
+      expect(mockQb.skip).toHaveBeenCalledWith(0)
+      expect(mockQb.take).toHaveBeenCalledWith(20)
+    })
+
+    it('传入 keyword / status 时追加 andWhere 条件', async () => {
+      mockQb.getManyAndCount.mockResolvedValueOnce([[], 0])
+
+      await service.findAll(2, 10, { keyword: 'ali', status: 1 })
+
+      expect(mockQb.andWhere).toHaveBeenCalledWith('u.username LIKE :keyword', {
+        keyword: '%ali%',
+      })
+      expect(mockQb.andWhere).toHaveBeenCalledWith('u.status = :status', { status: 1 })
+      expect(mockQb.skip).toHaveBeenCalledWith(10)
+      expect(mockQb.take).toHaveBeenCalledWith(10)
     })
   })
 

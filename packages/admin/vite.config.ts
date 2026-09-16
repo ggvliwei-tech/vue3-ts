@@ -69,11 +69,6 @@ export default defineConfig({
       },
     },
   },
-  build: {
-    rollupOptions: {
-      external: ['@project/shared'],
-    },
-  },
   optimizeDeps: {
     include: ['@project/shared'],
   },

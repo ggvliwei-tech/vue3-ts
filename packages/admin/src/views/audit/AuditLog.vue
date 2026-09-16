@@ -318,7 +318,7 @@ onMounted(loadList)
         </el-table-column>
         <el-table-column label="操作" width="80" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" link @click="handleViewDetail(row)">
+            <el-button type="primary" size="small" link @click="handleViewDetail(row as AuditLogItem)">
               详情
             </el-button>
           </template>

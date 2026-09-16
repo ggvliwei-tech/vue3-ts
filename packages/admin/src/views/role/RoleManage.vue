@@ -4,7 +4,7 @@
  * - 角色列表 / 新建 / 编辑 / 删除 / 配置权限
  * - 权限码：role:list / role:create / role:update / role:delete / role:assign-permission
  */
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
   listRoles,
@@ -39,6 +39,17 @@ const editForm = reactive<CreateRoleParams & { status: number }>({
   description: '',
   status: 1,
   permissionCodes: [],
+})
+
+// el-input 绑定的是字符串，而 CreateRoleParams.permissionCodes 是 string[]，此处做逗号分隔的双向转换
+const permissionCodesText = computed({
+  get: () => (editForm.permissionCodes ?? []).join(','),
+  set: (val: string) => {
+    editForm.permissionCodes = val
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  },
 })
 
 const editRules: FormRules = {
@@ -272,13 +283,13 @@ onMounted(loadList)
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-            <el-button type="warning" size="small" @click="handleConfigPerm(row)">配置权限</el-button>
+            <el-button type="primary" size="small" @click="handleEdit(row as Role)">编辑</el-button>
+            <el-button type="warning" size="small" @click="handleConfigPerm(row as Role)">配置权限</el-button>
             <el-button
               type="danger"
               size="small"
               :disabled="['admin', 'user', 'editor'].includes(row.code)"
-              @click="handleDelete(row)"
+              @click="handleDelete(row as Role)"
             >
               删除
             </el-button>
@@ -328,7 +339,7 @@ onMounted(loadList)
         </el-form-item>
         <el-form-item v-if="editMode === 'create'" label="初始权限">
           <el-input
-            v-model="editForm.permissionCodes"
+            v-model="permissionCodesText"
             placeholder="可选，逗号分隔，如 user:list,book:create"
           />
           <div class="form-tip">多个权限码用英文逗号分隔，不填则不绑定任何权限</div>

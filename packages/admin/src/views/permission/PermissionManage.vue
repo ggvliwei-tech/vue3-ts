@@ -234,8 +234,8 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-            <el-button type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+            <el-button type="primary" size="small" @click="handleEdit(row as Permission)">编辑</el-button>
+            <el-button type="danger" size="small" @click="handleDelete(row as Permission)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
