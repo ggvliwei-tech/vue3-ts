@@ -10,7 +10,8 @@
 
 // 从共享模块中导入 getBaseURL 函数
 import { getBaseURL } from '@project/shared'
-import { useAuthStore } from '@project/shared/stores/useAuthStore'
+// 认证状态统一从 auth-storage 读取
+import { getToken } from '@project/shared/auth-storage'
 
 // 定义流式回调函数的接口
 export interface StreamCallbacks {
@@ -82,16 +83,13 @@ async function consume(
 }
 
 /**
- * 从 AuthStore 取 token，若 store 未注入（极少情况：单元测试）则回退到 localStorage
+ * 取当前 token：显式传入优先，否则从统一存储层读取
+ *
+ * 不再经由 AuthStore：SSE 可能在任何上下文被调用，而 pinia 未激活时
+ * useAuthStore() 会直接抛错；统一存储层则在任何环境都能安全读取。
  */
 function resolveToken(explicit?: string): string {
-  if (explicit) return explicit
-  try {
-    const store = useAuthStore()
-    return store.token || ''
-  } catch {
-    return localStorage.getItem('token') || ''
-  }
+  return explicit || getToken()
 }
 
 /**

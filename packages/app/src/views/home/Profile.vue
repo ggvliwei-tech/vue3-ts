@@ -8,6 +8,10 @@ import { useRouter } from 'vue-router'
 import { showDialog, showToast } from 'vant'
 // 导入全局认证 store，作为用户信息与权限的唯一来源
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
+// 统一登出清理（同时通知其他标签页）
+import { notifyLogout } from '@project/shared/token-refresh'
+// 调用后端登出接口，吊销 refresh token
+import { logout } from '@/api/user'
 
 // 获取路由导航实例
 const router = useRouter()
@@ -28,14 +32,18 @@ function handleLogout() {
     showCancelButton: true,
   })
     // 用户点击确认按钮后的处理逻辑
-    .then(() => {
-      // 清空 store 中的 token 与 userInfo（含 roles/permissions）
-      // 必须清干净：否则退出后刷新页面，sessionStorage 里残留的旧 token 和权限
+    .then(async () => {
+      // 通知服务端吊销 refresh token、销毁该设备会话
+      // （此前 app 端登出只清本地，服务端 RT 仍然有效 —— 会话残留问题）
+      try {
+        await logout()
+      } catch {
+        // 服务端登出失败不应阻止本地登出
+      }
+      // 统一清理本地认证状态并通知其他标签页一并登出。
+      // 必须清干净：否则退出后刷新页面，残留的旧 token 和权限
       // 会让应用误判为已登录，并用上一个账号的权限渲染功能入口
-      authStore.clearAuth()
-      // 同步清除兼容用的 localStorage 副本
-      localStorage.removeItem('token')
-      localStorage.removeItem('username')
+      notifyLogout()
       // 弹出已退出登录的轻提示
       showToast('已退出登录')
       // 导航到登录页面

@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common'; // NestJS 模块装饰器
-import { APP_INTERCEPTOR } from '@nestjs/core'; // APP_INTERCEPTOR 用于全局注册拦截器
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'; // APP_INTERCEPTOR 用于全局注册拦截器，APP_GUARD 用于全局注册守卫
 import { ClassSerializerInterceptor } from '@nestjs/common'; // class-transformer 序列化拦截器，配合 @Expose/@Exclude 使用
 import { ConfigModule, ConfigService } from '@nestjs/config'; // 配置模块和服务，用于读取和管理环境变量
 import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，用于连接和操作数据库
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
-import { ThrottlerModule } from '@nestjs/throttler'; // 限流模块，用于接口频率限制
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'; // 限流模块 + 守卫，用于接口频率限制
 import { WinstonModule } from 'nest-winston'; // nest-winston 日志模块
 import { EventEmitterModule } from '@nestjs/event-emitter'; // C5：业务与审计解耦
 import { ScheduleModule } from '@nestjs/schedule'; // M9：审计日志定时清理
@@ -88,10 +88,13 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
     }),
 
     // 全局限流配置（所有模块共享）
+    // 这是"基线防护"档位，作用于所有未单独声明的接口，只拦脚本级滥用
+    // 敏感接口（登录/注册/短信/找回密码）用 @Throttle() 覆盖为更严格档位
+    // 健康检查/指标端点用 @SkipThrottle() 豁免（见 HealthController / MetricsController）
     ThrottlerModule.forRoot([
       {
-        ttl: 10000, // 限流时间窗口为 10 秒
-        limit: 5,   // 时间窗口内最大允许 5 次请求
+        ttl: 60_000, // 限流时间窗口为 60 秒
+        limit: 300, // 单 IP 每分钟 300 次（单页首屏会并发十余个请求，基线不能设太紧）
       },
     ]),
 
@@ -112,6 +115,13 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
     {
       provide: APP_INTERCEPTOR, // 注册为全局拦截器的 token
       useClass: ClassSerializerInterceptor, // 使用 class-transformer 序列化拦截器类
+    },
+    // ⚠️ 全局限流守卫：ThrottlerModule.forRoot() 只注册配置，不会自动挂载守卫。
+    // 必须在此注册 APP_GUARD，@Throttle() / @SkipThrottle() 才会真正生效；
+    // 否则二者都是死代码，全站接口（含登录、注册、短信）将完全没有速率限制。
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
   ],
 })

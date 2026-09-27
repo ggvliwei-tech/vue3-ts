@@ -5,6 +5,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 // 导入 vue-router 提供的路由记录原始类型定义
 import type { RouteRecordRaw } from 'vue-router'
+// 认证状态统一从 auth-storage 读取（与 AuthStore / request 同源，避免"写 A 读 B"）
+import { getToken, getUserInfo } from '@project/shared/auth-storage'
 
 // 扩展 vue-router 的 meta 类型，添加自定义字段
 declare module 'vue-router' {
@@ -83,39 +85,30 @@ const router = createRouter({
   routes,
 })
 
-// 工具函数：从 localStorage 安全读取 JSON 数组
-function readJsonArray(key: string): string[] {
-  try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null
-    if (!raw) return []
-    const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? arr : []
-  } catch {
-    return []
-  }
-}
-
 // 路由守卫：依次校验登录态、角色、权限码
 router.beforeEach((to) => {
   // 1. 公开路由（登录页）直接放行
   if (to.meta.public) return true
 
   // 2. 校验登录态
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : ''
+  const token = getToken()
   if (!token) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
 
+  // 角色 / 权限与登录态取自同一份数据，不会出现"token 在但权限读不到"的错位
+  const userInfo = getUserInfo()
+
   // 3. 校验角色（meta.roles 是 OR 语义：拥有任一即可）
   if (to.meta.roles && to.meta.roles.length > 0) {
-    const userRoles = readJsonArray('roles')
+    const userRoles = userInfo?.roles ?? []
     const hasRole = userRoles.some((r) => to.meta.roles!.includes(r))
     if (!hasRole) return { path: '/403' }
   }
 
   // 4. 校验权限码（meta.permissions 是 OR 语义：拥有任一即可）
   if (to.meta.permissions && to.meta.permissions.length > 0) {
-    const userPerms = readJsonArray('permissions')
+    const userPerms = userInfo?.permissions ?? []
     const hasPerm = userPerms.some((p) => to.meta.permissions!.includes(p))
     if (!hasPerm) return { path: '/403' }
   }

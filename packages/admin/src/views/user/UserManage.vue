@@ -150,7 +150,7 @@ async function handleSubmitAssign() {
         <el-button type="primary" @click="reload">查询</el-button>
       </div>
 
-      <el-table :data="users" v-loading="loading" stripe>
+      <el-table v-loading="loading" :data="users" stripe>
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="username" label="用户名" />
         <el-table-column label="角色" min-width="180">
@@ -228,7 +228,7 @@ async function handleSubmitAssign() {
           title="提示：勾选要授予该用户的角色，全量替换现有角色；保存后该用户需要重新登录权限才会生效"
           style="margin-bottom: 16px"
         />
-        <div class="current-roles" v-if="currentRoles.length">
+        <div v-if="currentRoles.length" class="current-roles">
           <span class="label">当前角色：</span>
           <el-tag
             v-for="r in currentRoles"

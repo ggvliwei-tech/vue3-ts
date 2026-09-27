@@ -4,6 +4,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 // 导入权限码常量与权限判断工具
 import { PERM, hasAnyPermission } from '@/permission'
+// 认证状态统一从 auth-storage 读取（与 AuthStore / request 同源）
+import { getToken } from '@project/shared/auth-storage'
 
 // 定义路由配置数组
 const routes: RouteRecordRaw[] = [
@@ -156,8 +158,8 @@ const whiteList = ['/login', '/register', '/forgot-password', '/403']
 
 // 注册全局前置路由守卫，每次路由跳转前都会执行
 router.beforeEach((to) => {
-  // 从 localStorage 中获取 token，兼容非浏览器环境
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : ''
+  // 从统一存储层获取 token（非浏览器环境返回空字符串）
+  const token = getToken()
 
   // 未登录：白名单直接放行，其余重定向到登录页并携带原始路径，登录后可跳回
   if (!token) {

@@ -26,10 +26,15 @@ logs
 **/logs
 *.log
 
-# 环境变量
+# 环境变量（含密钥，绝不能进构建上下文）
+# ⚠️ 必须带 ** 前缀：只写 .env 仅匹配根目录，
+# packages/server/.env 仍会被 Dockerfile 里的 COPY packages/server 带进镜像
 .env
+**/.env
 .env.local
+**/.env.local
 .env.*.local
+**/.env.*.local
 
 # 测试
 **/*.spec.ts

@@ -2,7 +2,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common'
 // 注入 TypeORM Repository
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, Like } from 'typeorm'
+import { Repository } from 'typeorm'
 // 权限实体
 import { PermissionEntity } from '../../rbac/entities/permission.entity'
 // 角色-权限关联实体

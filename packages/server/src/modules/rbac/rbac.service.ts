@@ -126,11 +126,17 @@ export class RbacService {
         cacheKey,
         { ttl: CACHE_TTL, prefix: PERM_CACHE_PREFIX },
         async () => {
+          // ⚠️ 必须 join role 表并过滤 r.status = 1：
+          // 角色被禁用（status=0）后，其携带的权限必须一并失效。
+          // 漏掉这个过滤会导致"禁用角色"变成空操作 —— 用户角色列表变空，
+          // 但权限码照旧返回，PermissionsGuard 仍然放行。
           const rows = await this.userRoleRepo
             .createQueryBuilder('ur')
+            .innerJoin(RoleEntity, 'r', 'r.id = ur.role_id')
             .innerJoin(RolePermissionEntity, 'rp', 'rp.role_id = ur.role_id')
             .innerJoin(PermissionEntity, 'p', 'p.id = rp.permission_id')
             .where('ur.user_id = :userId', { userId })
+            .andWhere('r.status = 1')
             .select('p.code', 'code')
             .getRawMany<{ code: string }>()
           return rows.map((r) => r.code)

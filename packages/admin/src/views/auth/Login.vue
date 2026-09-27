@@ -12,6 +12,8 @@ import type { FormInstance } from 'element-plus'
 import { login } from '@/api/user'
 // M1：使用 Pinia store 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
+// 登录后需要补一次静默续期排期
+import { scheduleSilentRefresh } from '@project/shared/token-refresh'
 
 // 获取路由器实例，用于页面跳转
 const router = useRouter()
@@ -56,8 +58,9 @@ async function handleLogin() {
       username: form.value.username.trim(),
       password: form.value.password,
     })
-    // M1：统一写入 AuthStore（同时持久化到 sessionStorage）
-    // 旧的 localStorage 'token' / 'username' / 'roles' / 'permissions' 全部废弃
+    // 统一写入 AuthStore，由 auth-storage 持久化
+    // 此前这里还会额外写一份平铺键（'token' / 'username' / 'roles' / 'permissions'）
+    // 供老代码读取，两处状态各自独立、极易不一致，现已全部收敛到 auth-storage
     authStore.login({
       accessToken: res.data.accessToken,
       userInfo: {
@@ -68,11 +71,10 @@ async function handleLogin() {
         permissions: res.data.userInfo.permissions ?? [],
       },
     })
-    // 兼容旧读取方：仍然写一份到 localStorage（避免 AdminLayout 等老代码读取 'username' / 'roles' 时崩溃）
-    localStorage.setItem('token', res.data.accessToken)
-    localStorage.setItem('username', res.data.userInfo.username)
-    localStorage.setItem('roles', JSON.stringify(res.data.userInfo.roles ?? []))
-    localStorage.setItem('permissions', JSON.stringify(res.data.userInfo.permissions ?? []))
+    // 登录后补一次静默续期排期：
+    // configureAuth 在应用启动时就执行了，那时用户尚未登录（没有 token）因而不会排期，
+    // 不在这里补一次的话，只有手动刷新页面才会开始续期。
+    scheduleSilentRefresh()
     // 显示登录成功消息提示
     ElMessage.success('登录成功')
     // 跳转到之前页面或默认的仪表盘页面

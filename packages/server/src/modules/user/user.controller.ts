@@ -84,6 +84,8 @@ export class UserController {
 
   // Swagger 接口描述：注册用户
   @ApiOperation({ summary: '注册用户' })
+  // 公开接口，无登录态约束，必须靠限流拦住批量注册脚本
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   // Post 路由装饰器，注册接口路径为 POST /user/register
   @Post('register')
   // 注册方法：接收 CreateUserDto 作为请求体参数，调用 service 创建用户
@@ -94,6 +96,9 @@ export class UserController {
 
   // Swagger 接口描述：通过手机号 + 验证码重置密码
   @ApiOperation({ summary: '通过手机号验证码重置密码' })
+  // 账号接管的攻击入口：配合 SmsService 的验证码失败次数限制形成纵深防御，
+  // 限流挡住「大量手机号轮流试」，失败计数挡住「单手机号穷举验证码」
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   // Post 路由装饰器，忘记密码接口路径为 POST /user/forgot-password
   @Post('forgot-password')
   // 忘记密码方法：接收 ForgotPasswordDto 作为请求体参数
@@ -165,7 +170,7 @@ export class UserController {
     this.assertSafeOrigin(req)
     // 调用用户服务的 refreshToken 方法，传入 sessionId 定位到具体设备
     // sessionId 由 RefreshTokenGuard 从 JWT payload 中提取并挂到 req.user
-    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id, user.sessionId);
+    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id, user.sessionId, user.rtGrace);
 
     // 用新的 refreshToken 覆盖旧 Cookie，实现 Token 轮换（更安全）
     // 判断是否为生产环境
@@ -227,7 +232,6 @@ export class UserController {
     @Param('id') userId: string,
     // sessionId 可选，不传则踢全部设备
     @Body() body: { sessionId?: string } | undefined,
-    @CurrentUser() user: any,
   ) {
     // 调用用户服务的 forceKick 方法；传入 body.sessionId 可指定踢某设备
     return this.userService.forceKick(Number(userId), body?.sessionId);

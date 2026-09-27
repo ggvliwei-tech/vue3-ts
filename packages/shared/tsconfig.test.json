@@ -1,0 +1,15 @@
+{
+  // 仅供 type-check 使用：把 test/ 一起纳入类型检查。
+  // 不能直接改 tsconfig.json 的 include —— build 是 `tsc`，rootDir=src，
+  // 把 test/ 加进去会因文件不在 rootDir 下而报错，也会把测试编译进 dist。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // test/ 在 src/ 之外，rootDir 上提到包根
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

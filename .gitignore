@@ -6,3 +6,21 @@ node_modules
 # Auto-generated type declarations (regenerated on build/dev)
 **/auto-imports.d.ts
 **/components.d.ts
+
+# ============================================================
+# 本地环境变量：含数据库口令 / JWT 密钥 / 第三方 API Key，绝不入库
+# 不带斜杠的模式匹配任意层级，因此 packages/server/.env 也被覆盖。
+# 模板文件（.env.example、前端 .env.development / .env.production，
+# 仅含公开的 VITE_ 变量）是有意入库的，不受这些规则影响。
+# 新增环境变量请同步更新 .env.example，而不是提交真实 .env
+# ============================================================
+.env
+.env.local
+.env.*.local
+
+# 运行时产物：日志与本地存储的上传文件
+logs/
+**/logs/
+uploads/
+**/uploads/
+*.log

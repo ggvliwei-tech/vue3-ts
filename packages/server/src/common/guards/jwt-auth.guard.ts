@@ -13,6 +13,8 @@ import { JwtService, JsonWebTokenError, TokenExpiredError } from '@nestjs/jwt'
 import { ConfigService } from '@nestjs/config'
 // Redis 服务，用于黑名单检查
 import { RedisService } from '../../modules/redis/redis.service'
+// 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
+import { AuthKeys } from '../constants/auth-keys'
 // RBAC 服务，用于加载用户角色和权限
 import { RbacService } from '../../modules/rbac/rbac.service'
 // nest-winston 日志
@@ -68,12 +70,25 @@ export class JwtAuthGuard implements CanActivate {
       })
 
       // 第四步：检查 Redis 黑名单（强制下线拦截）
+      // 两种粒度都要查，缺任一种都会让对应的踢下线操作失效：
+      //  - blacklist:token:{userId}                踢「全部设备」（forceKick 不带 sessionId / logout-all）
+      //  - blacklist:session:{userId}:{sessionId}  踢「指定设备」（RT 复用检测 / forceKick 带 sessionId）
       // 黑名单检查失败不应阻断请求（避免 Redis 抖动导致 401）
       try {
-        const isBlacklisted = await this.redisService.exists(
-          `blacklist:token:${payload.sub}`,
-        )
-        if (isBlacklisted) {
+        const checks = [
+          this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
+        ]
+        // access token 的 payload 里带了 sessionId（见 AuthService.login），
+        // 老版本签发的 token 可能没有，故做存在性判断
+        if (payload.sessionId) {
+          checks.push(
+            this.redisService.exists(
+              AuthKeys.blacklistSession(payload.sub, payload.sessionId),
+            ),
+          )
+        }
+        const results = await Promise.all(checks)
+        if (results.some((hit) => hit)) {
           throw new UnauthorizedException('账号已在其他地方被强制下线，请重新登录')
         }
       } catch (err) {

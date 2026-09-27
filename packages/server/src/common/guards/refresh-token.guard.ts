@@ -14,9 +14,10 @@ import { ConfigService } from '@nestjs/config'
 import { UserService } from '../../modules/user/user.service'
 // Redis 服务
 import { RedisService } from '../../modules/redis/redis.service'
-
-// 注入标记：用于实现 RefreshToken 复用检测的全局黑名单 TTL
-const RT_REUSE_BLOCK_TTL = 900 // 15 分钟内拒绝该用户所有 refresh 请求
+// 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
+import { AuthKeys } from '../constants/auth-keys'
+// JWT 过期时间解析工具
+import { parseJwtExpiry } from '../utils/jwt.util'
 
 /**
  * Refresh Token 认证守卫
@@ -38,6 +39,16 @@ export class RefreshTokenGuard implements CanActivate {
     private readonly userService: UserService,
     private readonly redisService: RedisService,
   ) {}
+
+  /**
+   * 拉黑有效期（秒）＝ access token 有效期
+   * 必须覆盖 access token 的剩余寿命，否则黑名单过期后被吊销的 token 又能用了
+   */
+  private get blacklistTtl(): number {
+    return parseJwtExpiry(
+      this.configService.getOrThrow<string>('JWT_ACCESS_EXPIRES_IN'),
+    )
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest()
@@ -73,25 +84,46 @@ export class RefreshTokenGuard implements CanActivate {
       throw new UnauthorizedException('刷新令牌已过期，请重新登录')
     }
 
-    // 3b. ⚠️ 关键：RT 复用检测（精确到 sessionId 维度）
-    // 正常流程：refresh-token 接口每次都会轮换 RT，旧 RT 调用后立即失效
-    // 如果请求中的 RT 与 Redis 中存储的不一致，说明：
-    //   - 攻击者拿到了旧 RT 并尝试刷新
-    //   - 或者该设备的会话已被强制下线
-    // 安全策略：仅吊销该设备会话（不波及该用户其他设备），并加临时黑名单
+    // 3b. RT 不一致：先判断是不是「合法并发刷新」
+    //
+    // 正常流程：refresh-token 接口每次都会轮换 RT，旧 RT 用完即失效。
+    // 但同一浏览器的多个标签页可能几乎同时发起刷新：先处理完的那个已经把
+    // Redis 里的 RT 换成了新的，后到的请求带的却是上一轮 RT。若不加区分地
+    // 判为盗用，用户会在正常使用中被莫名踢下线。
+    // 因此先看宽限窗口内的「上一个 RT」是否命中，命中即视为合法并发放行，
+    // 并在 req.user 上标记 rtGrace，让 AuthService 跳过本次轮换 ——
+    // 否则各标签页会各自签出不同的 RT，再次互相作废，刷新风暴永不收敛。
+    let fromGrace = false
     if (stored !== token) {
+      const previous = await this.redisService.get(
+        AuthKeys.previousRefreshToken(payload.sub, payload.sessionId),
+      )
+      if (previous && previous === token) {
+        fromGrace = true
+        this.logger.debug(
+          `[RT 宽限窗口] userId=${payload.sub} sessionId=${payload.sessionId} - 命中并发刷新，放行且不轮换`,
+        )
+      }
+    }
+
+    // 3c. 既非当前 RT、又不在宽限窗口内 → 判定为令牌盗用
+    // 安全策略：仅吊销该设备会话（不波及该用户其他设备），并加临时黑名单
+    if (stored !== token && !fromGrace) {
       this.logger.warn(
         `[RT 复用检测] userId=${payload.sub} sessionId=${payload.sessionId} - 检测到刷新令牌被盗用/会话失效`,
       )
-      // 仅删除该 session 的 RT，不影响其他设备
+      // 只吊销「该设备」：删 RT + 加设备级黑名单
+      // 注意黑名单必须用设备级 key，不能用 blacklist:token:{userId} ——
+      // 用户级黑名单会被 JwtAuthGuard 应用到该用户的所有请求上，
+      // 于是一台设备出问题会把该用户其他设备一起踢下线，
+      // 与"多设备会话互不影响"的产品承诺直接矛盾。
       await this.redisService.del(
-        `refresh:token:${payload.sub}:${payload.sessionId}`,
+        AuthKeys.refreshToken(payload.sub, payload.sessionId),
       )
-      // 给该用户加 15 分钟黑名单，强制该设备重新登录
       await this.redisService.set(
-        `blacklist:token:${payload.sub}`,
+        AuthKeys.blacklistSession(payload.sub, payload.sessionId),
         '1',
-        RT_REUSE_BLOCK_TTL,
+        this.blacklistTtl,
       )
       throw new UnauthorizedException('检测到令牌盗用，请重新登录')
     }
@@ -99,30 +131,38 @@ export class RefreshTokenGuard implements CanActivate {
     // 第四步：RT 一致，从数据库查询用户实体（避免直接信任 JWT payload）
     const user = await this.userService.findUserEntity(payload.sub)
     if (!user) {
-      // 用户已被删除
-      await this.redisService.del(`refresh:token:${payload.sub}`)
+      // 用户已被删除 → 精确吊销该设备的 RT（key 必须带 sessionId，见下方注释）
+      await this.redisService.del(
+        `refresh:token:${payload.sub}:${payload.sessionId}`,
+      )
       throw new UnauthorizedException('用户不存在，请重新登录')
     }
-    // 用户被禁用，立即吊销 RT
+    // 用户被禁用，立即吊销该设备的 RT
     if (user.status === 0) {
-      await this.redisService.del(`refresh:token:${payload.sub}`)
+      await this.redisService.del(
+        `refresh:token:${payload.sub}:${payload.sessionId}`,
+      )
       throw new UnauthorizedException('账号已被禁用，请联系管理员')
     }
 
-    // 第五步：将用户实体挂载到请求对象，供 controller 使用
-    req.user = user
+    // 第五步：挂载当前用户上下文，供 controller 使用
+    // ⚠️ sessionId 必须显式带上：它来自 JWT payload，User 实体上并没有这个字段。
+    // 若只挂实体（req.user = user），controller 里的 user.sessionId 恒为 undefined，
+    // 会导致 AuthService.refreshToken(userId, undefined) 把新 RT 写到
+    // refresh:token:{userId}:undefined 这个野 key 上，而真正的
+    // refresh:token:{userId}:{sessionId} 里仍留着旧 RT ——
+    // 下次刷新时本守卫的复用检测会读到"旧 RT ≠ Cookie 里的新 RT"，
+    // 误判为令牌盗用并把该用户强制下线（且写入 15 分钟黑名单）。
+    // 这里刻意不展开实体，避免把 password 哈希等字段带进请求上下文。
+    req.user = {
+      id: user.id,
+      sub: user.id, // 与 JwtAuthGuard 的 payload.sub 结构保持一致
+      username: user.username,
+      sessionId: payload.sessionId,
+      // 命中共并发刷新的宽限窗口：controller 据此让 AuthService 跳过本次 RT 轮换
+      rtGrace: fromGrace,
+    }
     return true
   }
 
-  /**
-   * 吊销用户所有会话：清 RT + 加临时黑名单
-   * 防止 RT 盗用者继续用其他端已签发的 access token
-   * 注：当前阶段三已改为 session 维度，本方法保留以备未来批量吊销需求
-   */
-  private async revokeAllSessions(userId: number): Promise<void> {
-    // 1. 删除该用户的 RT（兼容旧 key 清理）
-    await this.redisService.del(`refresh:token:${userId}`)
-    // 2. 临时黑名单（15 分钟），覆盖剩余的 access token 有效期
-    await this.redisService.set(`blacklist:token:${userId}`, '1', RT_REUSE_BLOCK_TTL)
-  }
 }

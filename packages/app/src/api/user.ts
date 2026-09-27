@@ -77,6 +77,18 @@ export function register(data: RegisterParams) {
 }
 
 /**
+ * 退出登录
+ *
+ * 会吊销服务端的 refresh token 并销毁当前设备会话。
+ * 前端登出必须调用它 —— 只清本地状态的话，RT Cookie 仍然有效，
+ * 会话在服务端依然存在。
+ */
+export function logout() {
+  // 发送 POST 请求到退出登录接口
+  return post<{ msg: string }>('/api/v1/user/logout')
+}
+
+/**
  * 刷新 accessToken（refreshToken 通过 HttpOnly Cookie 自动携带）
  * skipRefresh: true 防止 refresh 请求自身 401 时再次触发刷新，避免无限递归
  */

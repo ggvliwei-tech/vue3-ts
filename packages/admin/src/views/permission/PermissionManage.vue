@@ -215,7 +215,7 @@ onMounted(() => {
 
     <!-- 列表 -->
     <el-card class="list-card" shadow="never">
-      <el-table :data="list" v-loading="loading" border stripe>
+      <el-table v-loading="loading" :data="list" border stripe>
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="code" label="权限编码" min-width="200">
           <template #default="{ row }">

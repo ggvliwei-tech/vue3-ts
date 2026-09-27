@@ -198,9 +198,8 @@ export class CacheService {
         // 正常缓存
         await this.set(key, loaded, opts.ttl)
         return loaded
-      } catch (err) {
-        // loader 异常：不缓存（避免脏数据），向上抛
-        throw err
+        // loader 抛错时不写入任何缓存（避免脏数据），异常自然向上冒泡，
+        // inFlight 由 finally 统一清理
       } finally {
         this.inFlight.delete(key)
       }

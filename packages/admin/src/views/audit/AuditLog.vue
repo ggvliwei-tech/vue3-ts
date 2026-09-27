@@ -283,7 +283,7 @@ onMounted(loadList)
 
     <!-- 列表 -->
     <el-card class="list-card" shadow="never">
-      <el-table :data="list" v-loading="loading" border stripe style="width: 100%">
+      <el-table v-loading="loading" :data="list" border stripe style="width: 100%">
         <el-table-column prop="createTime" label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
         </el-table-column>
@@ -360,7 +360,7 @@ onMounted(loadList)
           <el-descriptions-item label="对象类型">{{ currentLog.resource ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="对象ID">{{ currentLog.resourceId ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="客户端IP">{{ currentLog.ip ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="User-Agent" v-if="currentLog.userAgent">
+          <el-descriptions-item v-if="currentLog.userAgent" label="User-Agent">
             <div class="ua-text">{{ currentLog.userAgent }}</div>
           </el-descriptions-item>
         </el-descriptions>

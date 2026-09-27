@@ -276,11 +276,11 @@ onMounted(() => {
                   loading="lazy"
                 >
                   <!-- 加载中插槽，显示旋转加载图标 -->
-                  <template v-slot:loading>
+                  <template #loading>
                     <van-loading type="spinner" size="20" />
                   </template>
                   <!-- 加载失败插槽，显示错误图标和文字 -->
-                  <template v-slot:error>
+                  <template #error>
                     <div class="image-error">
                       <van-icon name="photo-fail" size="24" />
                       <span>加载失败</span>

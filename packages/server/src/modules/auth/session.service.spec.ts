@@ -4,14 +4,28 @@
  * 测试目标：
  *  1. create / get / update / remove 基础 CRUD 正常路径
  *  2. listSessions 按 loginTime 倒序，损坏数据容错
- *  3. removeAll 清空所有 RT + 设置黑名单
- *  4. isBlacklisted 检测黑名单存在性
- *  5. UUID 格式校验（newSessionId）
+ *  3. remove 同时拉黑该设备（access token 立即失效）
+ *  4. removeAll 清空所有 RT + 设置用户级黑名单
+ *  5. 黑名单两种粒度互不干扰：设备级只影响那一台，用户级影响全部
+ *  6. 黑名单 TTL 对齐 access token 有效期（不能短于它）
+ *  7. UUID 格式校验（newSessionId）
  */
 
 import { Test, TestingModule } from '@nestjs/testing'
+import { ConfigService } from '@nestjs/config'
 import { SessionService, SessionInfo } from './session.service'
 import { RedisService } from '../redis/redis.service'
+
+// access token 有效期 30m = 1800s，黑名单 TTL 必须与它对齐
+const ACCESS_TOKEN_TTL_SECONDS = 1800
+
+// ========== ConfigService Mock ==========
+const mockConfigService = {
+  getOrThrow: jest.fn((key: string) => {
+    if (key === 'JWT_ACCESS_EXPIRES_IN') return '30m'
+    throw new Error(`测试未 mock 的配置项：${key}`)
+  }),
+}
 
 // ========== RedisService Mock ==========
 const redisStore = new Map<string, { value: string; expiresAt?: number }>()
@@ -84,6 +98,7 @@ describe('SessionService', () => {
       providers: [
         SessionService,
         { provide: RedisService, useValue: mockRedisService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile()
     service = module.get(SessionService)
@@ -199,7 +214,7 @@ describe('SessionService', () => {
   })
 
   describe('remove - 删除单个会话', () => {
-    it('应并发删除 RT 和 Hash 字段', async () => {
+    it('应并发删除 RT、Hash 字段，并拉黑该设备', async () => {
       redisStore.set('refresh:token:1:sess-1', { value: 'rt' })
       const hash = new Map<string, string>([['sess-1', 'json']])
       redisHashStore.set('session:1', hash)
@@ -208,11 +223,17 @@ describe('SessionService', () => {
 
       expect(mockRedisService.del).toHaveBeenCalledWith('refresh:token:1:sess-1')
       expect(mockRedisService.hdel).toHaveBeenCalledWith('session:1', 'sess-1')
+      // 只删 RT 是不够的：access token 自包含，不拉黑的话剩余有效期内仍可用
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        'blacklist:session:1:sess-1',
+        '1',
+        ACCESS_TOKEN_TTL_SECONDS,
+      )
     })
   })
 
-  describe('removeAll - 清空全部 + 黑名单', () => {
-    it('应删除所有 RT + Hash + 设置 900s 黑名单', async () => {
+  describe('removeAll - 清空全部 + 用户级黑名单', () => {
+    it('应删除所有 RT + Hash + 设置用户级黑名单', async () => {
       const hash = new Map<string, string>([
         ['sess-1', JSON.stringify({ sessionId: 'sess-1', loginTime: 1, ip: 'a', userAgent: 'ua' })],
         ['sess-2', JSON.stringify({ sessionId: 'sess-2', loginTime: 2, ip: 'b', userAgent: 'ub' })],
@@ -221,31 +242,50 @@ describe('SessionService', () => {
 
       await service.removeAll(1)
 
-      // 黑名单已设置
+      // 两个设备的 RT 都被清掉
+      expect(mockRedisService.del).toHaveBeenCalledWith('refresh:token:1:sess-1')
+      expect(mockRedisService.del).toHaveBeenCalledWith('refresh:token:1:sess-2')
+      expect(mockRedisService.del).toHaveBeenCalledWith('session:1')
+      // 用户级黑名单已设置
       expect(redisStore.has('blacklist:token:1')).toBe(true)
-      expect(mockRedisService.set).toHaveBeenCalledWith(
-        'blacklist:token:1',
-        '1',
-        900,
-      )
     })
 
-    it('默认黑名单 TTL 为 900 秒', async () => {
+    it('默认黑名单 TTL 应对齐 access token 有效期而非写死 900', async () => {
       await service.removeAll(1)
       expect(mockRedisService.set).toHaveBeenCalledWith(
         'blacklist:token:1',
         '1',
-        900,
+        ACCESS_TOKEN_TTL_SECONDS,
       )
     })
 
     it('允许自定义黑名单 TTL', async () => {
-      await service.removeAll(1, 1800)
+      await service.removeAll(1, 60)
       expect(mockRedisService.set).toHaveBeenCalledWith(
         'blacklist:token:1',
         '1',
-        1800,
+        60,
       )
+    })
+  })
+
+  describe('blacklistSession - 设备级黑名单', () => {
+    it('应写入设备级黑名单，TTL 对齐 access token 有效期', async () => {
+      await service.blacklistSession(1, 'sess-1')
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        'blacklist:session:1:sess-1',
+        '1',
+        ACCESS_TOKEN_TTL_SECONDS,
+      )
+    })
+
+    it('只影响被拉黑的那台设备，同用户其他设备不受波及', async () => {
+      await service.blacklistSession(1, 'sess-1')
+
+      expect(await service.isSessionBlacklisted(1, 'sess-1')).toBe(true)
+      expect(await service.isSessionBlacklisted(1, 'sess-2')).toBe(false)
+      // 设备级拉黑不应连带触发用户级拉黑（否则"多设备互不影响"就失效了）
+      expect(await service.isBlacklisted(1)).toBe(false)
     })
   })
 

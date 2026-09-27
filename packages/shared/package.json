@@ -18,6 +18,14 @@
       "import": "./src/request.ts",
       "types": "./src/request.ts"
     },
+    "./auth-storage": {
+      "import": "./src/auth-storage.ts",
+      "types": "./src/auth-storage.ts"
+    },
+    "./token-refresh": {
+      "import": "./src/token-refresh.ts",
+      "types": "./src/token-refresh.ts"
+    },
     "./utils": {
       "import": "./src/utils.ts",
       "types": "./src/utils.ts"
@@ -29,7 +37,9 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --project tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rimraf dist"
   },
   "dependencies": {
@@ -38,9 +48,11 @@
     "lodash-es": "^4.18.1"
   },
   "devDependencies": {
+    "jsdom": "^30.1.1",
     "pinia": "^4.0.2",
     "rimraf": "^6.0.0",
     "typescript": "~6.0.2",
+    "vitest": "^5.0.2",
     "vue": "^3.5.41"
   }
 }

@@ -24,6 +24,8 @@ import { RedisService } from '../redis/redis.service';
 import { UserService } from '../user/user.service';
 // RBAC 服务，用于 WS 连接时校验 chat:room 权限（RbacModule 为 @Global，无需在 ChatModule 中 import）
 import { RbacService } from '../rbac/rbac.service';
+// 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
+import { AuthKeys } from '../../common/constants/auth-keys';
 
 // @WebSocketGateway() 装饰器声明此类为 WebSocket 网关，配置命名空间和跨域
 @WebSocketGateway({
@@ -92,9 +94,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
 
       // 安全加固：检查 Redis 黑名单（与 JwtAuthGuard 保持一致）
-      // 如果用户被踢下线或触发 RT 复用检测，blacklist:token:{sub} 会存在
-      const isBlacklisted = await this.redisService.exists(`blacklist:token:${payload.sub}`)
-      if (isBlacklisted) {
+      // 两种粒度都要查，缺任一种都会让对应的踢下线操作被 WS 绕过：
+      //  - 用户级：踢全部设备（forceKick 不带 sessionId / logout-all）
+      //  - 设备级：仅踢当前设备（RT 复用检测 / 踢指定设备）
+      const blacklistChecks = [
+        this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
+      ];
+      if (payload.sessionId) {
+        blacklistChecks.push(
+          this.redisService.exists(
+            AuthKeys.blacklistSession(payload.sub, payload.sessionId),
+          ),
+        );
+      }
+      const blacklistHits = await Promise.all(blacklistChecks);
+      if (blacklistHits.some((hit) => hit)) {
         this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 已在黑名单中`);
         client.emit('error', { code: 401, msg: '账号已被强制下线，请重新登录' });
         client.disconnect();
@@ -260,8 +274,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // 2. 在数据库中记录成员关系（若已在房间中会抛异常被 catch 捕获）
       await this.chatService.joinRoom(roomId, user.sub, user.username);
 
-      // 3. 获取房间成员列表
-      const members = await this.chatService.getRoomMembers(roomId);
+      // 3. 获取房间成员列表（上一步已把当前用户写入成员表，归属校验必然通过）
+      const members = await this.chatService.getRoomMembers(roomId, user.sub);
 
       // 4. 获取最近 50 条历史消息
       const history = await this.chatService.getRecentMessages(roomId, 50);

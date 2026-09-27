@@ -1,7 +1,7 @@
 <!-- script setup 部分：使用组合式 API 和语法糖 -->
 <script setup lang="ts">
-// 从 vue 导入 ref 用于创建响应式数据
-import { ref } from 'vue'
+// 从 vue 导入 computed 用于创建计算属性
+import { computed } from 'vue'
 // 从 vue-router 导入 useRouter 用于程序化导航
 import { useRouter } from 'vue-router'
 // 从 element-plus 导入 ElMessage 用于显示消息提示
@@ -10,37 +10,33 @@ import { ElMessage } from 'element-plus'
 import { Monitor, UserFilled, User, Avatar, Key, Document, Setting } from '@element-plus/icons-vue'
 // 导入用户相关的 API 方法，此处使用 logout 退出登录
 import { logout } from '@/api/user'
+// 认证状态与统一登出清理
+import { useAuthStore } from '@project/shared/stores/useAuthStore'
+import { notifyLogout } from '@project/shared/token-refresh'
 
 // 获取路由器实例
 const router = useRouter()
+// 认证 store：用户名等展示信息与登录态同源
+const authStore = useAuthStore()
 
-// 从 localStorage 读取当前登录用户名（登录页 Login.vue 写入）
-// 用 ref 包一层，组件 setup 时同步初始化一次；用户名变更需要重新登录才会刷新
-const currentUsername = ref(localStorage.getItem('username') || '未登录')
+// 用户名直接读 store，不再依赖 localStorage 里的平铺副本
+// （那份副本与真实登录态互相独立，容易出现"已登出却仍显示旧用户名"）
+const currentUsername = computed(() => authStore.userInfo?.username ?? '未登录')
 
 // 定义异步退出登录处理函数
 async function handleLogout() {
-  // 使用 try-catch 包裹异步操作
   try {
-    // 调用后端退出登录 API
+    // 调用后端退出登录 API，吊销 refresh token 并销毁该设备会话
     await logout()
-    // 清除本地存储的 token
-    localStorage.removeItem('token')
-    // 同步清除登录人缓存
-    localStorage.removeItem('username')
-    // 同步更新顶部显示
-    currentUsername.value = '未登录'
-    // 显示退出成功消息提示
-    ElMessage.success('退出成功')
-    // 跳转到登录页面
-    router.push('/login')
-  } catch (e: any) {
-    // 即使接口调用失败，也清除本地 token 并跳转登录页
-    localStorage.removeItem('token')
-    localStorage.removeItem('username')
-    currentUsername.value = '未登录'
-    router.push('/login')
+  } catch {
+    // 服务端登出失败（网络异常 / 会话已失效）不应阻止本地登出
   }
+  // 统一清理本地认证状态，其他标签页通过 storage 事件一并登出
+  notifyLogout()
+  // 显示退出成功消息提示
+  ElMessage.success('退出成功')
+  // 跳转到登录页面
+  router.push('/login')
 }
 </script>
 

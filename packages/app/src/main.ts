@@ -11,8 +11,10 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 // 导入路由配置
 import router from './router'
-// 从共享请求模块中导入设置 token 刷新和未授权回调的函数
-import { setRefreshTokenCallback, setUnauthorizedCallback } from '@project/shared/request'
+// 统一认证刷新配置：single-flight 刷新 + 静默续期 + 跨标签页同步
+import { configureAuth } from '@project/shared/token-refresh'
+// 旧版 localStorage 键的一次性迁移
+import { migrateLegacyStorage } from '@project/shared/auth-storage'
 // M1：使用 AuthStore 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 导入用户相关的 refreshToken 接口函数
@@ -37,43 +39,26 @@ import 'vant/es/image-preview/style/index.mjs'
 // 创建 Pinia 实例
 const pinia = createPinia()
 
-// 设置 token 过期时的刷新回调函数
-// 当请求返回 401 时，会自动调用此函数尝试刷新 token
-setRefreshTokenCallback((callback) => {
-  // 调用 refreshToken 接口获取新的 token
-  refreshToken()
-    .then((res) => {
-      // 从响应中提取新的 accessToken
-      const newToken = res.data.accessToken
-      // M1：写入 AuthStore
-      const authStore = useAuthStore(pinia)
-      authStore.setToken(newToken)
-      // 兼容旧读取方
-      localStorage.setItem('token', newToken)
-      // 通过回调通知请求模块使用新的 token 重试原请求
-      callback(newToken)
-    })
-    .catch(() => {
-      // 刷新失败时清除 token
-      const authStore = useAuthStore(pinia)
-      authStore.clearAuth()
-      localStorage.removeItem('token')
-      // 通知请求模块停止重试
-      callback(null)
-      // 跳转到登录页让用户重新登录
-      router.push('/login')
-    })
-})
+// 先把历史版本写在 localStorage 平铺键（token / username / roles / permissions）
+// 上的登录态迁移到统一键，必须早于任何鉴权判断
+migrateLegacyStorage()
 
-// 设置 token 刷新失败后的兜底回调
-// 当无法通过刷新 token 恢复认证时调用此回调
-setUnauthorizedCallback(() => {
-  // 清除 token
-  const authStore = useAuthStore(pinia)
-  authStore.clearAuth()
-  localStorage.removeItem('token')
-  // 跳转到登录页
-  router.push('/login')
+// 配置认证刷新
+//
+// 此前 refreshToken 的回调在 main.ts 里单独实现了一份，与 request 拦截器的
+// 401 刷新、AiChat.vue 自己的刷新三处并行且互不知情，会并发轮换同一个 RT，
+// 被服务端判定为令牌盗用后强制下线。现在统一交给 token-refresh 管理。
+configureAuth({
+  refreshFn: refreshToken,
+  // 会话确实失效：清状态并回登录页
+  onAuthCleared: () => {
+    useAuthStore(pinia).clearAuth()
+    router.push('/login')
+  },
+  // 存储层的 token 变化（刷新 / 其他标签页登出）要同步到 Pinia 的响应式状态
+  onTokenChanged: (newToken) => {
+    useAuthStore(pinia).setToken(newToken)
+  },
 })
 
 // 创建 Vue 应用实例，注册 Pinia 和路由插件
@@ -84,7 +69,7 @@ app.use(router)
 app.directive('permission', vPermission)
 
 // 挂载前先同步一次权限：
-// sessionStorage 里缓存的是上次登录时下发的权限，而 admin 后台随时可能改角色。
+// 本地缓存的是上次登录时下发的权限，而 admin 后台随时可能改角色。
 // 先拉最新的 roles/permissions 再渲染，可避免首屏用陈旧权限渲染出已被撤销的入口。
 // syncPermissions 内部已吞掉异常（未登录直接返回，请求失败沿用本地缓存），不会阻塞挂载。
 syncPermissions().finally(() => {

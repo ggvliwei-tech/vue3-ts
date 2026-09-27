@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 类型检查 / 测试 / 构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本由根 package.json 的 packageManager 字段决定（pnpm@10.18.3）
+      - uses: pnpm/action-setup@v4
+
+      # vite 8 / rolldown 要求 node >= 20.12，低版本会在 styleText 导入处崩溃
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 防回归：根 type-check 是 `pnpm -r --parallel type-check`，若某个包缺 type-check
+      # 脚本，pnpm 会静默跳过并返回 0（本项目曾因此让 admin 的 7 个类型错误进了 main）
+      - name: 校验类型门禁覆盖全部包
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkgs = ['shared', 'server', 'admin', 'app'];
+            const missing = pkgs.filter((p) => {
+              const s = JSON.parse(fs.readFileSync('packages/' + p + '/package.json', 'utf8')).scripts || {};
+              return !s['type-check'];
+            });
+            if (missing.length) {
+              console.error('缺少 type-check 脚本，门禁会出现假绿灯: ' + missing.join(', '));
+              process.exit(1);
+            }
+            console.log('type-check 覆盖: ' + pkgs.join(', '));
+          "
+
+      - name: 类型检查（四包）
+        run: pnpm type-check
+
+      - name: 单元测试
+        run: pnpm --filter @project/server test
+
+      - name: 构建 shared + admin + app
+        run: pnpm build:all
+
+      - name: 构建 server
+        run: pnpm build:server
+
+      # admin 曾配置 rollupOptions.external: ['@project/shared']，构建会"成功"但产物里
+      # 残留浏览器无法解析的裸 import，因此额外校验产物自包含
+      - name: 校验前端产物无未解析的裸 import
+        run: |
+          if grep -rEoh "from\"[^\"./][^\"]*\"" packages/admin/dist/assets/*.js packages/app/dist/assets/*.js | sort -u | grep .; then
+            echo "前端产物存在未打包的裸模块 import，运行时无法解析"
+            exit 1
+          fi
+          echo "前端产物自包含"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist
+          path: |
+            packages/admin/dist
+            packages/app/dist
+            packages/server/dist
+          retention-days: 7

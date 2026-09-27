@@ -19,6 +19,7 @@ import {
   HttpStatus,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
@@ -34,6 +35,7 @@ import { LoginThrottlerService } from '../auth/login-throttler.service'
 import { SessionService, SessionInfo } from '../auth/session.service'
 import { AuditEvents } from '../audit/audit.events'
 import { parseJwtExpiry, getJwtExpiresIn } from '../../common/utils/jwt.util'
+import { AuthKeys, RT_ROTATION_GRACE_SECONDS } from '../../common/constants/auth-keys'
 
 @Injectable()
 export class AuthService {
@@ -48,13 +50,6 @@ export class AuthService {
     private readonly sessionService: SessionService,
     private readonly events: EventEmitter2,
   ) {}
-
-  /** 兜底：校验 RT 是否匹配 Redis 存储值（兼容调用） */
-  async validateRefreshToken(userId: number, token: string): Promise<User | null> {
-    const stored = await this.redisService.get(`refresh:token:${userId}`)
-    if (!stored || stored !== token) return null
-    return this.userRepo.findOneBy({ id: userId })
-  }
 
   /**
    * 登录全流程
@@ -141,7 +136,7 @@ export class AuthService {
 
     // 6. 登录成功 → 清失败计数 + 清强制下线黑名单
     await this.throttlerService.clearFailures(loginDto.username)
-    await this.redisService.del(`blacklist:token:${user.id}`)
+    await this.redisService.del(AuthKeys.blacklistUser(user.id))
 
     // 7. 签发 Token
     const sessionId = this.sessionService.newSessionId()
@@ -196,8 +191,10 @@ export class AuthService {
    * 刷新 Token（带轮换）
    *  - sessionId 由 RefreshTokenGuard 解析后传入
    *  - 仅更新当前 session 的 RT，其他设备不受影响
+   *  - fromGrace：守卫命中「RT 轮换宽限窗口」（多标签并发刷新），
+   *    此时跳过轮换、复用当前 RT，让各标签页收敛到同一个 RT
    */
-  async refreshToken(userId: number, sessionId: string) {
+  async refreshToken(userId: number, sessionId: string, fromGrace = false) {
     const user = await this.userRepo.findOneBy({ id: userId })
     if (!user) throw new NotFoundException('用户不存在')
 
@@ -206,14 +203,36 @@ export class AuthService {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: getJwtExpiresIn(this.configService, 'JWT_ACCESS_EXPIRES_IN'),
     })
-    const newRefreshToken = this.jwtService.sign(payload, {
-      secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
-      expiresIn: getJwtExpiresIn(this.configService, 'JWT_REFRESH_EXPIRES_IN'),
-    })
-    const ttlSeconds = parseJwtExpiry(
-      this.configService.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN'),
-    )
-    await this.sessionService.updateRefreshToken(userId, sessionId, newRefreshToken, ttlSeconds)
+    // 宽限窗口内命中的并发刷新：不轮换 RT，直接复用当前有效的那一个。
+    // 若此处仍签一个新 RT，多个标签页会各自持有不同 RT 并再次互相作废 ——
+    // 刷新风暴不会收敛，用户只会被反复踢下线。
+    let newRefreshToken: string
+    if (fromGrace) {
+      const currentRefreshToken = await this.sessionService.getRefreshToken(
+        userId,
+        sessionId,
+      )
+      if (!currentRefreshToken) {
+        throw new UnauthorizedException('刷新令牌已失效，请重新登录')
+      }
+      newRefreshToken = currentRefreshToken
+    } else {
+      newRefreshToken = this.jwtService.sign(payload, {
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        expiresIn: getJwtExpiresIn(this.configService, 'JWT_REFRESH_EXPIRES_IN'),
+      })
+      const ttlSeconds = parseJwtExpiry(
+        this.configService.getOrThrow<string>('JWT_REFRESH_EXPIRES_IN'),
+      )
+      // 传入宽限秒数：把被替换掉的旧 RT 暂存，供并发刷新在窗口内使用
+      await this.sessionService.updateRefreshToken(
+        userId,
+        sessionId,
+        newRefreshToken,
+        ttlSeconds,
+        RT_ROTATION_GRACE_SECONDS,
+      )
+    }
 
     this.events.emit(AuditEvents.LOG, {
       action: 'refresh',

@@ -3,7 +3,6 @@ import {
   Catch, // 异常捕获装饰器
   ArgumentsHost, // 参数主机，用于获取请求上下文
   HttpException, // HTTP 异常基类
-  HttpStatus, // HTTP 状态码枚举
 } from '@nestjs/common';
 
 // 声明此过滤器只捕获 HttpException 类型的异常

@@ -20,9 +20,19 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ThrottlerGuard } from '@nestjs/throttler';
 // 导入当前用户装饰器，从请求中提取用户信息
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+// 权限守卫 + @Permissions 装饰器：做接口级权限码校验
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 
-// 控制器级别守卫装饰器：所有接口均需 JWT 认证 + 限流保护
-@UseGuards(JwtAuthGuard, ThrottlerGuard)
+// 控制器级别守卫装饰器：所有接口均需 JWT 认证 + 权限码校验 + 限流保护
+//
+// ⚠️ PermissionsGuard 不能省：AI 接口会调用按量计费的 LLM 并写入共享向量库，
+// 此前这里只有 JwtAuthGuard —— 等同于"登录即可免费调用"。
+// 新注册用户在 nest-db.sql 的种子数据里默认不带任何角色，
+// 只校验登录态意味着任何人都能直接刷爆第三方 API 账单。
+// 权限码 ai:chat 已在 nest-db.sql:287 定义并授予 admin / editor / user 三个内置角色。
+@UseGuards(JwtAuthGuard, PermissionsGuard, ThrottlerGuard)
+@Permissions('ai:chat')
 // Swagger 装饰器：在文档中显示 Bearer Token 输入框
 @ApiBearerAuth()
 // 控制器装饰器：设置 /ai 为所有路由的公共前缀

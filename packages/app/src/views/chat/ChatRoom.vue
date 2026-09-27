@@ -14,6 +14,8 @@ import {
   sendRoomMessage, joinRoom, leaveRoom,
   type WSMessage, type WSEventHandlers,
 } from '@/utils/websocket'
+// 认证状态统一从 auth-storage 读取
+import { getToken, parseJwt } from '@project/shared/auth-storage'
 
 // 获取路由导航实例
 const router = useRouter()
@@ -67,16 +69,16 @@ onMounted(async () => {
   // 设置当前房间 ID
   roomId.value = id
 
-  // 从 localStorage 中的 token 解码获取当前用户 ID
-  try {
-    const token = localStorage.getItem('token') || ''
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    myUserId.value = payload.sub
-  } catch {
-    // token 解析失败则返回登录页
+  // 从统一存储层读取 token 并解析出当前用户 ID
+  // 改用共享的 parseJwt：此前这里自行 atob 解码，没有做 base64url 的 -/_ 还原，
+  // 遇到 payload 中含 - 或 _ 的 token 会解析失败并把用户直接踢回登录页
+  const payload = parseJwt(getToken())
+  if (!payload?.sub) {
+    // 未登录 / token 无法解析：回登录页
     router.push('/login')
     return
   }
+  myUserId.value = payload.sub
 
   // 先通过 REST API 加载历史消息
   await loadHistory()
@@ -349,7 +351,7 @@ import { useScrollToBottom as scrollToBottom } from '@/composables/useScrollToBo
         <!-- 消息气泡容器 -->
         <div class="message-bubble">
           <!-- 他人消息时显示发送者名称 -->
-          <div class="sender-name" v-show="!msg.isSelf">{{ msg.senderName }}</div>
+          <div v-show="!msg.isSelf" class="sender-name">{{ msg.senderName }}</div>
           <!-- 消息内容 -->
           <div class="message-content">{{ msg.content }}</div>
           <!-- 消息发送时间 -->

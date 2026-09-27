@@ -10,6 +10,8 @@ import { showToast } from 'vant'
 import { login } from '@/api/user'
 // M1：使用 AuthStore 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
+// 登录后需要补一次静默续期排期
+import { scheduleSilentRefresh } from '@project/shared/token-refresh'
 
 // 获取路由导航实例
 const router = useRouter()
@@ -70,9 +72,10 @@ async function handleLogin() {
         permissions: userInfo.permissions ?? [],
       },
     })
-    // 兼容旧读取方
-    localStorage.setItem('token', res.data.accessToken)
-    localStorage.setItem('username', res.data.userInfo.username)
+    // 登录后补一次静默续期排期：
+    // configureAuth 在应用启动时就执行了，那时用户尚未登录（没有 token）因而不会排期，
+    // 不在这里补一次的话，只有手动刷新页面才会开始续期。
+    scheduleSilentRefresh()
     // 弹出登录成功提示
     showToast('登录成功')
     // 跳转到登录前试图访问的页面，如果没有则默认跳转到首页

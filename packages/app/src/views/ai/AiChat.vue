@@ -8,8 +8,10 @@ import { useRouter } from 'vue-router'
 import { createSession, getLastSession, getSessionMessages } from '@/api/ai'
 // 从 SSE 工具模块中导入带历史上下文的流式消费函数
 import { consumeSSEWithHistory } from '@/utils/sse'
-// 从用户 API 模块中导入刷新 token 函数
-import { refreshToken } from '@/api/user'
+// 统一的 token 刷新入口（single-flight，与 401 拦截器 / 静默续期共用同一次刷新）
+import { refreshAccessToken } from '@project/shared/token-refresh'
+// 认证状态统一从 auth-storage 读取
+import { getToken } from '@project/shared/auth-storage'
 // 从 vant 中导入 showToast 轻提示组件方法
 import { showToast, showDialog } from 'vant'
 // 导入 MarkdownIt 库用于将 Markdown 渲染为 HTML
@@ -22,7 +24,14 @@ const router = useRouter()
 const TOKEN_EXPIRED_MSG = 'Token已过期或无效，请重新登录'
 
 /**
- * 检查是否为 token 过期错误，若是则自动刷新 token
+ * 检查是否为 token 过期错误，若是则刷新 token
+ *
+ * 刷新统一走 refreshAccessToken：它内部 single-flight，与 401 拦截器、
+ * 静默续期共享同一次刷新。此前这里直接调用 refreshToken()，
+ * 三处刷新路径互不知情，会把同一个 refresh token 并发轮换两次 ——
+ * 服务端发现 Cookie 中的 RT 与 Redis 中的不一致时判定为令牌盗用，
+ * 删除会话并把用户强制下线。这是"用着用着突然掉线"的直接来源之一。
+ *
  * @param msg - 错误消息字符串
  * @returns true 表示是 token 过期且刷新成功
  */
@@ -30,22 +39,59 @@ async function autoRefreshToken(msg: string): Promise<boolean> {
   // 如果错误消息中不包含 token 过期关键词，则直接返回 false
   if (!msg.includes(TOKEN_EXPIRED_MSG)) return false
 
-  // 使用 try-catch 捕获刷新 token 请求可能抛出的异常
   try {
-    // 调用 refreshToken 接口获取新的 token
-    const res = await refreshToken()
-    // 从响应中提取新的 accessToken
-    const newToken = res.data.accessToken
-    // 将新 token 存储到 localStorage 中
-    localStorage.setItem('token', newToken)
-    // 刷新成功返回 true
+    // 刷新成功后新 token 已由 token-refresh 写入统一存储层，
+    // 重试请求会自动带上它，这里无需再自己写 localStorage
+    await refreshAccessToken()
     return true
   } catch {
-    // 刷新失败时，清除本地存储的 token
-    localStorage.removeItem('token')
-    // 跳转到登录页让用户重新登录
-    router.push('/login')
-    // 刷新失败返回 false
+    // 刷新失败：token-refresh 内部已完成状态清理并跳转登录页
+    return false
+  }
+}
+
+/**
+ * 用当前（新的）token 重试一次流式请求
+ *
+ * 抽出来是为了消除原先散落在 onChunk / onError / catch 三处的
+ * 近 40 行重复代码 —— 三份拷贝的失败处理稍有出入，容易只改到其中一份。
+ *
+ * @returns true 表示重试流程已接管（无论最终成功或失败都无需调用方兜底）
+ */
+async function retryStreamWithToken(
+  text: string,
+  aiMessageIndex: number,
+): Promise<boolean> {
+  const newToken = getToken()
+  // 拿不到 token 说明刷新并未真正成功，交由调用方走兜底提示
+  if (!newToken) return false
+
+  try {
+    await consumeSSEWithHistory(text, sessionId.value, newToken, {
+      // 正常接收数据块时追加到 AI 消息中
+      onChunk: (chunk) => {
+        messages.value[aiMessageIndex].content += parseSSEData(chunk)
+        scrollToBottom(chatContainerRef.value)
+      },
+      // 流式完成时的回调
+      onDone: () => {
+        isStreaming.value = false
+        abortController = null
+      },
+      // 流式出错时的回调
+      onError: (err) => {
+        // 如果消息内容为空则显示错误提示
+        if (!messages.value[aiMessageIndex].content) {
+          messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
+        }
+        isStreaming.value = false
+        abortController = null
+        showToast(err.message || '流式输出失败')
+      },
+    }, abortController!.signal)
+    return true
+  } catch {
+    // 重试本身抛错：返回 false，由调用方展示兜底错误
     return false
   }
 }
@@ -70,7 +116,10 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
   const info = token.info ? token.info.trim() : ''
   const rawHtml = originalFence(tokens, idx, options, env, self)
-  const langLabel = info || 'code'
+  // info 是 "```" 之后的整行内容，来自 AI 输出，属于不可信输入。
+  // 它会被拼进 HTML 再由 v-html 渲染，必须转义 —— 否则 "```php\"><img src=x onerror=...>"
+  // 可闭合属性并注入标签执行脚本（html: false 只挡裸 HTML，挡不住这里的手工拼接）。
+  const langLabel = md.utils.escapeHtml(info || 'code')
   const copyBtn = `<button class="code-copy-btn" aria-label="复制代码" type="button"><svg class="code-copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span class="code-copy-text">复制</span></button>`
   return rawHtml.replace(/^<pre/, `<pre data-code-block><span class="code-block-lang">${langLabel}</span>${copyBtn}`)
 }
@@ -292,8 +341,8 @@ async function sendStreamMessage() {
   // 滚动到底部
   await scrollToBottom(chatContainerRef.value)
 
-  // 从 localStorage 中获取当前 token
-  const token = localStorage.getItem('token') || ''
+  // 从统一存储层获取当前 token
+  const token = getToken()
   // 创建 AbortController 用于中断流式请求
   abortController = new AbortController()
 
@@ -314,42 +363,12 @@ async function sendStreamMessage() {
           messages.value[aiMessageIndex].content = ''
           // 终止当前流式请求
           abortController?.abort()
-          // 自动刷新 token
-          if (await autoRefreshToken(TOKEN_EXPIRED_MSG)) {
-            // 获取刷新后的新 token
-            const newToken = localStorage.getItem('token') || ''
-            // 如果新 token 存在
-            if (newToken) {
-              // 使用新 token 重新发起 SSE 流式请求
-              try {
-                await consumeSSEWithHistory(text, sessionId.value, newToken, {
-                  // 正常接收数据块时追加到 AI 消息中
-                  onChunk: (c) => {
-                    const t = parseSSEData(c)
-                    messages.value[aiMessageIndex].content += t
-                    scrollToBottom(chatContainerRef.value)
-                  },
-                  // 流式完成时的回调
-                  onDone: () => {
-                    isStreaming.value = false
-                    abortController = null
-                  },
-                  // 流式出错时的回调
-                  onError: (err) => {
-                    // 如果消息内容为空则显示错误提示
-                    if (!messages.value[aiMessageIndex].content) {
-                      messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
-                    }
-                    isStreaming.value = false
-                    abortController = null
-                    showToast(err.message || '流式输出失败')
-                  },
-                }, abortController!.signal)
-                return
-              } catch {
-                // 重试失败时走兜底逻辑
-              }
-            }
+          // 刷新 token 后重试一次（刷新走全局统一入口，不会与其他路径并发轮换 RT）
+          if (
+            (await autoRefreshToken(TOKEN_EXPIRED_MSG)) &&
+            (await retryStreamWithToken(text, aiMessageIndex))
+          ) {
+            return
           }
           // token 刷新也失败时显示提示
           messages.value[aiMessageIndex].content = 'Token 刷新失败，请重新登录'
@@ -371,42 +390,12 @@ async function sendStreamMessage() {
       },
       // 流式出错时的回调函数
       onError: async (error) => {
-        // 检查是否为 token 过期，是则自动刷新并重试
-        if (await autoRefreshToken(error.message)) {
-          // 获取刷新后的新 token
-          const newToken = localStorage.getItem('token') || ''
-          // 如果新 token 存在
-          if (newToken) {
-            try {
-              // 使用新 token 重新发起 SSE 流式请求
-              await consumeSSEWithHistory(text, sessionId.value, newToken, {
-                // 正常接收数据块时追加到 AI 消息中
-                onChunk: (chunk) => {
-                  const text = parseSSEData(chunk)
-                  messages.value[aiMessageIndex].content += text
-                  scrollToBottom(chatContainerRef.value)
-                },
-                // 流式完成时的回调
-                onDone: () => {
-                  isStreaming.value = false
-                  abortController = null
-                },
-                // 流式出错时的回调
-                onError: (err) => {
-                  // 如果消息内容为空则显示错误提示
-                  if (!messages.value[aiMessageIndex].content) {
-                    messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
-                  }
-                  isStreaming.value = false
-                  abortController = null
-                  showToast(err.message || '流式输出失败')
-                },
-              }, abortController!.signal)
-              return
-            } catch {
-              // 重试也失败时走下面的兜底逻辑
-            }
-          }
+        // token 过期：刷新后重试一次，成功则本轮回调结束
+        if (
+          (await autoRefreshToken(error.message)) &&
+          (await retryStreamWithToken(text, aiMessageIndex))
+        ) {
+          return
         }
 
         // 如果消息内容为空则显示错误提示
@@ -422,42 +411,12 @@ async function sendStreamMessage() {
       },
     }, abortController.signal)
   } catch (err: any) {
-    // 检测是否为 token 过期
-    if (await autoRefreshToken(err.message)) {
-      // 获取刷新后的新 token
-      const newToken = localStorage.getItem('token') || ''
-      // 如果新 token 存在
-      if (newToken) {
-        try {
-          // 使用新 token 重新发起 SSE 流式请求
-          await consumeSSEWithHistory(text, sessionId.value, newToken, {
-            // 正常接收数据块时追加到 AI 消息中
-            onChunk: (chunk) => {
-              const parsed = parseSSEData(chunk)
-              messages.value[aiMessageIndex].content += parsed
-              scrollToBottom(chatContainerRef.value)
-            },
-            // 流式完成时的回调
-            onDone: () => {
-              isStreaming.value = false
-              abortController = null
-            },
-            // 流式出错时的回调
-            onError: (error) => {
-              // 如果消息内容为空则显示错误提示
-              if (!messages.value[aiMessageIndex].content) {
-                messages.value[aiMessageIndex].content = `流式输出错误：${error.message}`
-              }
-              isStreaming.value = false
-              abortController = null
-              showToast(error.message || '流式输出失败')
-            },
-          }, abortController!.signal)
-          return
-        } catch {
-          // 重试失败时走兜底逻辑
-        }
-      }
+    // token 过期：刷新后重试一次，成功则本函数结束
+    if (
+      (await autoRefreshToken(err.message)) &&
+      (await retryStreamWithToken(text, aiMessageIndex))
+    ) {
+      return
     }
 
     // 如果消息内容为空则显示错误提示
@@ -577,8 +536,8 @@ onUnmounted(() => {
           <div
             v-if="msg.role === 'assistant'"
             class="message-content markdown-body"
-            v-html="renderMarkdown(msg.content)"
             @click="onCodeBlockClick"
+            v-html="renderMarkdown(msg.content)"
           ></div>
           <!-- 用户消息内容：纯文本显示 -->
           <div v-else class="message-content">{{ msg.content }}</div>

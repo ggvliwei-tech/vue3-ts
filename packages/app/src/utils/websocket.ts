@@ -13,6 +13,8 @@
 
 // 导入 Socket.IO 客户端库的 io 工厂函数和 Socket 类型
 import { io, Socket } from 'socket.io-client'
+// 认证状态统一从 auth-storage 读取
+import { getToken } from '@project/shared/auth-storage'
 
 // 定义 WebSocket 消息接口
 export interface WSMessage {
@@ -60,8 +62,8 @@ export function clearWebSocketHandlers(): void {
  * @returns Socket 实例
  */
 export function connectWebSocket(handlers: WSEventHandlers = {}): Socket {
-  // 从 localStorage 获取 JWT token
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : ''
+  // 从统一存储层获取 JWT token
+  const token = getToken()
   // 未登录则抛出错误
   if (!token) throw new Error('未登录')
 

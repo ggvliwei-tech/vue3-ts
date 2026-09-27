@@ -83,18 +83,18 @@ export class ChatController {
   @Get('members')
   @ApiOperation({ summary: '获取房间成员列表' })
   @Permissions('chat:room')
-  async getMembers(@Query('roomId') roomId: number) {
-    // 调用服务获取成员列表
-    return this.chatService.getRoomMembers(Number(roomId));
+  async getMembers(@Query('roomId') roomId: number, @Request() req) {
+    // 调用服务获取成员列表（service 内部校验请求者是否为该房间成员）
+    return this.chatService.getRoomMembers(Number(roomId), req.user.sub);
   }
 
   // GET /chat/messages — 获取房间历史消息
   @Get('messages')
   @ApiOperation({ summary: '获取房间历史消息' })
   @Permissions('chat:room')
-  async getMessages(@Query() dto: QueryMessagesDto) {
-    // 调用服务获取分页消息列表
-    return this.chatService.getMessages(dto);
+  async getMessages(@Query() dto: QueryMessagesDto, @Request() req) {
+    // 调用服务获取分页消息列表（service 内部校验请求者是否为该房间成员）
+    return this.chatService.getMessages(dto, req.user.sub);
   }
 
   // GET /chat/room/:id — 获取房间详情
@@ -103,9 +103,9 @@ export class ChatController {
   @Permissions('chat:room')
   // M6 修复：路由参数应为 @Param，而非 @Query
   // @Query('id') 在 path 中永远拿不到 id 值，导致 getRoomById 永远 NaN
-  async getRoomDetail(@Param('id') id: string) {
-    // 调用服务获取房间详情
-    return this.chatService.getRoomById(Number(id));
+  async getRoomDetail(@Param('id') id: string, @Request() req) {
+    // 调用服务获取房间详情（service 内部校验请求者是否为该房间成员）
+    return this.chatService.getRoomById(Number(id), req.user.sub);
   }
 
   // POST /chat/room/:id/delete — 删除房间
@@ -113,9 +113,11 @@ export class ChatController {
   @ApiOperation({ summary: '删除房间' })
   @Permissions('chat:room-delete')
   // M6 修复：同上
-  async deleteRoom(@Param('id') id: string) {
+  async deleteRoom(@Param('id') id: string, @Request() req) {
+    // 管理员可删任意房间，普通用户仅能删自己创建的（归属校验在 service 内）
+    const isAdmin = (req.user.roles ?? []).includes('admin');
     // 调用服务删除房间
-    await this.chatService.deleteRoom(Number(id));
+    await this.chatService.deleteRoom(Number(id), req.user.sub, isAdmin);
     // 返回成功标识
     return { success: true };
   }

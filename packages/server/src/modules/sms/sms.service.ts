@@ -10,6 +10,7 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common'
 import type { LoggerService } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston'
+import { randomInt } from 'crypto'
 import { RedisService } from '../redis/redis.service'
 
 @Injectable()
@@ -20,6 +21,8 @@ export class SmsService {
   private readonly COOLDOWN_TTL = 60
   /** 单个手机号每天最大发送次数 */
   private readonly MAX_DAILY_COUNT = 10
+  /** 单个验证码允许的最大校验失败次数，超过即作废 */
+  private readonly MAX_VERIFY_ATTEMPTS = 5
 
   constructor(
     private configService: ConfigService,
@@ -43,11 +46,20 @@ export class SmsService {
     return `sms:count:${phone}:${date}`
   }
 
+  /** 某手机号当前验证码的连续校验失败次数 */
+  private getAttemptKey(phone: string) {
+    return `sms:attempt:${phone}`
+  }
+
   // ====================== 验证码生成 ======================
 
-  /** 生成 6 位数字验证码 */
+  /**
+   * 生成 6 位数字验证码
+   * 用 crypto.randomInt 而非 Math.random：后者是可预测的伪随机数，
+   * 攻击者拿到若干历史验证码后即可推测后续取值。
+   */
   private generateCode(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString()
+    return randomInt(100000, 1000000).toString()
   }
 
   // ====================== 防刷校验 ======================
@@ -120,8 +132,8 @@ export class SmsService {
     return { msg: '验证码已发送' }
   }
 
-  // 阿里云短信发送（预留接口）
-  private async sendViaAliyun(phone: string, code: string): Promise<void> {
+  // 阿里云短信发送（预留接口，参数待接入 SDK 后使用，故以 _ 前缀标记）
+  private async sendViaAliyun(_phone: string, _code: string): Promise<void> {
     throw new BadRequestException(
       '阿里云短信 SDK 未安装，请先 npm install @alicloud/dysmsapi20170525 @alicloud/openapi-client',
     )
@@ -129,12 +141,48 @@ export class SmsService {
 
   // ====================== 校验验证码 ======================
 
+  /**
+   * 校验验证码
+   *
+   * ⚠️ 必须限制失败次数：6 位数字验证码只有 100 万种可能，有效期 5 分钟。
+   * 若允许无限次尝试，攻击者可在这 5 分钟内穷举命中，再通过
+   * 「忘记密码」接口重置任意账号（含管理员）的密码 —— 完整的账号接管链路。
+   * 这里连续失败 MAX_VERIFY_ATTEMPTS 次即作废验证码，必须重新发送。
+   */
   async verifyCode(phone: string, code: string): Promise<boolean> {
     const storedCode = await this.redisService.get(this.getCodeKey(phone))
+    // 无验证码：未发送 / 已过期 / 已被失败次数作废
     if (!storedCode) return false
-    if (storedCode !== code) return false
-    // 校验成功立即删除验证码（防止重复使用）
-    await this.redisService.del(this.getCodeKey(phone))
+
+    if (storedCode !== code) {
+      const attempts = await this.redisService
+        .getClient()
+        .incr(this.getAttemptKey(phone))
+      // 仅首次失败时设置 TTL：每次都续期会让计数永不过期，
+      // 把该手机号永久锁死（自伤式 DoS）
+      if (attempts === 1) {
+        await this.redisService.expire(this.getAttemptKey(phone), this.CODE_TTL)
+      }
+      if (attempts >= this.MAX_VERIFY_ATTEMPTS) {
+        // 作废验证码并清空计数，攻击者必须重新走发送流程
+        await this.redisService.del(
+          this.getCodeKey(phone),
+          this.getAttemptKey(phone),
+        )
+        this.logger.warn({
+          level: 'warn',
+          message: `[SMS] 验证码连续校验失败 ${attempts} 次，已作废：phone=${phone}`,
+          context: 'SmsService',
+        })
+      }
+      return false
+    }
+
+    // 校验成功：立即删除验证码与失败计数（防止重复使用）
+    await this.redisService.del(
+      this.getCodeKey(phone),
+      this.getAttemptKey(phone),
+    )
     return true
   }
 }

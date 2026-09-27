@@ -12,7 +12,6 @@ import { ChatOllama } from '@langchain/ollama'
 import {
   SystemMessage,
   HumanMessage,
-  AIMessage,
   type BaseMessage,
 } from '@langchain/core/messages'
 import { LlmTypeEnum } from '../enums/llm-type.enum'

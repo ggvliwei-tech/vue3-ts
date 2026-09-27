@@ -8,42 +8,34 @@
  *  - login / setToken / logout / setUserInfo / hasRole / hasPermission
  *
  * 调用方：
- *  - main.ts 在刷新 token 回调里调用 setToken / clearAuth
  *  - router.beforeEach 用 isLoggedIn / hasPermission 控制路由
  *  - 各业务页面用 store.userInfo / store.roles
  *
- * 注意：Pinia store 本身不持久化，token 通过 sessionStorage 备份
- * （不是 localStorage，避免多标签页共享陈旧 token 导致 401）
+ * 持久化统一交给 auth-storage（唯一真源）：
+ * 早先 store 写 sessionStorage、而 request 拦截器与路由守卫读 localStorage，
+ * 两处不一致导致新标签页必然 403（详见 auth-storage.ts 顶部说明）。
+ * 现在读写都经过同一模块，Pinia 只负责响应式视图。
  */
+
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import {
+  clearAuth as clearStoredAuth,
+  getToken,
+  getUserInfo,
+  setToken as persistToken,
+  setUserInfo as persistUserInfo,
+  type StoredUserInfo,
+} from '../auth-storage'
 
-export interface UserInfo {
-  id: number
-  username: string
-  status?: number
-  roles?: string[]
-  permissions?: string[]
-}
-
-const TOKEN_STORAGE_KEY = 'auth.token'
-const USER_STORAGE_KEY = 'auth.userInfo'
+/** 用户信息结构（与 auth-storage 的持久化结构一致） */
+export type UserInfo = StoredUserInfo
 
 export const useAuthStore = defineStore('auth', () => {
   // ============ State ============
-  const token = ref<string>('')
-  const userInfo = ref<UserInfo | null>(null)
-
-  // 初始化时从 sessionStorage 恢复（如果存在）
-  // 不放 localStorage 是为了避免多标签页共用旧 token
-  try {
-    const cached = sessionStorage.getItem(TOKEN_STORAGE_KEY)
-    if (cached) token.value = cached
-    const userJson = sessionStorage.getItem(USER_STORAGE_KEY)
-    if (userJson) userInfo.value = JSON.parse(userJson)
-  } catch {
-    // sessionStorage 在隐私模式可能抛错，吞掉即可
-  }
+  // 初始值直接取自统一存储层，与请求层 / 路由守卫读到的必然是同一份
+  const token = ref<string>(getToken())
+  const userInfo = ref<UserInfo | null>(getUserInfo())
 
   // ============ Getters ============
   const isLoggedIn = computed(() => !!token.value)
@@ -55,25 +47,13 @@ export const useAuthStore = defineStore('auth', () => {
   /** 写入 token（登录 / 刷新成功后调用） */
   function setToken(newToken: string): void {
     token.value = newToken
-    try {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, newToken)
-    } catch {
-      // 静默失败
-    }
+    persistToken(newToken)
   }
 
-  /** 写入用户信息（登录成功后调用） */
+  /** 写入用户信息（登录成功 / 权限同步后调用） */
   function setUserInfo(info: UserInfo | null): void {
     userInfo.value = info
-    try {
-      if (info) {
-        sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(info))
-      } else {
-        sessionStorage.removeItem(USER_STORAGE_KEY)
-      }
-    } catch {
-      // 静默失败
-    }
+    persistUserInfo(info)
   }
 
   /**
@@ -90,12 +70,7 @@ export const useAuthStore = defineStore('auth', () => {
   function clearAuth(): void {
     token.value = ''
     userInfo.value = null
-    try {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY)
-      sessionStorage.removeItem(USER_STORAGE_KEY)
-    } catch {
-      // 静默失败
-    }
+    clearStoredAuth()
   }
 
   /** 权限 / 角色判断 */

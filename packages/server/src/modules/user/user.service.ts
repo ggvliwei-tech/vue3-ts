@@ -12,7 +12,6 @@
  * 新代码建议直接注入 AuthService / UserCrudService，避免经过门面。
  */
 import { Injectable } from '@nestjs/common'
-import { User } from './entities/user.entity'
 import { CreateUserDto } from './dto/create-user.dto'
 import { LoginUserDto } from './dto/login-user.dto'
 import { ForgotPasswordDto } from './dto/forgot-password.dto'
@@ -33,8 +32,8 @@ export class UserService {
     return this.authService.login(dto, meta)
   }
 
-  refreshToken(userId: number, sessionId: string) {
-    return this.authService.refreshToken(userId, sessionId)
+  refreshToken(userId: number, sessionId: string, fromGrace = false) {
+    return this.authService.refreshToken(userId, sessionId, fromGrace)
   }
 
   logout(userId: number, sessionId: string) {
@@ -51,10 +50,6 @@ export class UserService {
 
   forceKick(userId: number, targetSessionId?: string) {
     return this.authService.forceKick(userId, targetSessionId)
-  }
-
-  validateRefreshToken(userId: number, token: string) {
-    return this.authService.validateRefreshToken(userId, token)
   }
 
   // ============ CRUD 相关（委托给 UserCrudService） ============
@@ -86,11 +81,4 @@ export class UserService {
   resetPasswordByPhone(dto: ForgotPasswordDto) {
     return this.userCrudService.resetPasswordByPhone(dto)
   }
-
-  // ============ 兼容旧调用方 ============
-
-  /** 兼容：JwtAuthGuard 等旧位置仍可能注入 UserService */
-  // 这里只是占位，实际由 AuthService 内部使用
-  // User 实体类型保留以便旧 TS 引用通过
-  readonly __legacyUserType?: User
 }

@@ -14,15 +14,11 @@
  * 注：路由前缀 /health 而非 /api/v1/health，绕过全局前缀，便于探针直接访问
  */
 
-import { Controller, Get, HttpStatus, Injectable, SetMetadata } from '@nestjs/common'
+import { Controller, Get } from '@nestjs/common'
 import { SkipThrottle } from '@nestjs/throttler'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { RedisService } from '../redis/redis.service'
-
-// 标记此 Controller 不走 /api/v1 前缀
-export const PUBLIC_HEALTH = 'public:health'
-const SKIP_AUTH_KEY = 'skipAuth'
 
 /**
  * 检查结果项

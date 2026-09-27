@@ -123,3 +123,30 @@ export function toggleUserStatus(userId: number) {
   // 调用封装的 post 方法，通过 URL 路径参数传递用户 ID，指定返回类型
   return post<ToggleStatusRes>(`/api/v1/user/${userId}/toggle-status`)
 }
+
+// 定义当前用户信息的接口（与后端 /user/profile 返回结构一致）
+export interface UserProfileRes {
+  // 用户 ID
+  id: number
+  // 用户名
+  username: string
+  // 用户状态（0 禁用 / 1 启用）
+  status: number
+  // 手机号
+  phone?: string
+  // 角色编码列表
+  roles: string[]
+  // 权限码列表
+  permissions: string[]
+}
+
+/**
+ * 获取当前登录用户信息（含最新的 roles / permissions）
+ *
+ * 权限是随 token 一起在登录时下发的，但角色随时可能被改动，
+ * 所以启动时会再拉一次 profile 覆盖本地缓存，保证权限视图不陈旧。
+ */
+export function getUserProfile() {
+  // 发送 GET 请求获取当前用户信息（后端为 @Get('profile')）
+  return get<UserProfileRes>('/api/v1/user/profile')
+}
