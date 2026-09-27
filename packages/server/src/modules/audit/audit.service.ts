@@ -114,7 +114,11 @@ export class AuditService {
       qb.andWhere('log.user_id = :userId', { userId: filters.userId })
     }
     if (filters?.username) {
-      // 用前缀匹配（username%）使索引可用；%username% 会全表扫描
+      // 用前缀匹配（username%）而不是 %username%。
+      // 但请注意：sys_audit_log 上**没有** username 索引（只有 user_id / action /
+      // createTime 以及 (action,createTime)、(user_id,createTime) 复合索引），
+      // 所以这条 LIKE 目前仍是全表扫描 —— 前缀写法只是「将来给 username 建索引能直接受益」，
+      // 不代表现在已经走了索引。要优化就按 userId 过滤或先补索引。
       qb.andWhere('log.username LIKE :username', {
         username: `${filters.username}%`,
       })

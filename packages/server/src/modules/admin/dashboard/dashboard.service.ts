@@ -24,9 +24,19 @@ import { AuditLog } from '../../audit/entities/audit-log.entity'
  *  - 原来 getOverview 用 Promise.all 并行 11 次 count() → 11 次 DB 往返
  *  - 现在合并为：
  *    * 5 个基础总数 → 单条 SQL UNION ALL（1 次往返）
- *    * 3 个时间窗口统计 → 单条 SQL UNION ALL（1 次往返）
- *    * 3 个状态过滤（active/inactive 来自 union 已覆盖的 user 表）→ 不重复
- *  - 总 DB 往返：11 → 2
+ *    * 4 个时间窗口统计 → 单条 SQL UNION ALL（1 次往返）
+ *    * active/inactive 状态过滤 → 单条 SUM(CASE WHEN) 查询（1 次往返）
+ *  - 总 DB 往返：11 → 3
+ *
+ * 列名注意：本文件用原生 SQL，必须写**实体里实际的列名**，不能靠命名习惯猜。
+ * 本项目**没有**开 SnakeNamingStrategy（app.module.ts），所以列名默认等于实体属性名，
+ * 但部分实体用 `@Column({ name: '...' })` 显式改成了下划线命名，两类混用：
+ *  - 驼峰：sys_user / account_book / sys_file / chat_* 等（createTime、userId、creatorId）
+ *  - 下划线：sys_audit_log（user_id / resource_id / user_agent）、
+ *            ai_session、ai_message（user_id / session_id / created_at / updated_at）、
+ *            sys_user_role、sys_role_permission（user_id / role_id / permission_id）
+ * 更麻烦的是同表内混用：sys_audit_log 的 createTime 是驼峰，user_id 却是下划线。
+ * 写原生 SQL 前对照 nest-db.sql 或实体上的 name 值（audit.service.ts 写 `log.user_id` 就是这原因）。
  *
  * 架构原则：
  *  - Controller 只负责路由 + 参数转发
@@ -84,12 +94,12 @@ export class DashboardService {
     const windowed = await this.userRepo.manager.query(
       `SELECT 'audit_total' AS k, COUNT(*) AS v FROM sys_audit_log
        UNION ALL
-       SELECT 'new_users_24h', COUNT(*) FROM sys_user WHERE create_time >= ?
+       SELECT 'new_users_24h', COUNT(*) FROM sys_user WHERE createTime >= ?
        UNION ALL
-       SELECT 'audit_24h', COUNT(*) FROM sys_audit_log WHERE create_time >= ?
+       SELECT 'audit_24h', COUNT(*) FROM sys_audit_log WHERE createTime >= ?
        UNION ALL
        SELECT 'failed_login_24h', COUNT(*) FROM sys_audit_log
-         WHERE action = 'login' AND status = 0 AND create_time >= ?`,
+         WHERE action = 'login' AND status = 0 AND createTime >= ?`,
       [now - oneDayMs, now - oneDayMs, now - oneDayMs],
     ) as Array<{ k: string; v: string }>
     const windowedMap = new Map(windowed.map((r) => [r.k, Number(r.v)]))

@@ -1,5 +1,5 @@
 // 导入 class-validator 验证装饰器
-import { IsNotEmpty, Length, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsOptional, Length, IsUrl } from 'class-validator';
 // 导入 Swagger API 属性装饰器，用于生成 API 文档
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -15,7 +15,11 @@ export class CreateAccountBookDto {
 
   // Swagger 文档描述：网站地址，非必填
   @ApiProperty({ description: '网站地址', required: false })
-  // 验证：必须是有效的 URL 格式
+  // 必须显式声明 @IsOptional()，否则 class-validator 会对 undefined 也跑校验：
+  // IsUrl 对非字符串返回 false（不抛错），于是「不传这个字段」会被判成
+  // 「网址格式不正确」，用户看到一条驴唇不对马嘴的 400。
+  @IsOptional()
+  // 验证：填了就必须是有效的 URL 格式
   @IsUrl({}, { message: '网址格式不正确' })
   websiteUrl?: string;
 

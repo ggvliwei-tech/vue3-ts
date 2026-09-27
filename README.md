@@ -1,16 +1,16 @@
 # Vue3 Monorepo 通用后台模板
 
-> NestJS 11 + Vue 3 + Element Plus + Vant 5 + TypeScript 全栈模板，开箱即用，支持一键 Docker 部署。
+> NestJS 11 + Vue 3 + Element Plus + Vant 4 + TypeScript 全栈模板，开箱即用，支持一键 Docker 部署。
 
 ## ✨ 核心特性
 
 - **后端**：NestJS 11 + TypeORM + MySQL 8 + Redis 7，模块化分层设计
 - **Admin 后台**：Vue 3 + Vite 8 + Element Plus + Pinia + Vue Router 4
-- **App 移动端**：Vue 3 + Vite 8 + Vant 5（移动端 H5）
+- **App 移动端**：Vue 3 + Vite 8 + Vant 4（移动端 H5）
 - **RBAC 权限体系**：角色 / 权限码 / 用户角色 / 角色权限，多维度控制
 - **JWT 双 Token**：Access + Refresh + HttpOnly Cookie + 多设备会话
 - **登录风控**：IP 滑动窗口限流 + 账号失败计数 + 自动锁定
-- **统一响应格式**：`{ code, msg, data, requestId, timestamp }`，前端可统一拦截
+- **统一响应格式**：成功 `{ code: 0, msg, data }`／失败 `{ code, msg, data, requestId, timestamp }`，前端按 `code === 0` 判定
 - **全局异常过滤器**：catch Everything，附带 requestId 链路追踪
 - **结构化日志**：Winston + nest-winston，控制台 + JSON 文件双输出
 - **健康检查**：liveness + readiness 双端点，K8s / Docker HEALTHCHECK 可用
@@ -33,7 +33,8 @@ vue3-monorepo/
 ├── Dockerfile.server   # 后端镜像
 ├── Dockerfile.admin    # Admin 前端镜像
 ├── Dockerfile.app      # App 前端镜像
-└── .env.example        # 环境变量样例
+├── .env.example        # Docker Compose 环境变量样例（根目录 .env）
+└── packages/server/.env.example  # 后端进程环境变量样例（packages/server/.env）
 ```
 
 ## 🚀 快速开始
@@ -78,10 +79,16 @@ pnpm build:shared
 #    在 MySQL 中执行 packages/server/nest-db.sql
 
 # 4. 配置 packages/server/.env
-#    参考 .env.example，关键配置：
-#    DB_HOST=localhost  DB_PORT=3306  DB_USER=xxx  DB_PWD=xxx  DB_NAME=vue3_monorepo
-#    REDIS_HOST=localhost  REDIS_PORT=6379  REDIS_PASSWORD=xxx
-#    JWT_ACCESS_SECRET=xxx  JWT_REFRESH_SECRET=xxx
+#    cp packages/server/.env.example packages/server/.env
+#    ⚠️ 用 packages/server/.env.example，不是根目录那个 .env.example：
+#       根目录的是给 docker compose 用的，里面没有 DB_HOST / LOCAL_UPLOAD_BASE_DIR 等
+#       后端必需项，复制成 server/.env 会启动即报「环境变量 DB_HOST 未在 .env 中配置」。
+#    缺失会直接启动失败（无代码兜底）的变量：
+#    DB_HOST  DB_PORT  DB_USER  DB_PWD  DB_NAME
+#    JWT_ACCESS_SECRET  JWT_REFRESH_SECRET  CORS_ORIGINS
+#    LOCAL_UPLOAD_BASE_DIR  LOCAL_STATIC_PREFIX
+#    其余常用项（REDIS_* / LLM_TYPE / STORAGE_TYPE / APP_PORT 等）都有默认值，
+#    逐项说明见该模板文件内的注释。
 
 # 5. 启动开发服务
 pnpm dev:full    # 同时启动 server + admin + app
@@ -177,26 +184,31 @@ sys_user          ←── sys_user_role ──→ sys_role
 ### 统一响应格式
 
 ```typescript
-// 成功
+// 成功 —— 由 TransformInterceptor 包装，注意**没有** requestId / timestamp
 {
   code: 0,
-  msg: 'success',
-  data: { ... },
-  requestId: 'req_xxx',
-  timestamp: 1725000000000
+  msg: '请求成功',
+  data: { ... }
 }
 
-// 业务错误
+// 业务错误 —— 由 GlobalExceptionFilter 包装，比成功多两个排查字段
 {
   code: 10001,        // BusinessCode.PARAM_INVALID
   msg: '参数不能为空',
   data: { errors: ['字段 xxx 不能为空'] },
-  requestId: 'req_xxx',
+  requestId: 'req_xxx',   // 同时透出在响应头 X-Request-Id
   timestamp: 1725000000000
 }
 ```
 
 前端只需判断 `code === 0` 即可。
+
+两个补充：
+- 成功响应里 `requestId` 是**不存在的**，不要在前端按它做链路追踪；
+  需要追踪请在请求头带 `X-Request-Id`，异常响应会原样回显（见 getOrGenRequestId）。
+- HTTP 状态码与 `code` 是两套体系：`code` 取 `BusinessCode` 枚举值（形如 1xxxxx / 2xxxxx），
+  与 HTTP status 并非一一对应；内置 `HttpException` 未显式指定业务码时统一落到
+  `20000 INTERNAL_ERROR`（见 global-exception.filter.ts 的分支处理）。
 
 ### 日志格式
 

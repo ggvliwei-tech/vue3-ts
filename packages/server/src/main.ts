@@ -53,9 +53,17 @@ async function bootstrap() {
   // Cookie 解析
   app.use(cookieParser())
 
-  // ========== 全局路由前缀（健康检查除外） ==========
+  // ========== 全局路由前缀（探针端点除外） ==========
+  // health 与 metrics 都是运维/探针专用：前者给 K8s 探针，后者给 Prometheus 抓取。
+  // 二者都必须在排除清单里 —— MetricsController 与 MetricsModule 的注释都写明
+  // 「不走 /api/v1 前缀」，若这里漏排，实际注册路径会变成 /api/v1/metrics，
+  // Prometheus 按 /metrics 抓取会静默拿到 404（监控失效且不报错）。
   app.setGlobalPrefix('api/v1', {
-    exclude: [{ path: 'health', method: RequestMethod.GET }, { path: 'health/(.*)', method: RequestMethod.GET }],
+    exclude: [
+      { path: 'health', method: RequestMethod.GET },
+      { path: 'health/(.*)', method: RequestMethod.GET },
+      { path: 'metrics', method: RequestMethod.GET },
+    ],
   })
 
   // ========== CORS ==========
@@ -124,6 +132,7 @@ async function bootstrap() {
         : '') +
       `  健康检查：http://localhost:${port}/health\n` +
       `  健康就绪：http://localhost:${port}/health/ready\n` +
+      `  监控指标：http://localhost:${port}/metrics\n` +
       `  接口前缀：http://localhost:${port}/api/v1\n` +
       `  Swagger： http://localhost:${port}/api-docs\n` +
       `${'─'.repeat(60)}\n`,

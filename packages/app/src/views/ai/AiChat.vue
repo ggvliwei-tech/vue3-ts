@@ -20,8 +20,22 @@ import MarkdownIt from 'markdown-it'
 // 获取路由导航实例
 const router = useRouter()
 
-// 未授权错误关键词常量，用于检测 token 过期错误
-const TOKEN_EXPIRED_MSG = 'Token已过期或无效，请重新登录'
+// 判定「令牌失效」的关键词（必须用多关键词，不能写死一个完整串）
+//
+// 服务端各处文案并不统一，而且 SSE 走的是原生 fetch（绕开了 axios 拦截器），
+// 拿到的只有 HTTP 状态行、不含服务端 msg：
+//  - REST（common/guards/jwt-auth.guard.ts）：'Token已过期，请重新登录' / 'Token无效，请重新登录'
+//  - WS（modules/chat/chat.gateway.ts）：'Token已过期或无效'
+//  - SSE（@/utils/sse.ts 抛出的 Error）：'SSE 请求失败: 401 Unauthorized'
+// 此前这里写死 'Token已过期或无效，请重新登录'，服务端从未产出过这个完整串，
+// 于是 autoRefreshToken 恒返回 false，整条「刷新后重试」链路是死代码，
+// 用户只会看到「流式输出错误：SSE 请求失败: 401 Unauthorized」。
+const TOKEN_EXPIRED_KEYWORDS = ['Token已过期', 'Token无效', '登录已过期', 'SSE 请求失败: 401']
+
+/** 判断一段错误文案是否表示令牌失效（见 TOKEN_EXPIRED_KEYWORDS 的说明） */
+function isTokenExpiredMsg(msg: string): boolean {
+  return TOKEN_EXPIRED_KEYWORDS.some((k) => msg.includes(k))
+}
 
 /**
  * 检查是否为 token 过期错误，若是则刷新 token
@@ -36,8 +50,8 @@ const TOKEN_EXPIRED_MSG = 'Token已过期或无效，请重新登录'
  * @returns true 表示是 token 过期且刷新成功
  */
 async function autoRefreshToken(msg: string): Promise<boolean> {
-  // 如果错误消息中不包含 token 过期关键词，则直接返回 false
-  if (!msg.includes(TOKEN_EXPIRED_MSG)) return false
+  // 不是令牌失效类错误就不动它，交给调用方按普通错误提示
+  if (!isTokenExpiredMsg(msg)) return false
 
   try {
     // 刷新成功后新 token 已由 token-refresh 写入统一存储层，
@@ -66,6 +80,16 @@ async function retryStreamWithToken(
   // 拿不到 token 说明刷新并未真正成功，交由调用方走兜底提示
   if (!newToken) return false
 
+  // 必须换成全新的 AbortController，不能复用旧的
+  //
+  // onChunk 分支在调本函数之前已经 abort 过旧 controller（见下方 "终止当前流式请求"），
+  // 而复用那个 signal 会让 fetch 在真正发出请求之前就抛 AbortError；
+  // sse.ts 把 AbortError 当成"用户主动取消"静默处理（调 onDone 后 return，不抛错），
+  // 于是本函数一路走到 return true，调用方以为重试已接管而跳过错误提示 ——
+  // 表现是气泡永久空白且没有任何报错。换新 signal 才能让重试真正发出去。
+  const controller = new AbortController()
+  abortController = controller
+
   try {
     await consumeSSEWithHistory(text, sessionId.value, newToken, {
       // 正常接收数据块时追加到 AI 消息中
@@ -88,7 +112,7 @@ async function retryStreamWithToken(
         abortController = null
         showToast(err.message || '流式输出失败')
       },
-    }, abortController!.signal)
+    }, controller.signal)
     return true
   } catch {
     // 重试本身抛错：返回 false，由调用方展示兜底错误
@@ -357,15 +381,15 @@ async function sendStreamMessage() {
       onChunk: async (chunk) => {
         // 解析 SSE 数据块
         const parsed = parseSSEData(chunk)
-        // 检测 SSE 数据块中是否包含 token 过期消息
-        if (parsed.includes(TOKEN_EXPIRED_MSG)) {
+        // 检测 SSE 数据块是否表示令牌失效
+        if (isTokenExpiredMsg(parsed)) {
           // 清除已追加的 token 过期内容
           messages.value[aiMessageIndex].content = ''
           // 终止当前流式请求
           abortController?.abort()
           // 刷新 token 后重试一次（刷新走全局统一入口，不会与其他路径并发轮换 RT）
           if (
-            (await autoRefreshToken(TOKEN_EXPIRED_MSG)) &&
+            (await autoRefreshToken(parsed)) &&
             (await retryStreamWithToken(text, aiMessageIndex))
           ) {
             return

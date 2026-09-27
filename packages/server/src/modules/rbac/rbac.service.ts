@@ -30,8 +30,12 @@ const CACHE_TTL = 10 * 60
  *  - clearUserCache(userId)：清除用户的角色/权限缓存（角色变更时调用）
  *
  * 性能优化：
- *  - 角色/权限数据写入 JWT payload 不需要实时性，每次请求都查 DB 代价高
+ *  - 每次请求都查 DB（两次 JOIN）代价高，而角色/权限变更不需要秒级实时性
  *  - 用 Redis 缓存 10 分钟，期间 admin 调整权限最长延迟 10 分钟生效
+ *  - 注意：权限**不在** JWT payload 里。登录/刷新签发的 payload 只有
+ *    { sub, username, sessionId }（见 user/auth.service.ts），前端拿权限走
+ *    /user/profile，服务端校验走本 Service —— 所以这里缓存的是 DB 查询结果，
+ *    与 token 内容无关（旧注释写成"写入 JWT payload"是错的）
  *  - 关键操作（如 forceKick）可主动 clearUserCache 立即生效
  *
  * 容错降级（C2 修复）：

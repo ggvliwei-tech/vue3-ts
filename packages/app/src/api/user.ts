@@ -60,20 +60,40 @@ export interface RefreshTokenRes {
 
 /**
  * 用户登录
+ *
+ * skipRefresh：登录请求本来就没有会话，401 是「账号或密码错误」这类业务错误，
+ * 不能按「会话过期」去刷新 / 跳登录页，否则真正的错误提示永远显示不出来。
+ *
  * @param data - 登录参数（用户名和密码）
  */
 export function login(data: LoginParams) {
   // 发送 POST 请求到登录接口，返回登录响应数据
-  return post<LoginRes>('/api/v1/user/login', data)
+  return post<LoginRes>('/api/v1/user/login', data, { skipRefresh: true })
+}
+
+/** 注册接口的响应：服务端的白名单出参，不回传 password / phone */
+export interface RegisterRes {
+  // 用户 ID
+  id: number
+  // 用户名
+  username: string
+  // 用户状态（0 禁用 / 1 启用）
+  status: number
+  // 创建时间戳
+  createTime: number
 }
 
 /**
  * 用户注册
- * @param data - 注册参数（用户名和密码）
+ *
+ * 返回的是用户基本信息，**不是** 登录响应（服务端不会在此下发 token，
+ * 注册完仍需走一次 login）。另外同样带 skipRefresh，理由同 login。
+ *
+ * @param data - 注册参数（用户名、密码、手机号）
  */
 export function register(data: RegisterParams) {
-  // 发送 POST 请求到注册接口，返回注册响应数据
-  return post<LoginRes>('/api/v1/user/register', data)
+  // 发送 POST 请求到注册接口，返回新用户基本信息
+  return post<RegisterRes>('/api/v1/user/register', data, { skipRefresh: true })
 }
 
 /**
@@ -126,9 +146,12 @@ export function getUserProfile() {
 
 /**
  * 通过手机号 + 短信验证码重置密码
+ *
+ * skipRefresh：未登录场景，验证码错误之类的 401 不该被当成会话过期。
+ *
  * @param data - 忘记密码参数（手机号 + 验证码 + 新密码）
  */
 export function forgotPassword(data: ForgotPasswordParams) {
   // 发送 POST 请求到忘记密码接口
-  return post<{ msg: string }>('/api/v1/user/forgot-password', data)
+  return post<{ msg: string }>('/api/v1/user/forgot-password', data, { skipRefresh: true })
 }

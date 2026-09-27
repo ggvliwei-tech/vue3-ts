@@ -63,8 +63,9 @@ export const HOME_ENTRIES: HomeEntry[] = [
 /**
  * 从后端拉取最新的 roles / permissions 覆盖本地缓存。
  *
- * 为什么需要：权限是登录时随 token 下发并存进 sessionStorage 的，
- * 但 admin 后台随时可能改角色。后端在改角色时会 clearUserCache，
+ * 为什么需要：权限是登录时随 token 下发并写进统一存储层（localStorage，
+ * 见 shared/src/auth-storage.ts）的，但 admin 后台随时可能改角色。
+ * 后端在改角色时会 clearUserCache，
  * 所以这里拉一次 profile 就能拿到即时生效的权限，不必等用户重新登录。
  *
  * 失败时静默返回 false（不阻塞应用启动）：401 会由 request 层的

@@ -6,9 +6,15 @@
  *  - 连接已建立时再次调用 connectWebSocket，必须**同步**触发 onConnect
  *    否则 ChatRoom 进入时如果 socket 已连接，会漏掉 join-room，send-msg 被服务端以
  *    "您不在该房间中" 403 拒绝。
- *  - 重连（'reconnect' 事件）后服务端 rooms 已被清空，需重新触发 join-room。
+ *  - 断线重连后服务端 rooms 已被清空，需重新触发 join-room。重连**不需要**单独监听
+ *    'reconnect'：那是 Manager 的事件，Socket 不会转发给它（socket.io-client v4 里
+ *    Socket 只保留 connect / connect_error / disconnect）。好在 v4 每次重连成功都会
+ *    重新 emit 'connect'，所以监听 'connect' 一条就够，join-room 会自然重发。
  *  - ChatRoom 卸载时同步移除所有事件监听，避免多次进入同一 ChatRoom 累积重复 handler
  *    导致重复 join / 重复收消息。
+ *
+ * 已知技术债：clearWebSocketHandlers() 用的是 removeAllListeners()，会把 socket.io-client
+ * 内部依赖的监听也一并摘掉。当前只有 ChatRoom 使用 WS，暂无实际影响。
  */
 
 // 导入 Socket.IO 客户端库的 io 工厂函数和 Socket 类型
@@ -62,7 +68,8 @@ export function clearWebSocketHandlers(): void {
  * 关键不变量：调用方传入的 handlers.onConnect **必然**会在以下时机被调用：
  *  1. 全新 socket 建立成功（'connect' 事件）
  *  2. 已有 socket 仍处于 connected 状态（同步立即触发，避免漏掉 join-room）
- *  3. socket 自动重连成功（'reconnect' 事件） —— 因为服务端在 disconnect 时会清空 rooms
+ *  3. socket 自动重连成功 —— 同样是 'connect' 事件（v4 每次重连成功都会重新 emit），
+ *     此时服务端早已在 disconnect 时清空了 rooms，所以必须重发 join-room
  *
  * @param handlers - 事件回调函数集合
  * @returns Socket 实例
@@ -114,19 +121,22 @@ export function connectWebSocket(handlers: WSEventHandlers = {}): Socket {
 
 /**
  * 在已有 socket 上绑定一组 handlers
- * - 'connect' / 'reconnect'：调用 onConnect（前者是首次连接，后者是断线恢复）
+ * - 'connect'：调用 onConnect（首次连接与自动重连成功都走这条）
  * - 'disconnect'：调用 onDisconnect
  * - 'error'：调用 onError
  * - 其余 server → client 事件转发到对应 handler
+ *
+ * 曾经还绑了 socket.on('reconnect', ...)，那是**死监听**：
+ * 'reconnect' 属于 Manager 而非 Socket，socket.io-client v4 里 Socket 只保留
+ * connect / connect_error / disconnect 三个保留事件，且不转发 Manager 的事件。
+ * 删掉它没有行为变化 —— 重连成功本来就会重新触发 'connect'。
  */
 function bindHandlers(socket: Socket, handlers: WSEventHandlers): void {
   // 先解绑，避免 socket 单例上累积多组 handler
   socket.removeAllListeners()
 
-  // 首次连接 / 重连成功都视为"connected"，都会触发 onConnect 回调
-  // （'connect' 是首次 / 手动重连触发；'reconnect' 是 socket.io-client 自动重连触发）
+  // 首次连接 / 自动重连成功都触发 'connect'，统一走 onConnect
   socket.on('connect', () => handlers.onConnect?.())
-  socket.on('reconnect', () => handlers.onConnect?.())
   // 断开连接回调
   socket.on('disconnect', (reason) => handlers.onDisconnect?.(reason))
   // 服务端错误回调

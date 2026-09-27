@@ -25,7 +25,9 @@ if (!fs.existsSync(LOG_DIR)) {
 }
 
 /**
- * 生成"日期滚动"文件名后缀（YYYY-MM-DD）
+ * 生成文件名后缀（YYYY-MM-DD），表示**进程启动那天**
+ *
+ * 注意它只在模块加载时求值一次，不会随日期推进而变化。
  */
 function dateStamp(): string {
   const d = new Date()
@@ -34,15 +36,23 @@ function dateStamp(): string {
 }
 
 /**
- * 按日切割的文件 transport
+ * 文件 transport（**不是**按日切割，名字里的 daily 只表示文件名带日期前缀）
+ *
+ * 这里用的是 winston.transports.File，不是 winston-daily-rotate-file：
+ *  - 文件名在进程启动时定死为 app-<启动日期>.log，之后**永远不会**换文件。
+ *    长期不重启的进程会一直往同一个文件写，日期前缀停留在启动那天（会误导排查）。
+ *  - 真正的切割只由 maxsize 触发（20MB 一个），maxFiles 限制保留几个**文件**，
+ *    与"天"无关。要按日切割得换成 DailyRotateFile 并配 datePattern。
  */
 function dailyFileTransport(filename: string, level: string): winston.transport {
   return new winston.transports.File({
     filename: path.join(LOG_DIR, `${filename}-${dateStamp()}.log`),
     level,
-    // 单文件 20MB 自动切分（不切日期，按大小）
+    // 单文件 20MB 自动切分（按大小，不按日期）
     maxsize: 20 * 1024 * 1024,
-    maxFiles: 14, // 保留 14 天
+    // 保留最近 14 个**文件**（≈280MB 上限），不是 14 天。
+    // 日志量大时 14 个文件可能只覆盖几小时，别当保留期用。
+    maxFiles: 14,
     format: winston.format.combine(
       winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
       winston.format.errors({ stack: true }),

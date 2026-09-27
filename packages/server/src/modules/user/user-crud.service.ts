@@ -111,6 +111,11 @@ export class UserCrudService {
    *  - 先查询用户名/手机号是否存在（快速失败）
    *  - bcrypt 哈希后入库
    *  - 数据库唯一约束作为兜底防并发
+   *
+   * 返回值是**显式白名单**，不是 save() 的实体：本接口对匿名用户开放，
+   * 直接回传 User 实体会把 password（bcrypt 哈希，可供离线爆破）和 phone 一并送出去。
+   * ClassSerializerInterceptor 救不了它 —— User.password 上没有 @Exclude()。
+   * 与 findById 一样走白名单，新增字段时必须显式加进来。
    */
   async create(createUserDto: CreateUserDto) {
     const existingUser = await this.userRepo.findOne({
@@ -133,7 +138,14 @@ export class UserCrudService {
       createTime: Date.now(),
     })
     try {
-      return await this.userRepo.save(user)
+      const saved = await this.userRepo.save(user)
+      // 白名单出参：绝不回传 password / phone
+      return {
+        id: saved.id,
+        username: saved.username,
+        status: saved.status,
+        createTime: saved.createTime,
+      }
     } catch (error) {
       if (error instanceof QueryFailedError && (error as any).driverError?.errno === 1062) {
         throw new ConflictException('用户名或手机号已注册')

@@ -3,9 +3,15 @@
  * 使用 fetch + ReadableStream（因为需要携带 Authorization 头，EventSource 不支持）
  *
  * 本次重构：
- *  - token 参数变为可选（不传则从 useAuthStore 取，符合 M1 集中管理）
+ *  - token 参数变为可选；不传则从 **@project/shared/auth-storage** 读取
+ *    （不走 AuthStore —— pinia 未激活时 useAuthStore() 会直接抛错）
  *  - 抽取通用消费逻辑为私有 consume()，消除两个函数的重复
- *  - 增加 on401 回调，调用方可拦截 token 过期场景并刷新后重试
+ *
+ * 注意本模块用原生 fetch，**绕开了 axios 拦截器**：401 不会自动刷新 token，
+ * 只会抛 `SSE 请求失败: 401 Unauthorized`。调用方（AiChat.vue）需要靠这个文案
+ * 自行识别并调用 refreshAccessToken 重试。这里**没有** on401 回调，
+ * 调用方也拿不到状态码 —— 若将来要改善，应该让 consume() 在 401 时走统一刷新，
+ * 而不是继续加关键词匹配。
  */
 
 // 从共享模块中导入 getBaseURL 函数

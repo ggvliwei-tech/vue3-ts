@@ -59,7 +59,13 @@ describe('GlobalExceptionFilter', () => {
   })
 
   describe('NestJS 内置 HttpException', () => {
-    it('BadRequestException → 400 + 业务码 PARAM_INVALID', () => {
+    // 用例名只描述 HTTP 状态，不要写业务码：
+    // 过滤器当前的实现只对「message 是数组」（即 ValidationPipe 的错误）
+    // 才给出 PARAM_INVALID，像下面这样传字符串 message 的 BadRequestException
+    // 会落到默认的 businessCode = INTERNAL_ERROR(20000)。
+    // 「HttpException 的 status → 业务码」这条映射目前整体缺失，
+    // 修复后应在这里补上 expect(body.code).toBe(BusinessCode.PARAM_INVALID)。
+    it('BadRequestException → 400（业务码映射尚未实现，不在此断言）', () => {
       const host = mockHost({ headers: {}, url: '/x' })
       filter.catch(new BadRequestException('参数错误'), host as any)
       const body = host.__mockRes.json.mock.calls[0][0]

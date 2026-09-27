@@ -3,9 +3,16 @@
 -- 数据库：nest_db
 -- 字符集：utf8mb4 / utf8mb4_unicode_ci
 -- 说明：
---   1. 本脚本按 src/modules/**/entities/*.entity.ts 中的 TypeORM 实体生成
---   2. 幂等可重复执行（先 DROP 再 CREATE + INSERT IGNORE 初始数据）
---   3. 执行前请确认 DB_HOST / DB_USER / DB_PWD 与 .env 配置一致
+--   1. 【本脚本是表结构的唯一权威来源】
+--      app.module.ts 里 TypeORM 写死 synchronize: false，实体只提供元数据，
+--      不会建表也不会改表；真正决定线上结构的就是这个文件。
+--   2. 结构与 TypeORM 实体是**手工对齐**的，并非从实体生成：
+--      本文件里的部分索引 / 外键在实体装饰器上并没有对应声明（如 sys_user 的
+--      uk_sys_user_phone），改动实体时请同步改这里，否则两边会静默漂移。
+--   3. 幂等可重复执行（先 DROP 再 CREATE + INSERT IGNORE 初始数据）
+--      —— 注意 DROP 会清空数据，这是 bootstrap 脚本，不是增量升级脚本；
+--      已上线的库请改用 upgrade-*.sql。
+--   4. 执行前请确认 DB_HOST / DB_USER / DB_PWD 与 .env 配置一致
 -- =============================================
 
 -- 1. 创建数据库（不存在则新建）

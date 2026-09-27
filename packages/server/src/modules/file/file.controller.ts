@@ -24,6 +24,8 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+// 分页参数运行时解析（查询串恒为 string，非法值会让 TypeORM 抛错变成 500）
+import { parsePositiveInt, MAX_PAGE_SIZE } from '../../common/utils/pagination.util';
 
 // Swagger 标签
 @ApiTags('文件管理')
@@ -41,11 +43,19 @@ export class FileController {
   @ApiOperation({ summary: '分页查询文件列表' })
   @Permissions('file:list')
   async findAll(
-    @Query('page') page = 1, // 页码参数，默认值为 1
-    @Query('limit') limit = 10, // 每页数量参数，默认值为 10
+    @Query('page') page: string | undefined, // 页码参数，默认第 1 页
+    @Query('limit') limit: string | undefined, // 每页数量参数，默认 10 条（上限 MAX_PAGE_SIZE）
     @Query('module') module?: string, // 模块筛选参数，可选
   ) { // 方法参数列表结束
-    return this.fileService.findAll(+page, +limit, module); // 调用服务分页查询，+ 将字符串转为数字
+    // 参数类型标注为 string（查询串的真实运行时类型）。
+    // 原先写 `page = 1` 会让 TS 推断成 number，再用 +page 转换 —— 类型是假的，
+    // 且 `?page=abc` 得到 NaN，NaN 进 TypeORM 的 skip 会抛 TypeORMError（500）。
+    // 统一走 parsePositiveInt 兜底，非法值退回默认值。
+    return this.fileService.findAll(
+      parsePositiveInt(page, 1),
+      parsePositiveInt(limit, 10, MAX_PAGE_SIZE),
+      module,
+    );
   }
 
   // 单文件（原有）
@@ -61,7 +71,10 @@ export class FileController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: any,
   ) {
-    // 调用服务的 uploadSingle 方法上传文件，归类为 'goods' 类型
+    // 调用服务的 uploadSingle 方法上传文件
+    // 第二个参数是 module 归属，这里传空串表示"不归类"（不是 'goods'，旧注释写错了；
+    // 空串会原样存进 sys_file.module，想归类就把模块名传进来）
+    // 第三个参数 true 表示走图片压缩
     // TransformInterceptor 会自动包装为 {code: 0, msg, data} 格式
     return this.fileService.uploadSingle(file, '', true, user.id);
   }

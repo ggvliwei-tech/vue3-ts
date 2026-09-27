@@ -107,8 +107,11 @@ export class PermissionService {
 
   /**
    * 删除权限
-   * - 同步清理 sys_role_permission 关联
-   * - 注意：删除后所有角色失去该权限，需提醒 admin
+   *
+   * 语义是「被引用就拒绝」，**不是**级联删除：
+   * 若还有角色持有该权限，直接抛 400 让调用方先解除绑定；
+   * 通过检查后只删 sys_permission 本体，**不会**动 sys_role_permission 里的关联行
+   * （既然此时引用数为 0，也没有关联行可删）。
    */
   async remove(id: number): Promise<void> {
     const perm = await this.permRepo.findOne({ where: { id } })

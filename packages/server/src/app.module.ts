@@ -64,8 +64,13 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
         password: configService.getOrThrow<string>('DB_PWD'), // 数据库密码
         database: configService.getOrThrow<string>('DB_NAME'), // 数据库名称
         entities: ['dist/**/*.entity{.ts,.js}'], // 实体文件路径，TypeORM 自动映射表结构
-        // synchronize: process.env.NODE_ENV !== 'production', // 非生产环境自动同步表结构
-        synchronize: false, // 非生产环境不自动同步表结构
+        // 表结构**不**由 TypeORM 维护：synchronize 恒为 false（所有环境，包括本地开发）。
+        // nest-db.sql 才是权威 schema，实体装饰器只做映射元数据。
+        // 上面这行注释掉的写法（NODE_ENV !== 'production'）才是"非生产环境自动同步"，
+        // 当初为了规避同步误删列的风险改成了硬编码 false，别再按那句话理解。
+        // 改表结构请写增量 SQL（sql/upgrade-*.sql），不要指望实体改动会自动生效。
+        // synchronize: process.env.NODE_ENV !== 'production',
+        synchronize: false,
         logging: false, // 关闭 SQL 日志输出
         charset: 'utf8mb4', // 使用 utf8mb4 字符集，支持 emoji 等特殊字符
         supportBigNumbers: true, // 支持大数字类型

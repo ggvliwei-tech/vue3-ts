@@ -7,21 +7,24 @@
  *
  * 设计要点：
  *  - 走 createTime 索引的范围删除，避免全表扫描
- *  - 单次删除分批 LIMIT 1000，避免大事务长锁
+ *  - 每批最多 BATCH_SIZE 行：先用 take 取一批主键，再按主键删除。
+ *    注意 **不能** 直接 `repo.delete({ createTime: LessThan(cutoff) })` ——
+ *    Repository.delete(criteria) 不支持 LIMIT，一条语句会删光全部匹配行，
+ *    存量大的库上会撑出超长事务与长时间行锁。
  *  - 删除完成前 await，避免并发触发
  */
 import { Inject, Injectable } from '@nestjs/common'
 import type { LoggerService } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, LessThan } from 'typeorm'
+import { Repository, LessThan, In } from 'typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston'
 import { AuditLog } from './entities/audit-log.entity'
 
 @Injectable()
 export class AuditCleanupCron {
-  /** 单批删除行数，避免大事务 */
+  /** 单批删除行数上限，避免大事务 */
   private readonly BATCH_SIZE = 1000
   /** 是否正在执行（防并发） */
   private running = false
@@ -55,12 +58,19 @@ export class AuditCleanupCron {
       // 分批删除直到无更多可删
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        const result = await this.auditRepo.delete({
-          createTime: LessThan(cutoff),
+        // 第一批：只取主键，带上 take 才是真正的「LIMIT」
+        const batch = await this.auditRepo.find({
+          select: { id: true },
+          where: { createTime: LessThan(cutoff) },
+          order: { createTime: 'ASC' },
+          take: this.BATCH_SIZE,
         })
-        const affected = result.affected ?? 0
-        deleted += affected
-        if (affected < this.BATCH_SIZE) break
+        if (batch.length === 0) break
+
+        // 第二批：按主键删除，影响行数严格等于本批大小
+        await this.auditRepo.delete({ id: In(batch.map((r) => r.id)) })
+        deleted += batch.length
+        if (batch.length < this.BATCH_SIZE) break
       }
 
       if (deleted > 0) {

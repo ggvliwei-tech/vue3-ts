@@ -25,8 +25,14 @@ import { parseJwtExpiry } from '../utils/jwt.util'
  * 核心职责：
  *  1. 从 Cookie 读取 refresh_token，验证签名
  *  2. 与 Redis 中存储的 RT 比对（一致性校验）
- *  3. **RT 复用检测**：若请求中的 RT ≠ Redis 中存储的 RT
- *     → 判定为令牌盗用 → 立即吊销该用户所有 token 并抛异常
+ *  3. **RT 复用检测**：若请求中的 RT ≠ Redis 中存储的 RT，且不在宽限窗口内
+ *     → 判定为令牌盗用 → 吊销**该设备**会话（删该 sessionId 的 RT +
+ *       加设备级黑名单）并抛 401。
+ *
+ * 注意「只吊销该设备」是刻意的，不是遗漏：用户级 key 会让一台设备出问题
+ * 就把该用户其他设备一起踢下线，与「多设备会话互不影响」的承诺矛盾
+ * （见实现里 blacklistSession 与 blacklistToken 的区分）。
+ * 需要「踢该用户全部设备」请走 UserService.forceKick / logout-all。
  */
 @Injectable()
 export class RefreshTokenGuard implements CanActivate {

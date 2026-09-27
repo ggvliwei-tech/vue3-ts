@@ -135,23 +135,30 @@ async function loadHistory() {
 async function loadMore() {
   // 如果正在加载或没有更多历史，则直接返回
   if (loadingHistory.value || !hasMoreHistory.value) return
+
+  const container = chatContainerRef.value
+  // 加载前先量下视口锚点。loadHistory 是往数组**头部**插入（见上面那行
+  // `[...新消息, ...messages.value]`），所以新增内容会把整段内容往下推；
+  // 不补这个高度差，用户当前看的那条消息就会跳出视口。
+  const prevScrollHeight = container?.scrollHeight ?? 0
+  const prevScrollTop = container?.scrollTop ?? 0
+
   // 页码加 1
   currentPage.value++
-  // 记录当前消息列表长度（用于计算滚动位置偏移）
-  const oldLength = messages.value.length
   // 加载下一页历史消息
   await loadHistory()
   // 等待 DOM 更新
   await nextTick()
-  // 计算新增消息导致的滚动偏移量，保持用户看到的视口位置不变
-  if (chatContainerRef.value) {
-    const container = chatContainerRef.value
-    const newLength = messages.value.length
-    const addedCount = newLength - oldLength
-    if (addedCount > 0) {
-      // 滚动到新增消息之后的位置
-      container.scrollTop = container.scrollHeight - (container.scrollHeight - container.scrollTop)
-    }
+
+  if (container) {
+    // 新增高度 = 新 scrollHeight - 旧 scrollHeight，把它加到原来的 scrollTop 上，
+    // 用户看到的那条消息就停在原地。
+    //
+    // 此前这里写的是 `container.scrollTop = container.scrollHeight -
+    // (container.scrollHeight - container.scrollTop)` —— 右式化简后恒等于
+    // `container.scrollTop`，是一次自赋值，等于什么都没做：注释承诺的
+    // 「保持视口位置不变」从未生效，上拉加载时内容会跳一次。
+    container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight)
   }
 }
 
@@ -332,8 +339,11 @@ function teardown() {
   tornDown = true
   // 未建立 WS 通道时服务端本就不在这个房间，emit 只会带来一次无意义的 presence 广播
   if (wsBound && roomId.value) leaveRoom(roomId.value)
-  // 清空本组件绑定的全部 socket 事件监听（socket 是单例，仅解绑 handler，不 disconnect，
-  // 让 RoomList 等其他场景继续复用同一连接，避免反复握手）
+  // 清空本组件绑定的全部 socket 事件监听。socket 是模块级单例，这里只解绑 handler、
+  // 不 disconnect（下一行没调 disconnectWebSocket），避免反复握手。
+  // 说明：目前**只有本组件**用 WebSocket（RoomList 走的是 REST），
+  // 所以「留给其他场景复用」是预留而非现状；也正因为没人 disconnect，
+  // 这个 socket 会一直存活到页面卸载。将来若有登出流程，记得在那里断开。
   clearWebSocketHandlers()
 }
 

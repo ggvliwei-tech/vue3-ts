@@ -44,10 +44,14 @@ export class CacheService {
   /**
    * L1 进程内缓存：key → { value, expireAt }
    * 使用 Map 而非 WeakMap：缓存 key 都是字符串，无需 WeakMap
-   * LRU 由 maxSize 控制，超出时淘汰最早插入的 entry（防止内存泄漏）
+   *
+   * 淘汰策略是 **FIFO**（见 setL1）：Map 满时删掉**最早插入**的那个 key。
+   * 注意它**不是 LRU** —— 读取命中时不会把 entry 移到队尾（Map 也不支持 O(1) 重排），
+   * 所以热点 key 同样可能被淘汰。对当前用量（L1_MAX_SIZE 5000，缓存项是角色/权限数组）
+   * 这不是问题；若将来 L1 需要真正的 LRU，得换数据结构。
    */
   private readonly l1 = new Map<string, { value: unknown; expireAt: number }>()
-  /** L1 缓存最大条目数（FIFO 淘汰） */
+  /** L1 缓存最大条目数（超出后按 FIFO 淘汰最早插入项） */
   private static readonly L1_MAX_SIZE = 5_000
 
   /**
@@ -175,10 +179,10 @@ export class CacheService {
     // 1. 优先读缓存
     const cached = await this.get<T>(key)
     if (cached !== null) {
-      // 注意：用 === null 区分"未命中"和"空值缓存"
-      // 空值缓存也是一个有意义的命中（穿透防护）
-      // 但需用 sentinel 与缓存 null 区分 —— 简化：null 值用 '__NULL__' 占位
-      if (cached === NULL_SENTINEL as unknown as T) return null
+      // 用 === null 区分"未命中"和"空值缓存"：空值缓存也是一次有意义的命中（穿透防护），
+      // 但对外必须还原成 null，所以写入时用 NULL_SENTINEL 字符串占位，
+      // 读到这里再翻译回 null 返回给调用方。
+      if ((cached as unknown) === NULL_SENTINEL) return null
       return cached
     }
 
@@ -211,11 +215,11 @@ export class CacheService {
   // ====================== 内部辅助 ======================
 
   /**
-   * 写 L1（超出容量时淘汰最早插入的）
+   * 写 L1（超出容量时按 FIFO 淘汰最早插入的 entry）
    */
   private setL1(key: string, value: unknown, ttlMs: number): void {
     if (this.l1.size >= CacheService.L1_MAX_SIZE) {
-      // 淘汰最早插入的（FIFO）
+      // Map 的迭代顺序就是插入顺序，第一个 key 即最早插入的那个
       const firstKey = this.l1.keys().next().value
       if (firstKey !== undefined) this.l1.delete(firstKey)
     }
@@ -256,5 +260,12 @@ export class CacheService {
   }
 }
 
-/** null 值缓存的哨兵对象（与真实 null 区分） */
-const NULL_SENTINEL = Symbol('__CACHE_NULL__')
+/**
+ * null 值缓存的占位哨兵（与真实 null 区分）
+ *
+ * 必须是**可 JSON 序列化的字符串**，不能用 Symbol：
+ * set() 会把这个值交给 redisService.setJson 写 L2，而 JSON.stringify(Symbol())
+ * 返回 undefined，写入会被 Redis 拒绝/存成空 —— 穿透防护就只剩 L1 生效，
+ * 而 L1 是进程内的、短命的，跨实例与重启后完全不起作用。
+ */
+const NULL_SENTINEL = '__CACHE_NULL__'

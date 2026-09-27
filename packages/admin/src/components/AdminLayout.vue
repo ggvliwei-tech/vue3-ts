@@ -110,7 +110,7 @@ async function handleLogout() {
           <span class="current-user">
             <!-- Element Plus 的 User 图标 -->
             <el-icon><User /></el-icon>
-            <!-- 显示用户名（来自 localStorage） -->
+            <!-- 显示用户名（来自 AuthStore.userInfo，见本文件 script 里的 currentUsername） -->
             <span class="username-text">{{ currentUsername }}</span>
           </span>
           <!-- 退出登录按钮，点击时触发 handleLogout 函数 -->

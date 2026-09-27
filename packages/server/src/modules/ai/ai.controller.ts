@@ -1,5 +1,5 @@
 // 导入 NestJS 核心装饰器：Controller(控制器)、Post(POST 路由)、Body(请求体解析)、Sse(服务端事件)、MessageEvent(SSE 消息类型)、Get(GET 路由)、Query(查询参数)、UseGuards(守卫)、Param(路由参数)、UseInterceptors(拦截器)、UploadedFile(上传文件)
-import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards, Param, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 // 导入 RxJS 可观察对象及相关操作符，用于流式数据处理管道
 import { Observable, from, map, filter } from 'rxjs';
 // 导入 AI 服务类，注入业务逻辑层
@@ -75,7 +75,14 @@ export class AiController {
   // SSE 装饰器：标识该接口为 Server-Sent Events 流式输出
   @Sse()
   // 流式输出接口处理函数，接收查询参数问题，返回可观察的 SSE 消息流
-  async stream(@Query('question') question: string): Promise<Observable<MessageEvent>> {
+  //
+  // question 必须标注为 `string | undefined`：查询参数的真实运行时类型就是
+  // string | undefined，写成 `string` 是类型说谎 —— 漏传 ?question= 时 TS 不会有
+  // 任何提示，undefined 会一路传到 LLM 调用里变成 500。这里显式校验并返回 400。
+  async stream(@Query('question') question: string | undefined): Promise<Observable<MessageEvent>> {
+    if (!question?.trim()) {
+      throw new BadRequestException('缺少必填查询参数 question');
+    }
     // 调用服务层流式聊天方法，获取原始流
     const stream = await this.aiService.streamChat(question);
     // 将流数据通过 from 转换为 Observable，使用 pipe 管道处理
@@ -196,10 +203,18 @@ export class AiController {
   @ApiOperation({ summary: 'SSE 流式输出（带历史上下文）' })
   // 带历史的流式输出接口，接收问题、sessionId 和当前用户
   async streamWithHistory(
-    @Query('question') question: string, // 从查询参数获取用户问题
-    @Query('sessionId') sessionId: string, // 从查询参数获取会话 ID
+    // question / sessionId 的真实运行时类型是 string | undefined（查询参数），
+    // 标成 string 是类型说谎，漏传时 TS 不会提示。question 必填故显式校验；
+    // sessionId 可选，下面用 `|| randomUUID()` 兜底。
+    // 写成 `string | undefined` 而非 `question?: string`：装饰器参数必须保持"必填位置"，
+    // 在必填参数 user 之前用 `?` 会直接编译报错（TS1016 必选参数不能位于可选参数后）
+    @Query('question') question: string | undefined, // 从查询参数获取用户问题
+    @Query('sessionId') sessionId: string | undefined, // 从查询参数获取会话 ID
     @CurrentUser() user: { id: string; username: string }, // 从装饰器获取当前用户
   ): Promise<Observable<MessageEvent>> { // 返回类型为 SSE 消息可观察流
+    if (!question?.trim()) {
+      throw new BadRequestException('缺少必填查询参数 question');
+    }
     // 如果未传 sessionId 则自动生成一个新的
     const sid = sessionId || randomUUID();
     // 调用服务层带历史的流式聊天方法

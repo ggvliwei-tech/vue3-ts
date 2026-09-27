@@ -58,8 +58,11 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * 登录完整流程：写入 token + userInfo
-   * 后端 /user/login 返回的字段约定：
-   *   { accessToken, refreshToken(写 HttpOnly cookie), sessionId, userInfo }
+   *
+   * 后端 /user/login 的响应体**只有** `{ accessToken, userInfo }`
+   * （见 modules/user/user.controller.ts 的 `return { accessToken, userInfo }`）。
+   * refreshToken 与 sessionId 是通过 `res.cookie()` 下发的 HttpOnly Cookie，
+   * 前端读不到、也不需要读 —— 刷新时浏览器自动携带。
    */
   function login(payload: { accessToken: string; userInfo: UserInfo }): void {
     setToken(payload.accessToken)

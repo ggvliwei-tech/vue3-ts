@@ -227,7 +227,9 @@ export class UserController {
   // P1-3：踢人操作专用限流 —— 60 秒内最多 5 次（防脚本批量踢人）
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post(':id/kick')
-  // 强制下线方法：接收路由参数 userId、query 中的 sessionId（可选）以及当前用户信息
+  // 强制下线方法：接收路由参数 userId、**请求体**中的 sessionId（可选）
+  // 注意是 body 不是 query：写成 ?sessionId=xxx 会被静默忽略，
+  // 而忽略的后果是「踢该设备」退化成「踢该用户全部设备」，语义被放大。
   async forceKick(
     @Param('id') userId: string,
     // sessionId 可选，不传则踢全部设备
@@ -288,7 +290,9 @@ export class UserController {
   @ApiOperation({ summary: '获取当前登录用户的活跃设备列表' })
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  // 必须在 :id 路由之前注册，否则会被路由参数吞掉
+  // 路径里的 'me/sessions' 是静态段，与下面那些 @Post(':id/xxx') 不冲突
+  // （本控制器当前没有 @Get(':id')）。若将来新增 @Get(':id')，必须放在本行**之后**，
+  // 否则 /user/me 会被当成 id='me' 匹配走。
   @Get('me/sessions')
   getMySessions(@CurrentUser() user: any) {
     return this.userService.getMySessions(user.id);

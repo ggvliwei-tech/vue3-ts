@@ -25,6 +25,8 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 // 导入当前用户装饰器，用于获取 JWT 解析后的用户信息
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+// 分页参数运行时解析（查询串恒为 string，非法值会让 TypeORM 抛错变成 500）
+import { parsePositiveInt, MAX_PAGE_SIZE } from '../../common/utils/pagination.util';
 
 // Swagger 标签，将此控制器下的接口归类到 "账号账本管理"
 @ApiTags('账号账本管理')
@@ -56,12 +58,19 @@ export class AccountBookController {
   @Permissions('book:list')
   // GET /account-book 路由，支持分页参数
   findAll(
-    @Query('page') page = 1,     // 页码，默认第 1 页
-    @Query('limit') limit = 10,  // 每页数量，默认 10 条
-    @CurrentUser() user: any     // 当前登录用户
+    @Query('page') page: string | undefined,   // 页码，默认第 1 页
+    @Query('limit') limit: string | undefined, // 每页数量，默认 10 条（上限 MAX_PAGE_SIZE）
+    @CurrentUser() user: any        // 当前登录用户
   ) {
+    // 类型标注为 string（查询串的真实运行时类型），不用 `page = 1` + `+page`：
+    // 那样 TS 把参数推断成 number 是假的，且 `?page=abc` 会得到 NaN，
+    // NaN 进 TypeORM 的 skip 抛 TypeORMError → 500。统一兜底。
     // 调用服务层查询方法，传入用户 ID 和分页参数
-    return this.accountBookService.findAll(user.id, +page, +limit);
+    return this.accountBookService.findAll(
+      user.id,
+      parsePositiveInt(page, 1),
+      parsePositiveInt(limit, 10, MAX_PAGE_SIZE),
+    );
   }
 
   // 接口描述：根据 ID 查询单条

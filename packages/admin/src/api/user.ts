@@ -56,11 +56,14 @@ export interface User {
 
 /**
  * 管理员登录
+ *
+ * skipRefresh：登录请求本来就没有会话，401 属于「账号或密码错误」这类业务错误，
+ * 不能按「会话过期」去刷新 / 跳登录页，否则真正的错误提示永远显示不出来。
  */
 // 导出登录函数，接收登录参数，向服务器发送 POST 请求
 export function login(data: LoginParams) {
   // 调用封装的 post 方法，发送登录请求并指定响应类型为 LoginRes
-  return post<LoginRes>('/api/v1/user/login', data)
+  return post<LoginRes>('/api/v1/user/login', data, { skipRefresh: true })
 }
 
 /**

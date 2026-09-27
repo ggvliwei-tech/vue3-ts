@@ -23,9 +23,12 @@ export class TransformInterceptor implements NestInterceptor {
     return next.handle().pipe(
       // map 操作符拦截控制器的返回值，并转换为统一格式
       map((data) => {
-        // 返回统一的响应格式：状态码 200、成功消息、实际数据
+        // 返回统一的响应格式：业务码 0（成功）、成功消息、实际数据
         return {
-          code: 0, // 业务状态码，200 表示成功
+          // 业务状态码：**成功固定为 0**，不是 200。
+          // 前置的 shared/src/request.ts 拦截器就是按 `code !== 0` 判定失败的；
+          // 失败码在 BusinessCode 枚举里，形如 1xxxxx / 2xxxxx（20000 = 系统内部错误）。
+          code: 0,
           msg: '请求成功', // 提示消息
           data, // 控制器返回的实际数据
         };

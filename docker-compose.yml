@@ -111,16 +111,41 @@ services:
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
       # CORS
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:8081}
+      # 文件存储：留空/其他值 = 本地磁盘，oss 才走 OSS
+      # 后两项**必须传**：代码里 path.resolve(cwd, undefined) 会直接抛 TypeError，
+      # 缺了等价于容器起不来（此前这里没有这两个变量，后端容器会反复重启）。
+      # 目录已由 Dockerfile.server 预先建好并 chown 给 nestjs 用户。
+      STORAGE_TYPE: ${STORAGE_TYPE:-}
+      LOCAL_UPLOAD_BASE_DIR: ${LOCAL_UPLOAD_BASE_DIR:-uploads}
+      LOCAL_STATIC_PREFIX: ${LOCAL_STATIC_PREFIX:-/uploads}
+      # AI 大模型（LLM_TYPE 留空 = openai；选 openai/dashscope_qwen 必须给对应 key）
+      LLM_TYPE: ${LLM_TYPE:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_MODEL: ${DASHSCOPE_MODEL:-qwen-plus}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-3.5-turbo}
+      # 容器内的 localhost 指向容器自身，Ollama 若跑在宿主机需用 host.docker.internal
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5}
       # OSS（按需配置）
       OSS_REGION: ${OSS_REGION:-}
       OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
       OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
       OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_CDN_DOMAIN: ${OSS_CDN_DOMAIN:-}
+      OSS_UPLOAD_FOLDER: ${OSS_UPLOAD_FOLDER:-uploads}
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
-      # 日志持久化到宿主机
+      # 日志持久化到宿主机。
+      # 注意：bind mount 会盖掉镜像里 /app/logs 的属主，若宿主机 ./logs/backend
+      # 由 Docker 以 root 创建，容器内 nestjs(uid 1001) 就写不进去
       - ./logs/backend:/app/logs
+      # 上传文件持久化（不挂载则容器重建后用户上传的图片全丢）。
+      # 同样要求宿主机目录对 uid 1001 可写：
+      #   mkdir -p ./uploads/backend && sudo chown -R 1001:1001 ./uploads/backend
+      - ./uploads/backend:/app/uploads
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/health"]
       interval: 30s

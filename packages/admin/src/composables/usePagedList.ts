@@ -1,8 +1,13 @@
 /**
  * usePagedList - 通用分页列表 composable
  *
- * M4 重构：从 Role / Permission / AuditLog / User 等管理页面抽出重复的分页状态与加载逻辑
  * 统一管理：list / total / loading / searchKeyword / currentPage / pageSize
+ *
+ * ⚠️ 迁移只做了一半：目前**只有 UserManage.vue 在用**。
+ * RoleManage / PermissionManage / AuditLog 三个页面各自还留着一份逐字重复的
+ * 分页实现（list/total/loading/page/pageSize/keyword + loadList/handleSearch/
+ * handlePageChange/handleSizeChange，每份约 40 行）。新增管理页请直接用本 composable，
+ * 不要再抄第四份；那三个页面也欢迎迁过来。
  *
  * 业务侧只需提供 fetcher（接收 { page, pageSize, keyword } 返回 PageRes<T>），
  * composable 内部封装：

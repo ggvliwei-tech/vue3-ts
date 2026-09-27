@@ -71,7 +71,11 @@ app.directive('permission', vPermission)
 // 挂载前先同步一次权限：
 // 本地缓存的是上次登录时下发的权限，而 admin 后台随时可能改角色。
 // 先拉最新的 roles/permissions 再渲染，可避免首屏用陈旧权限渲染出已被撤销的入口。
-// syncPermissions 内部已吞掉异常（未登录直接返回，请求失败沿用本地缓存），不会阻塞挂载。
+//
+// 注意这里的 .finally 是**会阻塞挂载**的：syncPermissions 内部虽然吞掉了异常，
+// 但 Promise 仍要等 profile 请求 settle 才回调，而 axios 默认超时 15s。
+// 后端慢或网络差时首屏就是一段白屏（连 van-nav-bar 都还没有）。
+// 注释写「不阻塞挂载」是不对的；要真非阻塞，得把 app.mount 移出 finally。
 syncPermissions().finally(() => {
   // 挂载到 id 为 app 的 DOM 元素上
   app.mount('#app')

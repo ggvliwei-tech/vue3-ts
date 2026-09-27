@@ -30,10 +30,15 @@ import { OssStorage } from './interfaces/oss.storage';
       imports: [ConfigModule], // 导入 ConfigModule 以便使用配置服务
       useFactory: (config: ConfigService) => [ // 工厂函数，根据配置返回静态资源选项
         {
-          // 设置本地上传文件的根目录路径
-          rootPath: path.resolve(process.cwd(), <string>config.get('LOCAL_UPLOAD_BASE_DIR')),
-          // 设置静态资源的访问路由前缀
-          serveRoot: <string>config.get('LOCAL_STATIC_PREFIX'),
+          // 设置本地上传文件的根目录路径。
+          // 必须给默认值：path.resolve 的参数校验很严格，传 undefined 会直接抛
+          // TypeError（The "paths[1]" argument must be of type string），
+          // 而这里是模块初始化阶段，抛出去就是进程起不来 —— 容器环境很容易踩到
+          // （docker-compose 早期版本没传这两个变量，表现是后端容器反复重启）。
+          // 默认值与 local.storage.ts 保持一致，改一处记得改另一处。
+          rootPath: path.resolve(process.cwd(), config.get<string>('LOCAL_UPLOAD_BASE_DIR') || 'uploads'),
+          // 设置静态资源的访问路由前缀。同样兜底，否则会拼出 "undefined/xxx" 的图片地址
+          serveRoot: config.get<string>('LOCAL_STATIC_PREFIX') || '/uploads',
           // 设置浏览器缓存时间为 30 天（毫秒）
           maxAge: 30 * 24 * 60 * 60 * 1000,
         }, // 静态资源托管配置对象结束

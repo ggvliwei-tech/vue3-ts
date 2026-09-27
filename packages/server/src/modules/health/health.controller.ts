@@ -46,7 +46,10 @@ interface HealthResponse {
 export class HealthController {
   // 启动时间（用于计算 uptime）
   private readonly startTime = Date.now()
-  // 应用版本（从 package.json 读，编译时注入）
+  // 应用版本：取自环境变量 APP_VERSION，未设置时回退 '1.0.0'。
+  // 注意**不是**从 package.json 读的（仓库里没有构建期注入版本的配置），
+  // 所以改 package.json 的 version 不会反映到 /health 上。
+  // main.ts 的 Swagger .setVersion() 用的是同一个环境变量。
   private readonly version = process.env.APP_VERSION || '1.0.0'
 
   constructor(

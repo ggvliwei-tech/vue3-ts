@@ -19,10 +19,12 @@ export class LocalStorage implements FileStorage {
 
   // 构造函数注入配置服务，并初始化存储路径
   constructor(private configService: ConfigService) {
-    // 拼接绝对路径作为文件上传的根目录
-    this.baseDir = path.resolve(process.cwd(), <string>this.configService.get('LOCAL_UPLOAD_BASE_DIR'));
-    // 获取静态资源访问的路由前缀
-    this.staticPrefix = <string>this.configService.get('LOCAL_STATIC_PREFIX');
+    // 拼接绝对路径作为文件上传的根目录。
+    // 默认值与 file.module.ts 的 ServeStaticModule 保持一致，且这里的兜底是必需的：
+    // path.resolve 收到 undefined 会抛 TypeError，发生在依赖注入构造阶段即进程启动失败。
+    this.baseDir = path.resolve(process.cwd(), this.configService.get<string>('LOCAL_UPLOAD_BASE_DIR') || 'uploads');
+    // 获取静态资源访问的路由前缀（同样需要兜底，否则会拼出 "undefined/xxx"）
+    this.staticPrefix = this.configService.get<string>('LOCAL_STATIC_PREFIX') || '/uploads';
     // 根目录不存在自动创建
     if (!fs.existsSync(this.baseDir)) {
       fs.mkdirSync(this.baseDir, { recursive: true });

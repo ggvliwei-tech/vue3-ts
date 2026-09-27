@@ -73,7 +73,10 @@ COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/package.js
 COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/dist ./node_modules/@project/shared/dist
 
 # 日志目录（与 winston.config.ts 中 LOG_DIR = process.cwd()/logs 对齐）
-RUN mkdir -p /app/logs && chown -R nestjs:nodejs /app/logs
+# 上传目录必须在这里预先建好并改属主：/app 是 WORKDIR 由 root 创建的（755），
+# 非 root 的 nestjs 用户无法在其中 mkdir；而 LocalStorage 构造函数会执行
+# fs.mkdirSync(baseDir)，权限不足抛 EACCES，同样是启动即失败。
+RUN mkdir -p /app/logs /app/uploads && chown -R nestjs:nodejs /app/logs /app/uploads
 
 USER nestjs
 

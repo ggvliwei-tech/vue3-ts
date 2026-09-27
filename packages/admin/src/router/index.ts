@@ -100,6 +100,12 @@ router.beforeEach((to) => {
   const userInfo = getUserInfo()
 
   // 3. 校验角色（meta.roles 是 OR 语义：拥有任一即可）
+  //
+  // 目前没有**任何**路由声明 meta.roles（全部只用 meta.permissions 表达），
+  // 所以这个分支在当前路由表下不会执行，/403 也不会因角色被触发。
+  // 保留它是有意的兜底：一旦某天要用「粗粒度角色」而不是「细粒度权限码」控页面，
+  // 直接在路由上写 roles 即可生效。若确认不再需要，连同上面 RouteMeta 的
+  // roles 声明一起删掉，别留着当摆设。
   if (to.meta.roles && to.meta.roles.length > 0) {
     const userRoles = userInfo?.roles ?? []
     const hasRole = userRoles.some((r) => to.meta.roles!.includes(r))

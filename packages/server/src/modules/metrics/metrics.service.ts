@@ -7,13 +7,16 @@
  *  - 指标类型：Counter（单调递增）/ Gauge（瞬时值）/ Histogram（分布观测）
  *  - 标签：label values 自动做基数控制（防 label explosion）
  *
- * 核心指标：
+ * 核心指标（只列**已注册**的，见 onModuleInit）：
  *  - http_requests_total{method,route,status}   请求计数
  *  - http_request_duration_ms_bucket{...}       请求延迟直方图
  *  - process_uptime_seconds                     进程存活秒数
  *  - process_memory_rss_bytes                   进程 RSS
  *  - cache_l1_size                              缓存 L1 条目数
- *  - cache_l2_hits_total / cache_l2_misses_total 缓存命中率
+ *
+ * 注意 cache_l1_size 目前**只注册、没有写入方**（CacheService.l1Size() 无人调用），
+ * 所以它在 /metrics 上恒为 0。要看真实 L1 命中情况需要先接上写入点。
+ * 也**没有** cache_l2_hits_total / cache_l2_misses_total 这两个指标，别按名字去查。
  */
 
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common'
@@ -186,7 +189,10 @@ export class MetricsService implements OnModuleInit {
   }
 
   /**
-   * 进程指标更新（由 metrics.interceptor 周期调用）
+   * 进程指标更新
+   *
+   * 调用方只有一个：本类的 dump()（每次被 Prometheus 抓取时刷新一次）。
+   * 仓库里**没有** metrics.interceptor 这个文件，别去找它。
    */
   updateProcessMetrics(): void {
     this.setGauge('process_uptime_seconds', Math.floor((Date.now() - this.startedAt) / 1000))

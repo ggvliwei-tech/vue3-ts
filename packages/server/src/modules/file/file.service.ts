@@ -167,7 +167,10 @@ export class FileService {
       saveName: res.saveName, // 服务器保存的文件名
       filePath: res.filePath, // 存储相对路径
       url: res.url, // 可访问的 URL
-      mimeType: file.mimetype, // 文件 MIME 类型
+      // 落库用魔术字节嗅探出的真实类型，而不是客户端声明的 file.mimetype ——
+      // 上面的校验拦住的是「上传动作」，但库里这个字段会被下游（内联渲染 / 下载
+      // Content-Type）当可信值使用，存客户端声明的值等于把校验绕过去了
+      mimeType: realMime, // 文件 MIME 类型（服务端嗅探结果）
       size: uploadBuffer.length, // 压缩后的文件大小
       storageType: this.configService.get('STORAGE_TYPE'), // 当前使用的存储类型
       module, // 归属模块

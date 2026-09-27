@@ -174,9 +174,10 @@ async function onDelete(item: AccountBook) {
     // 刷新列表数据
     onRefresh()
   } catch (err: any) {
-    // 如果不是用户取消操作，则显示错误提示
-    if (err.message !== 'cancel') {
-      showToast(err.message || '删除失败')
+    // 用户点「取消」时 showDialog 是 reject('cancel') —— 抛的是一个字符串，没有 .message，
+    // 所以之前写的 err.message !== 'cancel' 恒为 true，每次取消都会弹「删除失败」。
+    if (err !== 'cancel' && err !== 'close') {
+      showToast(err?.message || '删除失败')
     }
   } finally {
     // 关闭 Toast 提示
