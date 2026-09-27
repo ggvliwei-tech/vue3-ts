@@ -6,8 +6,8 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 // 从 vant 中导入 showToast 轻提示组件方法
 import { showToast } from 'vant'
-// 从聊天室 API 模块中导入获取历史消息的函数
-import { getRoomMessages, type ChatMessage, type ChatMember } from '@/api/chat'
+// 从聊天室 API 模块中导入获取历史消息、加入房间的函数
+import { getRoomMessages, joinRoomApi, type ChatMessage, type ChatMember } from '@/api/chat'
 // 从 WebSocket 工具模块中导入连接、断开、发送、加入、离开房间的函数
 import {
   connectWebSocket, clearWebSocketHandlers,
@@ -56,6 +56,11 @@ const loadingHistory = ref(false)
 // 定义聊天容器的 DOM 引用
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 
+// 是否已建立 WS 通道并声明加入房间（未建立时无需再向服务端声明离开）
+let wsBound = false
+// 清理是否已执行过（teardown 的幂等开关）
+let tornDown = false
+
 // 组件挂载时初始化聊天室
 onMounted(async () => {
   // 从路由参数中获取房间 ID
@@ -63,7 +68,7 @@ onMounted(async () => {
   // 如果房间 ID 无效则返回上一页
   if (!id) {
     showToast('无效的房间')
-    router.back()
+    goBack()
     return
   }
   // 设置当前房间 ID
@@ -80,10 +85,29 @@ onMounted(async () => {
   }
   myUserId.value = payload.sub
 
-  // 先通过 REST API 加载历史消息
-  await loadHistory()
+  // ① 先用 REST 幂等地加入房间，确保 chat_member 里有成员关系
+  //
+  // 这一步**必须在读历史之前**。GET /chat/messages 会走 assertUserInRoom，
+  // 而成员关系的权威来源就是 chat_member 那一行 —— 之前把这个动作放在
+  // WS 的 join-room 里、且排在 loadHistory 之后，于是每次进入房间都先吃一个
+  // 403「您不在该房间中」，再由 WS 把界面救回来。
+  // joinRoomApi 是幂等的（服务端 INSERT IGNORE + 已存在直接返回），重复进入无副作用。
+  try {
+    await joinRoomApi({ roomId: roomId.value })
+  } catch (err: any) {
+    showToast(err.message || '加入房间失败')
+    teardown()
+    goBack()
+    return
+  }
+  // 等待期间组件可能已被卸载（用户快速返回），后续动作全部放弃
+  if (tornDown) return
 
-  // 建立 WebSocket 连接
+  // ② 成员关系已就绪，此时必然 200
+  await loadHistory()
+  if (tornDown) return
+
+  // ③ 最后建立实时通道
   setupWebSocket()
 })
 
@@ -156,12 +180,14 @@ function setupWebSocket() {
     },
     // 加入房间成功回调
     onRoomJoined: (data) => {
-      // 设置成员列表
+      // socket 是单例，离开房间后仍可能收到上一个房间的尾包，必须按 roomId 丢弃
+      if (data.roomId !== roomId.value) return
+
+      // 成员名册是**持久成员关系**，整体覆盖
       members.value = data.members
-      // 初始化在线用户集合（加入房间的默认都在线）
-      const onlineSet = new Set<number>()
-      data.members.forEach((m: ChatMember) => onlineSet.add(m.userId))
-      onlineUserIds.value = onlineSet
+      // 注意：这里**不**写 onlineUserIds（旧实现把 members 全标为在线，离线成员会显示绿点）。
+      // 「谁在线」的唯一写入方是下面的 onPresence —— 服务端在 room-joined 之前
+      // 就已经广播过 presence，所以这里不写也不会短暂显示 0 人。
 
       // 合并 WS 返回的历史消息（去重）
       const wsHistory = data.history || []
@@ -174,6 +200,15 @@ function setupWebSocket() {
       }
       // 滚动到底部
       scrollToBottom(chatContainerRef.value)
+    },
+    // 在线用户全量快照回调（onlineUserIds 的**唯一**写入方）
+    //
+    // 服务端每次都是全量集合，这里必须整体覆盖而不是增量增删 ——
+    // member-joined / member-left 会被重复投递或丢失（断线重连、多标签页、事件重放），
+    // 用它们做增量加减会让在线集合永久漂移，且无法自愈。
+    onPresence: (data) => {
+      if (data.roomId !== roomId.value) return
+      onlineUserIds.value = new Set(data.onlineUserIds)
     },
     // 收到新消息回调（其他人发的）
     onNewMessage: (msg: WSMessage) => {
@@ -203,30 +238,37 @@ function setupWebSocket() {
       // 滚动到底部
       scrollToBottom(chatContainerRef.value)
     },
-    // 其他成员加入回调
+    // 其他成员加入回调（仅成员关系是**新增**时服务端才会广播）
     onMemberJoined: (data) => {
-      // 将新成员添加到成员列表
-      members.value.push({
-        id: 0, roomId: data.roomId, userId: data.userId,
-        username: data.username, joinedAt: Date.now(),
-      })
-      // 更新在线状态
-      onlineUserIds.value.add(data.userId)
+      if (data.roomId !== roomId.value) return
+      // 按 userId 幂等 upsert：该事件可能重复投递（重连、多标签页），裸 push 会出重复行
+      const idx = members.value.findIndex(m => m.userId === data.userId)
+      if (idx === -1) {
+        members.value.push({
+          id: 0, roomId: data.roomId, userId: data.userId,
+          username: data.username, joinedAt: Date.now(),
+        })
+      } else {
+        members.value[idx] = { ...members.value[idx], username: data.username }
+      }
+      // 不写 onlineUserIds：紧随其后的 presence 全量快照才是权威
       // 显示加入提示
       showToast(`${data.username} 加入了房间`)
     },
-    // 其他成员离开回调
+    // 其他成员离开回调（该用户已无任何 socket 在该房间）
     onMemberLeft: (data) => {
-      // 从成员列表中移除
-      members.value = members.value.filter(m => m.userId !== data.userId)
-      // 更新在线状态
-      onlineUserIds.value.delete(data.userId)
+      if (data.roomId !== roomId.value) return
+      // 只提示，**不**从 members 里删除 —— 他仍然是房间成员（持久关系），只是离线了。
+      // 他是否在线由 onPresence 的全量快照决定，成员名册与在线状态是两回事。
+      showToast(`${data.username} 离开了房间`)
     },
   }
 
   // 调用连接函数建立 WebSocket 连接
   try {
     connectWebSocket(handlers)
+    // 连接已建立（或是复用已连接的 socket），此后离开页面需要向服务端声明 leave-room
+    wsBound = true
   } catch (err: any) {
     // 连接失败时显示错误
     showToast(err.message || 'WebSocket 连接失败')
@@ -274,15 +316,43 @@ async function handleSend() {
   await scrollToBottom(chatContainerRef.value)
 }
 
-// 返回按钮处理函数
-function handleBack() {
-  // 通过 WebSocket 发送离开房间事件
-  if (roomId.value) leaveRoom(roomId.value)
+/**
+ * 统一的离场清理（幂等）
+ *
+ * handleBack 里的 router.back() 会紧接着触发 onUnmounted，两条路径此前各自
+ * emit 一次 leave-room + clearWebSocketHandlers，于是房间内其他人会收到**两条**
+ * 「离开」提示。用 tornDown 把两条路径收敛成一次。
+ *
+ * 这里只做两件事：离开 Socket.IO 房间（在线状态的生灭）+ 解绑本组件的 handler。
+ * 它**不**调用 POST /chat/leave —— 那是「退出房间」，会终止持久成员关系，
+ * 下次进入房间就会 403「您不在该房间中」。离开页面 ≠ 退出房间。
+ */
+function teardown() {
+  if (tornDown) return
+  tornDown = true
+  // 未建立 WS 通道时服务端本就不在这个房间，emit 只会带来一次无意义的 presence 广播
+  if (wsBound && roomId.value) leaveRoom(roomId.value)
   // 清空本组件绑定的全部 socket 事件监听（socket 是单例，仅解绑 handler，不 disconnect，
   // 让 RoomList 等其他场景继续复用同一连接，避免反复握手）
   clearWebSocketHandlers()
-  // 返回上一页
-  router.back()
+}
+
+/**
+ * 返回上一页
+ *
+ * 不能无条件用 router.back()：深链进入（直接打开 /chat/5、从外部链接或通知跳入）时
+ * 浏览器历史里没有本站的上一条记录，back() 会把用户直接弹出应用。
+ * 只有确实存在上一条站内记录时才回退，否则落到房间列表。
+ */
+function goBack() {
+  if (window.history.state?.back) router.back()
+  else router.replace('/rooms')
+}
+
+// 返回按钮处理函数
+function handleBack() {
+  teardown()
+  goBack()
 }
 
 // 切换成员面板显示/隐藏的函数
@@ -290,13 +360,9 @@ function toggleMemberPanel() {
   showMemberPanel.value = !showMemberPanel.value
 }
 
-// 组件卸载时执行的清理函数
+// 组件卸载时执行的清理函数（handleBack 已清理过时是空操作）
 onUnmounted(() => {
-  // 主动告知服务端离开房间（避免服务端 rooms 一直挂着这个 socket）
-  if (roomId.value) leaveRoom(roomId.value)
-  // 清空本组件绑定的全部 socket 事件监听，防止下次进入同 socket 时累积重复 handler
-  // （socket 是单例，不 disconnect，避免 RoomList 等场景还要重新建连）
-  clearWebSocketHandlers()
+  teardown()
 })
 
 // 从共享模块中导入日期格式化工具

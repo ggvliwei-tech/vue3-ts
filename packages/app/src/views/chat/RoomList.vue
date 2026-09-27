@@ -1,57 +1,113 @@
 <!-- script setup 块：使用 Composition API 语法糖定义房间列表页逻辑 -->
 <script setup lang="ts">
-// 从 vue 中导入 ref（响应式引用）和 onMounted（生命周期钩子）
-import { ref, onMounted } from 'vue'
+// 从 vue 中导入 ref（响应式引用）、computed（计算属性）和 onMounted（生命周期钩子）
+import { ref, computed, onMounted } from 'vue'
 // 从 vue-router 中导入 useRouter 函数用于路由导航
 import { useRouter } from 'vue-router'
 // 从 vant 中导入 showToast 轻提示组件方法
 import { showToast } from 'vant'
-// 从聊天室 API 模块中导入获取房间列表和创建房间的函数
-import { getRoomList, createRoom, type ChatRoom } from '@/api/chat'
+// 从聊天室 API 模块中导入房间列表、我的房间、加入房间、创建房间的函数
+import { getRoomList, getMyRooms, joinRoomApi, createRoom, type ChatRoom } from '@/api/chat'
 
 // 获取路由导航实例
 const router = useRouter()
 
-// 定义房间列表的响应式数组
-const roomList = ref<ChatRoom[]>([])
-// 定义加载状态的响应式数据
-const loading = ref(false)
-// 定义是否显示创建房间弹窗的响应式数据
-const showCreateDialog = ref(false)
-// 定义新房间名称的响应式数据
-const newRoomName = ref('')
-// 定义总房间数的响应式数据
+// 当前页签：0 = 我的房间，1 = 发现房间
+const activeTab = ref(0)
+// 我加入的房间（私有房间语义：只有成员才能进入）
+const myRooms = ref<ChatRoom[]>([])
+// 全部房间（发现页签，用于找到并加入新房间）
+const discoverRooms = ref<ChatRoom[]>([])
+// 全部房间总数
 const total = ref(0)
+// 列表加载状态
+const loading = ref(false)
+// 正在加入的房间 ID（0 表示空闲），用于连点保护与按钮 loading
+const joiningId = ref(0)
+// 是否显示创建房间弹窗
+const showCreateDialog = ref(false)
+// 新房间名称
+const newRoomName = ref('')
 
-// 组件挂载时加载房间列表
+// 我加入的房间 ID 集合，用于在「发现房间」里标记「已加入」
+const myRoomIds = computed(() => new Set(myRooms.value.map((r) => r.id)))
+// 当前页签展示的房间列表
+const currentRooms = computed(() => (activeTab.value === 0 ? myRooms.value : discoverRooms.value))
+// 当前页签的空状态文案
+const emptyDescription = computed(() =>
+  activeTab.value === 0 ? '还没有加入任何房间' : '暂无可加入的房间',
+)
+
+// 组件挂载时加载列表
+//
+// 这里用 onMounted 而非 onActivated 就够：App.vue 的 <router-view> 没有包 keep-alive，
+// 组件在离开路由时会被卸载、返回时重新挂载，因此从 ChatRoom 返回后必然重新拉取，
+// 刚加入的房间会立刻出现。若将来给 router-view 加上了 keep-alive，这里需要改成 onActivated。
 onMounted(() => {
-  loadRoomList()
+  loadAll()
 })
 
-// 加载房间列表的异步函数
-async function loadRoomList() {
-  // 设置加载状态为 true
+// 并发加载两个列表
+async function loadAll() {
   loading.value = true
   try {
-    // 调用 API 获取房间列表
-    const res = await getRoomList()
-    // 从响应中提取房间列表数据（res.data 即为 TransformInterceptor 返回的 data）
-    roomList.value = res.data.list
-    // 更新总房间数
-    total.value = res.data.total
-  } catch (err: any) {
-    // 加载失败时显示错误提示
-    showToast(err.message || '加载失败')
+    // 两个接口互不依赖；各自内部已 catch 并提示，不会因为一个失败而丢掉另一个的数据
+    await Promise.all([loadMyRooms(), loadDiscoverRooms()])
   } finally {
-    // 无论成功还是失败，都将加载状态重置为 false
     loading.value = false
   }
 }
 
-// 点击房间项进入聊天室的函数
-function onRoomClick(room: ChatRoom) {
-  // 导航到聊天室页面，携带房间 ID
-  router.push(`/chat/${room.id}`)
+// 加载「我的房间」
+async function loadMyRooms() {
+  try {
+    const res = await getMyRooms()
+    // res.data 即为 TransformInterceptor 解包后的 data（这里是 ChatRoom[]）
+    myRooms.value = res.data
+  } catch (err: any) {
+    showToast(err.message || '加载我的房间失败')
+  }
+}
+
+// 加载「发现房间」
+async function loadDiscoverRooms() {
+  try {
+    const res = await getRoomList()
+    discoverRooms.value = res.data.list
+    total.value = res.data.total
+  } catch (err: any) {
+    showToast(err.message || '加载房间列表失败')
+  }
+}
+
+/**
+ * 点击房间项：进入聊天室（未加入时先加入）
+ *
+ * 加入动作放在这里而不是 ChatRoom.vue 里，是为了让用户点下去就有反馈；
+ * ChatRoom.vue 进入时**仍会**再调一次 joinRoomApi —— 那是深链直达时的兜底，
+ * 也是「进入房间即可读历史」这个不变量的保证点。两者都靠 join 的幂等性支撑。
+ */
+async function onRoomClick(room: ChatRoom) {
+  // 已是成员：直接进入，不必再请求
+  if (myRoomIds.value.has(room.id)) {
+    router.push(`/chat/${room.id}`)
+    return
+  }
+  // 连点保护：同一时刻只允许一个加入请求在飞
+  if (joiningId.value) return
+  joiningId.value = room.id
+  try {
+    // POST /chat/join 幂等（服务端 INSERT IGNORE + 已存在则直接返回），重复调用无副作用
+    await joinRoomApi({ roomId: room.id })
+    // 并入「我的房间」列表（服务端按 joinedAt DESC 排序，新加入的排最前），
+    // 这样用户返回本页时即使接口失败也仍能看到刚加入的房间
+    myRooms.value = [room, ...myRooms.value]
+    router.push(`/chat/${room.id}`)
+  } catch (err: any) {
+    showToast(err.message || '加入房间失败')
+  } finally {
+    joiningId.value = 0
+  }
 }
 
 // 显示创建房间弹窗的函数
@@ -72,7 +128,7 @@ async function onConfirmCreate() {
     return
   }
   try {
-    // 调用 API 创建房间
+    // 调用 API 创建房间（服务端在同一事务里把创建者写入 chat_member）
     const res = await createRoom({ name })
     // 关闭弹窗
     showCreateDialog.value = false
@@ -86,6 +142,15 @@ async function onConfirmCreate() {
   }
 }
 
+// 返回上一页
+//
+// 不能无条件用 router.back()：/rooms 被直接打开（外链、刷新后恢复）时浏览器历史里
+// 没有本站的上一条记录，back() 会把用户弹出应用。没有可回退记录时落到首页。
+function goBack() {
+  if (window.history.state?.back) router.back()
+  else router.replace('/home')
+}
+
 // 从共享模块中导入日期格式化工具
 import { formatDate } from '@project/shared'
 </script>
@@ -95,12 +160,18 @@ import { formatDate } from '@project/shared'
   <!-- 房间列表页外层容器 -->
   <div class="room-list-page">
     <!-- Vant 导航栏组件，标题显示为"聊天室"，右侧有添加图标 -->
-    <van-nav-bar title="聊天室" left-arrow @click-left="router.back()">
+    <van-nav-bar title="聊天室" left-arrow @click-left="goBack">
       <!-- 右侧插槽：放置添加房间图标按钮；无 chat:room-create 权限时不渲染 -->
       <template #right>
         <van-icon v-permission="'chat:room-create'" name="add-o" size="22" @click="showCreateRoomDialog" />
       </template>
     </van-nav-bar>
+
+    <!-- 两个页签：我的房间（成员制私有房间）/ 发现房间（可加入的全部房间） -->
+    <van-tabs v-model:active="activeTab" class="room-tabs">
+      <van-tab title="我的房间" />
+      <van-tab :title="total > 0 ? `发现房间 (${total})` : '发现房间'" />
+    </van-tabs>
 
     <!-- 房间列表区域 -->
     <div class="room-list-container">
@@ -110,22 +181,22 @@ import { formatDate } from '@project/shared'
       </van-loading>
 
       <!-- 空状态提示 -->
-      <van-empty
-        v-else-if="roomList.length === 0"
-        image="search"
-        description="暂无聊天房间"
-      >
+      <van-empty v-else-if="currentRooms.length === 0" image="search" :description="emptyDescription">
         <!-- 空状态下的创建按钮；无 chat:room-create 权限时不渲染 -->
         <van-button v-permission="'chat:room-create'" type="primary" size="small" round @click="showCreateRoomDialog">
-          创建第一个房间
+          创建房间
+        </van-button>
+        <!-- 我的房间为空时，引导到发现页签去加入 -->
+        <van-button v-if="activeTab === 0" size="small" round plain class="goto-discover" @click="activeTab = 1">
+          去发现房间
         </van-button>
       </van-empty>
 
       <!-- 房间列表 -->
       <div v-else class="room-list">
-        <!-- 遍历房间列表，渲染每个房间项 -->
+        <!-- 遍历当前页签的房间列表，渲染每个房间项 -->
         <div
-          v-for="room in roomList"
+          v-for="room in currentRooms"
           :key="room.id"
           class="room-item"
           @click="onRoomClick(room)"
@@ -139,13 +210,26 @@ import { formatDate } from '@project/shared'
             <!-- 创建时间 -->
             <div class="room-time">创建于 {{ formatDate(room.createdAt) }}</div>
           </div>
-          <!-- 进入箭头 -->
-          <van-icon name="arrow" size="16" color="#c8c9cc" class="room-arrow" />
+          <!-- 右侧操作区：发现页签下区分「已加入」与「加入」，我的房间直接显示箭头 -->
+          <template v-if="activeTab === 1">
+            <van-tag v-if="myRoomIds.has(room.id)" plain class="joined-tag">已加入</van-tag>
+            <van-button
+              v-else
+              size="mini"
+              type="primary"
+              round
+              :loading="joiningId === room.id"
+              class="join-btn"
+            >
+              加入
+            </van-button>
+          </template>
+          <van-icon v-else name="arrow" size="16" color="#c8c9cc" class="room-arrow" />
         </div>
       </div>
 
-      <!-- 底部房间总数提示 -->
-      <div v-if="roomList.length > 0" class="room-footer">
+      <!-- 底部房间总数提示（仅发现页签有意义） -->
+      <div v-if="activeTab === 1 && discoverRooms.length > 0" class="room-footer">
         共 {{ total }} 个房间
       </div>
     </div>
@@ -182,6 +266,15 @@ import { formatDate } from '@project/shared'
   height: 100vh;
   // 背景色为浅灰色
   background: #f5f5f5;
+}
+
+// 页签栏样式
+//
+// 这里把 van-tabs 当「分段控制器」用：两个 van-tab 都不带内容，
+// 列表统一由下方 .room-list-container 按 activeTab 渲染，避免两套几乎相同的模板。
+.room-tabs {
+  // 不允许收缩
+  flex-shrink: 0;
 }
 
 // 房间列表区域容器
@@ -274,6 +367,22 @@ import { formatDate } from '@project/shared'
     // 不允许收缩
     flex-shrink: 0;
   }
+
+  // 「已加入」标签样式
+  .joined-tag {
+    // 不允许收缩
+    flex-shrink: 0;
+    // 字体颜色浅灰
+    color: #969799;
+  }
+
+  // 「加入」按钮样式
+  .join-btn {
+    // 不允许收缩
+    flex-shrink: 0;
+    // 左右内边距
+    padding: 0 14px;
+  }
 }
 
 // 底部房间总数提示
@@ -286,6 +395,12 @@ import { formatDate } from '@project/shared'
   font-size: 12px;
   // 字体颜色浅灰
   color: #969799;
+}
+
+// 空状态下「去发现房间」按钮
+.goto-discover {
+  // 左侧间距
+  margin-left: 8px;
 }
 
 // 创建弹窗输入框样式

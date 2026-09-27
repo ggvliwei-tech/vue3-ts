@@ -36,6 +36,12 @@ export interface WSEventHandlers {
   onRoomJoined?: (data: { roomId: number; members: any[]; history: WSMessage[] }) => void  // 加入房间成功回调
   onMemberJoined?: (data: { userId: number; username: string; roomId: number }) => void    // 其他成员加入回调
   onMemberLeft?: (data: { userId: number; username: string; roomId: number }) => void      // 其他成员离开回调
+  // 在线用户全量快照（server 广播的 presence）
+  //
+  // 这是「谁在线」的**唯一**来源，且每次都是全量集合：调用方必须整体覆盖，
+  // 不要用 member-joined / member-left 做增量加减 —— 那两个事件会被重复投递或丢失
+  // （断线重连、多标签页、事件重放），增量同步会永久漂移。
+  onPresence?: (data: { roomId: number; onlineUserIds: number[] }) => void
 }
 
 // Socket.IO 单例实例
@@ -135,6 +141,8 @@ function bindHandlers(socket: Socket, handlers: WSEventHandlers): void {
   socket.on('member-joined', (data) => handlers.onMemberJoined?.(data))
   // 其他成员离开事件（server 广播的 member-left）
   socket.on('member-left', (data) => handlers.onMemberLeft?.(data))
+  // 在线用户全量快照（server 广播的 presence，onlineUserIds 的唯一来源）
+  socket.on('presence', (data) => handlers.onPresence?.(data))
 }
 
 /**

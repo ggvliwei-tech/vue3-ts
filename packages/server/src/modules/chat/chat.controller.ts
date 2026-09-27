@@ -59,22 +59,31 @@ export class ChatController {
     return this.chatService.getUserRooms(req.user.sub);
   }
 
-  // POST /chat/join — 加入房间
+  // POST /chat/join — 加入房间（幂等）
+  // 已在该房间时返回既有成员记录，不报错、不重置 joinedAt。
+  // 前端每次进入房间页都会调用它来确保成员资格，因此必须幂等。
   @Post('join')
-  @ApiOperation({ summary: '加入聊天房间' })
+  @ApiOperation({ summary: '加入聊天房间（幂等，重复调用无副作用）' })
   @Permissions('chat:room')
   async joinRoom(@Body() dto: JoinRoomDto, @Request() req) {
-    // 调用服务加入房间
-    return this.chatService.joinRoom(dto.roomId, req.user.sub, req.user.username);
+    // 调用服务加入房间；created 供 WS 层判断是否广播 member-joined，REST 契约保持只返回成员
+    const { member } = await this.chatService.joinRoom(
+      dto.roomId,
+      req.user.sub,
+      req.user.username,
+    );
+    return member;
   }
 
-  // POST /chat/leave — 离开房间
+  // POST /chat/leave — 退出房间（终止成员关系，之后不再能读该房间的历史与成员）
+  // 注意：这是「退出房间」，不是「离开页面」。离开页面/断开连接不删成员关系，
+  // 在线状态由 WS 层的 Socket.IO 房间独立表达，两者不要混用。
   @Post('leave')
-  @ApiOperation({ summary: '离开聊天房间' })
+  @ApiOperation({ summary: '退出聊天房间（终止成员关系）' })
   @Permissions('chat:room')
   async leaveRoom(@Body() dto: JoinRoomDto, @Request() req) {
-    // 调用服务离开房间
-    await this.chatService.leaveRoom(dto.roomId, req.user.sub);
+    // 调用服务终止成员关系
+    await this.chatService.removeMembership(dto.roomId, req.user.sub);
     // 返回成功标识
     return { success: true };
   }

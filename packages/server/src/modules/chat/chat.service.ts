@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { ChatRoomEntity } from './entities/chat-room.entity';
@@ -112,25 +112,69 @@ export class ChatService {
 
   // ==================== 成员管理 ====================
 
-  // 加入房间方法：验证房间存在性，检查是否已在房间中，然后添加成员
+  /**
+   * 幂等加入房间，返回「成员实体」与「本次是否新建了成员关系」
+   *
+   * 幂等是必需的：chat_member 现在是持久成员关系，重复进入同一房间是常态
+   * （每次进入页面都会调用）。旧实现在用户已存在时抛 BadRequestException('您已在该房间中')，
+   * 会让断线重连、重复进入直接报错。
+   *
+   * 返回 created 是为了让调用方知道「是否真的新增了成员」——gateway 据此决定
+   * 要不要广播 member-joined，否则重复进入会让房间内所有人的成员列表被反复刷。
+   *
+   * 注意**不能**改用 this.memberRepo.upsert()：MySQL 下 upsert 生成
+   * `ON DUPLICATE KEY UPDATE`，会把 joinedAt/username 覆盖成本次请求的值
+   * （TypeORM 的 skipUpdateIfNoValuesChanged 只在 isPostgresFamily 分支生效，MySQL 救不了）。
+   * 而「重复加入不重置 joinedAt」正是持久成员关系的语义要求，所以用 orIgnore() ——
+   * 生成 INSERT IGNORE，语义是整行忽略。
+   *
+   * 该写法的正确性依赖 chat_member 上的唯一键 uk_chat_member_room_user
+   * （权威定义在 nest-db.sql；实体上的 @Index 只是把不变量写进元数据）。
+   * 若某环境的表缺这个键，INSERT IGNORE 不报错也不去重，会静默插出重复行 ——
+   * 升级脚本 upgrade-chat-member-persistent.sql 的 Step 0 就是为此设的强制前置检查。
+   */
   async joinRoom(roomId: number, userId: number, username: string) {
     // 检查房间是否存在
     const room = await this.roomRepo.findOneBy({ id: roomId });
     if (!room) throw new NotFoundException('房间不存在');
-    // 检查用户是否已在房间中
+
+    // 先查：重复进入（绝大多数情况）在这里就返回，不产生任何写操作
     const existing = await this.memberRepo.findOneBy({ roomId, userId });
-    if (existing) throw new BadRequestException('您已在该房间中');
-    // 添加成员到房间
-    return this.memberRepo.save({
-      roomId,                // 房间 ID
-      userId,                // 用户 ID
-      username,              // 用户名
-      joinedAt: Date.now(),  // 加入时间戳
-    });
+    if (existing) return { member: existing, created: false };
+
+    // 再插：orIgnore() 兜住「先查后插」之间 TOCTOU 窗口里的并发插入，避免抛 ER_DUP_ENTRY
+    const result = await this.memberRepo
+      .createQueryBuilder()
+      .insert()
+      .into(ChatMemberEntity)
+      .values({ roomId, userId, username, joinedAt: Date.now() })
+      .orIgnore()
+      .execute();
+
+    // 命中重复时 INSERT IGNORE 的 affectedRows 为 0（并发下可能是别人先插进去了）
+    const created = Number(result.raw?.affectedRows ?? 0) > 0;
+    // 无论是否本次插入，都回读一次拿权威行（含真实的 joinedAt，而非本次请求生成的时间戳）
+    const member = await this.memberRepo.findOneBy({ roomId, userId });
+    // member 为空是理论不可达的防御分支（插入成功后立即回读失败）；
+    // 此时只能返回一个没有 id 的占位实体，不阻断调用方流程
+    return {
+      member:
+        member ?? ({ roomId, userId, username, joinedAt: Date.now() } as ChatMemberEntity),
+      created,
+    };
   }
 
-  // 离开房间方法：从数据库中删除成员记录
-  async leaveRoom(roomId: number, userId: number) {
+  /**
+   * 【REST 专用】终止成员关系 —— 真正退出这个房间，之后不再能读到该房间的历史消息与成员名单
+   *
+   * 对应 POST /chat/leave。之所以从 leaveRoom 改名，是因为这个名字此前同时表示两件事，
+   * 而本 bug 的根因正是这个歧义：WebSocket 的 leave-room 事件（离开页面/房间）也调用它，
+   * 于是把用户的持久成员资格一并删掉了 —— 下次进入房间时 assertUserInRoom 必然 403。
+   *
+   * 注意：chat.gateway.ts 的 leave-room 事件与 handleDisconnect **都不再调用本方法**。
+   * 那两个只表示「离开 Socket.IO 房间」（在线状态的生灭），成员关系必须持久。
+   */
+  async removeMembership(roomId: number, userId: number) {
     // 删除成员记录
     await this.memberRepo.delete({ roomId, userId });
   }
@@ -146,19 +190,28 @@ export class ChatService {
     });
   }
 
-  // 获取用户所在的所有房间
+  // 获取用户所在的所有房间（按加入时间倒序，最近加入的在前）
   async getUserRooms(userId: number) {
     // 查询用户的所有成员记录
     const members = await this.memberRepo.find({
       where: { userId },
       order: { joinedAt: 'DESC' },
     });
-    // 提取房间 ID 列表
-    const roomIds = members.map(m => m.roomId);
-    // 无房间则返回空数组
-    if (roomIds.length === 0) return [];
+    // 无房间则返回空数组（顺带省掉一次无意义的 IN () 查询）
+    if (members.length === 0) return [];
+
+    // findBy 的返回顺序由数据库决定（IN 查询没有 ORDER BY），上面 members 的
+    // joinedAt DESC 顺序到这里就丢了。用下标当排序权重，查完后重排回来。
+    // 同一个房间只会出现一次（唯一键 uk_chat_member_room_user 保证），
+    // 但仍用 rank.has 做防御，避免将来约束失效时后一条覆盖前一条。
+    const rank = new Map<number, number>();
+    members.forEach((m, i) => {
+      if (!rank.has(m.roomId)) rank.set(m.roomId, i);
+    });
+
     // 批量查询房间信息（TypeORM 0.3+ 使用 findBy + In 替代 findByIds）
-    return this.roomRepo.findBy({ id: In(roomIds) });
+    const rooms = await this.roomRepo.findBy({ id: In([...rank.keys()]) });
+    return rooms.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
   }
 
   // 检查用户是否在指定房间中
