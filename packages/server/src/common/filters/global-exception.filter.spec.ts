@@ -26,11 +26,30 @@ function mockHost(req: any = {}): any {
     json: jest.fn().mockReturnThis(),
   }
   return {
+    // 过滤器靠 getType() 分流 HTTP / WS，mock 必须提供 ——
+    // 之前这里没有，加分流后所有用例都会因 'getType is not a function' 挂掉
+    getType: () => 'http',
     switchToHttp: () => ({
       getResponse: () => res,
       getRequest: () => req,
     }),
     __mockRes: res,
+  }
+}
+
+/**
+ * 构造 WebSocket 上下文的 ArgumentsHost mock。
+ *
+ * WS 上下文里 switchToHttp() 拿到的「request」其实是 socket 本身（没有 headers），
+ * 这正是过滤器中分流存在的原因：不分流就会在 getOrGenRequestId 里抛 TypeError。
+ */
+function mockWsHost(client: any = { emit: jest.fn() }): any {
+  return {
+    getType: () => 'ws',
+    switchToWs: () => ({
+      getClient: () => client,
+    }),
+    __mockClient: client,
   }
 }
 
@@ -169,6 +188,47 @@ describe('GlobalExceptionFilter', () => {
       expect(body).toHaveProperty('data')
       expect(body).toHaveProperty('requestId')
       expect(body).toHaveProperty('timestamp')
+    })
+  })
+
+  // WebSocket 上下文（chat.gateway 的 @SubscribeMessage）走的是完全独立的出口。
+  // 改造前这里没有分流：getOrGenRequestId(request) 读 socket.headers 直接抛
+  // TypeError，过滤器自己炸掉，客户端一个错误码都收不到。
+  describe('WebSocket 上下文', () => {
+    it('不写 HTTP 响应，改为向 socket 推 error 事件', () => {
+      const host = mockWsHost()
+      filter.catch(new BadRequestException('参数错误'), host)
+
+      expect(host.__mockClient.emit).toHaveBeenCalledWith('error', {
+        code: HttpStatus.BAD_REQUEST,
+        msg: '参数错误',
+      })
+    })
+
+    it('ValidationPipe 的 message 数组拼成一行', () => {
+      const host = mockWsHost()
+      filter.catch(
+        new BadRequestException({ message: ['roomId 必须是数字', 'roomId 不能为空'] }),
+        host,
+      )
+
+      expect(host.__mockClient.emit).toHaveBeenCalledWith('error', {
+        code: HttpStatus.BAD_REQUEST,
+        msg: 'roomId 必须是数字; roomId 不能为空',
+      })
+    })
+
+    it('未知错误兜底为 500，且不会因为拿不到 client 而再次抛出', () => {
+      const host: any = {
+        getType: () => 'ws',
+        switchToWs: () => ({
+          getClient: () => {
+            throw new Error('没有 client')
+          },
+        }),
+      }
+
+      expect(() => filter.catch(new Error('boom'), host)).not.toThrow()
     })
   })
 })

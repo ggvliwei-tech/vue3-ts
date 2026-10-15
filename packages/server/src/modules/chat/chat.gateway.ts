@@ -9,7 +9,7 @@ import {
 // 导入 Socket.IO 的 Server 服务类和 Socket 客户端类型
 import { Server, Socket } from 'socket.io';
 // 导入 NestJS 日志工具类、校验管道
-import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
+import { HttpException, HttpStatus, Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 // 导入 JWT 服务，用于验证和解析 Token
 import { JwtService } from '@nestjs/jwt';
 // 导入配置服务，用于读取环境变量和配置文件
@@ -18,6 +18,8 @@ import { ConfigService } from '@nestjs/config';
 import { ChatService } from './chat.service';
 // 导入发送消息 DTO，用于 WebSocket 消息校验
 import { SendMessageDto } from './dto/send-message.dto';
+// 加入/离开房间的 payload 校验（与 REST 的 /chat/join、/chat/leave 共用同一份规则）
+import { JoinRoomDto } from './dto/join-room.dto';
 // Redis 服务，用于黑名单检查
 import { RedisService } from '../redis/redis.service';
 // 用户 CRUD 服务，用于 status 校验
@@ -26,6 +28,14 @@ import { UserCrudService } from '../user/user-crud.service';
 import { RbacService } from '../rbac/rbac.service';
 // 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
 import { AuthKeys } from '../../common/constants/auth-keys';
+// CORS 来源校验：与 main.ts 的 HTTP 侧共用同一份判定，避免两条链路白名单分叉
+import { corsOriginValidator } from '../../common/utils/cors.util';
+
+// 发消息限流档位：窗口 10 秒、上限 20 条。
+// 正常打字远达不到（10 秒 20 条 = 每秒 2 条持续输出），
+// 而脚本刷量的成本立刻被抬高两个数量级。
+const WS_MSG_LIMIT = 20;
+const WS_MSG_WINDOW_SEC = 10;
 // 令牌版本号解析/判定（与 JwtAuthGuard 共用同一套规则）
 import {
   isTokenRevoked,
@@ -56,8 +66,16 @@ interface WsSocketData {
 @WebSocketGateway({
   namespace: '/ws',   // 命名空间配置，所有 WebSocket 路径以 /ws 开头
   cors: {
-    // 允许的跨域来源列表，仅允许开发环境前端地址（app=5173、admin=5175）
-    origin: ['http://localhost:5173', 'http://localhost:5175'],
+    // 来源白名单与 HTTP 侧共用同一份判定（读 CORS_ORIGINS + 非生产放行局域网），
+    // 见 common/utils/cors.util.ts。
+    //
+    // 此前这里硬编码 ['http://localhost:5173','http://localhost:5175']，是 vite 的
+    // 开发端口 —— 生产部署后浏览器 origin 是真实域名，永远不在这个列表里。
+    // 之所以没立刻暴露：Socket.IO 的 cors 只作用于 HTTP 轮询链路，WebSocket 升级
+    // 路径（engine.io 的 verify()）不校验 origin，而客户端首选 WebSocket，于是
+    // "侥幸能用"。一旦中间设备/代理把连接降级到 polling，就会被拒 → 前端报
+    // xhr poll error，聊天室连不上，且现象与跨域配置毫无关联感，极难排查。
+    origin: corsOriginValidator,
     // 允许携带凭证（cookie、认证头）进行跨域请求
     credentials: true,
   },
@@ -185,6 +203,40 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * 发消息频率限制：单用户在 WINDOW 秒内最多发 LIMIT 条。
+   *
+   * 为什么 WS 需要单独一道限流：
+   * HTTP 侧那套 ThrottlerGuard 对长连接完全不起作用 —— 守卫只在握手时的
+   * HTTP 升级请求上跑一次，此后所有帧都不再经过任何守卫。
+   * 没有这道闸，一个已登录用户在一条连接上 emit 成百上千次 send-msg 即可：
+   * 每条都写一次 MySQL、向整个房间广播一次、并被永久持久化。
+   * 相比反复建连刷 HTTP 接口，这是成本更低、更难被中间设备拦下的写库放大手段。
+   *
+   * 计数放 Redis 而非进程内存：与 HTTP 侧的量级口径一致，
+   * 且多实例部署时额度不会被实例数放大。
+   */
+  private async assertMessageRate(userId: number | string): Promise<void> {
+    const key = `ws:msg:rate:${userId}`;
+    // 固定窗口计数：首次自增时挂上过期时间，之后整个窗口内共享同一个键
+    const count = await this.redisService.incr(key);
+    if (count === 1) {
+      await this.redisService.expire(key, WS_MSG_WINDOW_SEC);
+    }
+    if (count > WS_MSG_LIMIT) {
+      // 自愈：INCR 成功但 EXPIRE 失败（网络抖动 / Redis 重启）会留下一个
+      // 永不过期的计数键，该用户将被**永久**封禁且没有任何自助解法。
+      // 只在真的要拒绝时才多查一次 TTL，正常路径不受影响。
+      if ((await this.redisService.ttl(key)) < 0) {
+        await this.redisService.expire(key, WS_MSG_WINDOW_SEC);
+      }
+      throw new HttpException(
+        '发送过于频繁，请稍后再试',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /**
    * 计算房间内真实在线的用户，并向房间广播全量的在线快照
    *
    * 在线状态用 Socket.IO 自己的房间成员快照算，不落库也不进 Redis：
@@ -261,6 +313,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 如果用户信息不存在，直接返回
     if (!user) return;
 
+    // 限流闸必须在所有 DB 操作**之前**：放在后面就失去了意义 ——
+    // 拒绝一次的前提是已经先把这次写库做了。
+    await this.assertMessageRate(user.sub);
+
     // 从校验后的 payload 中提取房间 ID 和消息内容
     const { roomId, content } = payload;
     // 将 roomId 转为 Socket.IO 房间 ID 字符串
@@ -322,8 +378,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // @SubscribeMessage('join-room') 装饰器监听客户端发送的 'join-room' 事件
   @SubscribeMessage('join-room')
+  // payload 校验：此前这里写的是裸的 `payload: { roomId: number }` ——
+  // 那只是**类型标注**，运行时完全不生效，客户端发什么进来都照单全收。
+  // 于是 `{ roomId: 'abc' }` / `{ roomId: {} }` / `{}` 会一路走到
+  // String(roomId) → client.join("undefined") → chatService.joinRoom(undefined, ...)，
+  // 拿一个非数字值去查 INT 列。JoinRoomDto 早就写好了（REST 的 /chat/join 一直在用），
+  // 只是 WS 这条路径漏了接。
+  @UsePipes(new ValidationPipe({ transform: true }))
   // joinRoom 处理客户端加入房间事件
-  async joinRoom(client: Socket, payload: { roomId: number }) {
+  async joinRoom(client: Socket, payload: JoinRoomDto) {
     // 获取用户信息
     const user = client.data?.user;
     // 如果用户信息不存在，直接返回
@@ -384,8 +447,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // @SubscribeMessage('leave-room') 装饰器监听客户端发送的 'leave-room' 事件
   @SubscribeMessage('leave-room')
+  // 同 join-room：payload 需要运行时校验，类型标注挡不住任何东西
+  @UsePipes(new ValidationPipe({ transform: true }))
   // leaveRoom 处理客户端离开房间事件
-  async leaveRoom(client: Socket, payload: { roomId: number }) {
+  async leaveRoom(client: Socket, payload: JoinRoomDto) {
     // 获取用户信息
     const user = client.data?.user;
     // 如果用户信息不存在，直接返回

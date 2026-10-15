@@ -10,7 +10,9 @@
  * 搜索关键词变更时 usePagedList 内部 watch 自动重置到第 1 页并 reload
  */
 import { ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+// 确认框封装（取消时返回 false 而不是抛异常，见 utils/confirm.ts）
+import { confirmAction } from '@/utils/confirm'
 import { getUserList, forceKick, toggleUserStatus, type User } from '@/api/user'
 import { getUserRoles, assignUserRoles, type RoleBrief } from '@/api/user-role'
 import { listEnabledRoles, type Role } from '@/api/role'
@@ -40,6 +42,13 @@ const {
     })
     return res.data
   },
+  // 加载失败要出提示。请求层只 reject、不弹任何 UI，不接这个回调的话
+  // 用户看到的就是一张空表，分不清"确实没有用户"和"接口挂了"。
+  // 切换筛选条件后旧数据已无意义，所以这里允许清空。
+  onError: (err) => {
+    ElMessage.error((err as Error)?.message || '加载用户列表失败')
+  },
+  clearOnError: true,
 })
 
 // ========== 分配角色对话框 ==========
@@ -52,11 +61,11 @@ const currentRoles = ref<RoleBrief[]>([])
 const checkedRoleIds = ref<number[]>([])
 
 async function handleKick(userId: number, username: string) {
-  await ElMessageBox.confirm(`确定要强制用户「${username}」下线吗？`, '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
+  const confirmed = await confirmAction(
+    `确定要强制用户「${username}」下线吗？`,
+    '提示',
+  )
+  if (!confirmed) return
   try {
     const res = await forceKick(userId)
     ElMessage.success(res.data.msg || '已强制下线')
@@ -67,11 +76,11 @@ async function handleKick(userId: number, username: string) {
 
 async function handleToggleStatus(user: User) {
   const action = user.status === 1 ? '禁用' : '启用'
-  await ElMessageBox.confirm(`确定要${action}用户「${user.username}」吗？`, '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
+  const confirmed = await confirmAction(
+    `确定要${action}用户「${user.username}」吗？`,
+    '提示',
+  )
+  if (!confirmed) return
   try {
     const res = await toggleUserStatus(user.id)
     ElMessage.success(res.data.msg || `已${action}用户「${user.username}」`)

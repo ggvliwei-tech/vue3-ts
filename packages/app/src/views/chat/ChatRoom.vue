@@ -34,6 +34,13 @@ const messages = ref<UIMessage[]>([])
 const inputText = ref('')
 // 定义是否 WebSocket 已连接的响应式数据
 const isWsConnected = ref(false)
+// 断开原因。用来区分横幅该说什么：
+//  - 'io server disconnect' —— 服务端主动断开（令牌失效 / 被踢 / 缺权限）。
+//    socket.io 对这个原因**不自动重连**，横幅再写「连接中...」就是在骗人：
+//    用户会一直等一个永远不会来的连接。要明确告诉用户必须重新进入。
+//  - 其余（'transport close' / 'ping timeout' / 'transport error'）都是网络原因，
+//    自动重连正在后台跑，横幅写「连接中...」是准确的。
+const disconnectReason = ref('')
 // 定义房间成员列表的响应式数组
 const members = ref<ChatMember[]>([])
 // 定义当前用户 ID 的响应式数据（从 JWT 解码获取）
@@ -170,6 +177,8 @@ function setupWebSocket() {
     onConnect: () => {
       // 更新连接状态
       isWsConnected.value = true
+      // 连上了就清掉上次的断开原因，否则重连成功后横幅仍按旧的 'io server disconnect' 渲染
+      disconnectReason.value = ''
       // 发送加入房间事件
       joinRoom(roomId.value)
     },
@@ -177,6 +186,8 @@ function setupWebSocket() {
     onDisconnect: (reason) => {
       // 更新连接状态
       isWsConnected.value = false
+      // 记下原因，供横幅区分「正在重连」和「服务端已断开、不会重连」
+      disconnectReason.value = reason
       // 输出断开原因日志
       console.log('[WS] 断开连接:', reason)
     },
@@ -340,10 +351,11 @@ function teardown() {
   // 未建立 WS 通道时服务端本就不在这个房间，emit 只会带来一次无意义的 presence 广播
   if (wsBound && roomId.value) leaveRoom(roomId.value)
   // 清空本组件绑定的全部 socket 事件监听。socket 是模块级单例，这里只解绑 handler、
-  // 不 disconnect（下一行没调 disconnectWebSocket），避免反复握手。
-  // 说明：目前**只有本组件**用 WebSocket（RoomList 走的是 REST），
-  // 所以「留给其他场景复用」是预留而非现状；也正因为没人 disconnect，
-  // 这个 socket 会一直存活到页面卸载。将来若有登出流程，记得在那里断开。
+  // 不 disconnect，避免「返回列表再进来」时反复握手。
+  // 说明：目前**只有本组件**用 WebSocket（RoomList 走的是 REST）。
+  // 真正需要断开连接的时机是**登出**——已由 app/src/main.ts 的 onAuthCleared
+  // 统一调用 disconnectWebSocket() 处理（notifyLogout 会走该出口），
+  // 所以离开本页面后连接继续存活是预期行为，不会导致登出后仍在线的残留。
   clearWebSocketHandlers()
 }
 
@@ -401,10 +413,18 @@ import { useScrollToBottom as scrollToBottom } from '@/composables/useScrollToBo
       </template>
     </van-nav-bar>
 
-    <!-- 断线提示横幅 -->
-    <van-notice-bar v-if="!isWsConnected" color="#ed6a0c" bg-color="#fffbe8" left-icon="info-o">
-      连接中...
-    </van-notice-bar>
+    <!-- 断线提示横幅。文案取决于断开原因：服务端主动断开的连接不会自动重连 -->
+    <van-notice-bar
+      v-if="!isWsConnected"
+      color="#ed6a0c"
+      bg-color="#fffbe8"
+      left-icon="info-o"
+      :text="
+        disconnectReason === 'io server disconnect'
+          ? '连接已被服务端断开，请返回后重新进入聊天室'
+          : '连接中...'
+      "
+    />
 
     <!-- 消息列表区域 -->
     <div ref="chatContainerRef" class="chat-container" @scroll="onScroll">

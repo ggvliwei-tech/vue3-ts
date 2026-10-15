@@ -14,7 +14,7 @@ import {
   type CreateAccountBookParams,  // 新增账本参数类型
 } from '@/api/accountBook'
 // 从共享模块中导入日期格式化函数
-import { formatDate } from '@project/shared'
+import { formatDate, copyText } from '@project/shared'
 // 从 vant 中导入轻提示、对话框和加载提示组件方法
 import { showToast, showDialog, showLoadingToast, closeToast } from 'vant'
 
@@ -244,13 +244,17 @@ async function onSubmit() {
   }
 }
 
-// 复制文本到剪贴板的统一函数
-function copyToClipboard(text: string) {
-  // 检查浏览器是否支持剪贴板 API
-  if (navigator.clipboard) {
-    // 将文本写入剪贴板，成功后显示提示
-    navigator.clipboard.writeText(text).then(() => showToast('已复制'))
-  }
+// 复制文本到剪贴板的统一函数。
+// 走 shared 的 copyText：它带 execCommand 兜底，并返回是否成功 ——
+// 原先的 `if (navigator.clipboard) { ...writeText().then(...) }` 有两个问题：
+//   1) 局域网 IP 访问（http://192.168.x.x:5173，手机真机联调）下
+//      navigator.clipboard 是 undefined，整段被跳过 —— 点"复制"毫无反应，
+//      不提示也不报错，看起来像按钮坏了
+//   2) writeText 的 Promise 没有 catch，用户拒绝剪贴板权限时
+//      会留下一条 unhandled rejection
+async function copyToClipboard(text: string) {
+  const ok = await copyText(text)
+  showToast(ok ? '已复制' : '复制失败，请长按手动选择')
 }
 
 // 组件挂载后执行的钩子函数

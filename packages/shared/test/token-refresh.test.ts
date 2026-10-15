@@ -153,6 +153,39 @@ describe('handleSessionExpired / notifyLogout', () => {
     expect(storage.getToken()).toBe('')
     expect(storage.getUserInfo()).toBeNull()
   })
+
+  // 回归：主动登出也必须走 onAuthCleared
+  //
+  // 此前 notifyLogout 只清 localStorage 不回调，导致两件事：
+  //  1) Pinia 里的响应式状态是陈旧的（存储层清了，store 不会自己跟着变）
+  //  2) app 端注册在 onAuthCleared 里的 disconnectWebSocket() 不会被调用，
+  //     登出后 socket 仍以旧 JWT 存活，服务端 presence 一直显示该用户在线
+  it('notifyLogout 会触发 onAuthCleared（登出需断开长连接 / 清 Pinia）', () => {
+    const onAuthCleared = vi.fn()
+    storage.setToken('at')
+    mod.configureAuth({ refreshFn: vi.fn(), onAuthCleared })
+
+    mod.notifyLogout()
+
+    expect(onAuthCleared).toHaveBeenCalledTimes(1)
+  })
+
+  // 反向约束：onAuthCleared 回调本身不能再次触发 notifyLogout，
+  // 否则「登出 → 回调 → 登出」会递归。这里用真实回调形态验证只执行一轮。
+  it('notifyLogout 不会因回调而递归', () => {
+    let calls = 0
+    storage.setToken('at')
+    mod.configureAuth({
+      refreshFn: vi.fn(),
+      onAuthCleared: () => {
+        calls += 1
+      },
+    })
+
+    mod.notifyLogout()
+
+    expect(calls).toBe(1)
+  })
 })
 
 describe('跨标签页同步（storage 事件）', () => {

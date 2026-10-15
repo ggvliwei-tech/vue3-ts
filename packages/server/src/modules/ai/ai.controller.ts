@@ -1,5 +1,5 @@
-// 导入 NestJS 核心装饰器：Controller(控制器)、Post(POST 路由)、Body(请求体解析)、Sse(服务端事件)、MessageEvent(SSE 消息类型)、Get(GET 路由)、Query(查询参数)、UseGuards(守卫)、Param(路由参数)、UseInterceptors(拦截器)、UploadedFile(上传文件)
-import { Controller, Post, Body, Sse, MessageEvent, Get, Query, UseGuards, Param, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+// 导入 NestJS 核心装饰器：Controller(控制器)、Post(POST 路由)、Body(请求体解析)、Sse(服务端事件)、MessageEvent(SSE 消息类型)、Get(GET 路由)、UseGuards(守卫)、Param(路由参数)、UseInterceptors(拦截器)、UploadedFile(上传文件)
+import { Controller, Post, Body, Sse, MessageEvent, Get, UseGuards, Param, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 // 导入 RxJS 可观察对象及相关操作符，用于流式数据处理管道
 import { Observable, from, map, filter } from 'rxjs';
 // 导入 AI 服务类，注入业务逻辑层
@@ -16,8 +16,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 // 导入文件上传拦截器，处理 multipart/form-data 请求
 import { FileInterceptor } from '@nestjs/platform-express';
-// 导入限流守卫，控制接口请求频率
-import { ThrottlerGuard } from '@nestjs/throttler';
+// 按用户计数的限流守卫（必须排在 JwtAuthGuard 之后，档位定义见该文件）
+import { UserThrottlerGuard } from '../../common/guards/user-throttler.guard';
 // 导入当前用户装饰器，从请求中提取用户信息
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 // 权限守卫 + @Permissions 装饰器：做接口级权限码校验
@@ -31,7 +31,11 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 // 新注册用户在 nest-db.sql 的种子数据里默认不带任何角色，
 // 只校验登录态意味着任何人都能直接刷爆第三方 API 账单。
 // 权限码 ai:chat 已在 nest-db.sql:287 定义并授予 admin / editor / user 三个内置角色。
-@UseGuards(JwtAuthGuard, PermissionsGuard, ThrottlerGuard)
+//
+// 限流用 UserThrottlerGuard 且在 JwtAuthGuard **之后**：前者按用户 ID 计数，
+// 依赖后者已经写好 req.user。顺序颠倒会静默退化成按 IP 计数。
+// 全局基线（300 次/分钟/IP）仍由 APP_GUARD 兜底，两者叠加生效。
+@UseGuards(JwtAuthGuard, PermissionsGuard, UserThrottlerGuard)
 @Permissions('ai:chat')
 // Swagger 装饰器：在文档中显示 Bearer Token 输入框
 @ApiBearerAuth()
@@ -70,21 +74,27 @@ export class AiController {
     return this.aiService.ragQuery(dto.question);
   }
 
-  // GET 路由装饰器：注册 /ai/stream 接口
-  @Get('stream')
+  // POST 路由装饰器：注册 /ai/stream 接口
+  //
+  // 与 streamWithHistory 同理改 POST：问题原文不该进 URL / access log。
+  // 这里同样换成 ChatDto —— 原先 @Query 取参绕过 DTO，长度上限完全没生效，
+  // 只在方法体里手动挡了空值。
+  //
+  // ⚠️ 仓库内已无调用方：前端只用 stream/history，admin 侧完全不用。
+  // 这是一条每次都真实花钱调 LLM 的接口，留着只是多余的暴露面。
+  // 本次只做等价改造（GET → POST + DTO）不删除，避免顺带改掉对外契约；
+  // 确认无外部消费方后，建议连同 AiService.streamChat 一起下线。
+  @Post('stream')
   // SSE 装饰器：标识该接口为 Server-Sent Events 流式输出
   @Sse()
-  // 流式输出接口处理函数，接收查询参数问题，返回可观察的 SSE 消息流
-  //
-  // question 必须标注为 `string | undefined`：查询参数的真实运行时类型就是
-  // string | undefined，写成 `string` 是类型说谎 —— 漏传 ?question= 时 TS 不会有
-  // 任何提示，undefined 会一路传到 LLM 调用里变成 500。这里显式校验并返回 400。
-  async stream(@Query('question') question: string | undefined): Promise<Observable<MessageEvent>> {
-    if (!question?.trim()) {
-      throw new BadRequestException('缺少必填查询参数 question');
+  // 流式输出接口处理函数，接收请求体中的问题，返回可观察的 SSE 消息流
+  @ApiOperation({ summary: 'SSE 流式输出（单轮，无历史上下文）' })
+  async stream(@Body() dto: ChatDto): Promise<Observable<MessageEvent>> {
+    if (!dto.question.trim()) {
+      throw new BadRequestException('提问内容不能为空');
     }
     // 调用服务层流式聊天方法，获取原始流
-    const stream = await this.aiService.streamChat(question);
+    const stream = await this.aiService.streamChat(dto.question);
     // 将流数据通过 from 转换为 Observable，使用 pipe 管道处理
     return from(stream).pipe(
       // map 操作符：将每个 chunk 转换为 SSE MessageEvent 格式
@@ -141,11 +151,17 @@ export class AiController {
   // Swagger 声明该接口消费 multipart/form-data 类型
   @ApiConsumes('multipart/form-data')
   // 使用文件上传拦截器，限制文件大小为 20MB
+  // 未指定 storage → multer 走默认的 memoryStorage，文件内容在 file.buffer 里。
+  // 下游必须用 buffer，不能用 file.path（memoryStorage 下 path 恒为 undefined）。
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   // PDF 上传接口处理函数，接收上传的文件
   async uploadPdf(@UploadedFile() file: Express.Multer.File) {
-    // 调用服务层将 PDF 解析并存入向量库的方法
-    return this.aiService.uploadPdfToVector(file.path);
+    // 先判空：不带文件时 file 为 undefined，直接取 .buffer 会抛 TypeError → 500
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('请选择要上传的 PDF 文件');
+    }
+    // 调用服务层将 PDF 解析并存入向量库的方法（内部会校验 PDF 魔术字节）
+    return this.aiService.uploadPdfToVector(file.buffer);
   }
 
   // GET 路由装饰器：注册 /ai/sessions 接口
@@ -195,30 +211,37 @@ export class AiController {
     return this.aiService.getSessionMessages(user.id, sessionId);
   }
 
-  // GET 路由装饰器：注册 /ai/stream/history 接口
-  @Get('stream/history')
+  // POST 路由装饰器：注册 /ai/stream/history 接口
+  //
+  // 用 POST 而不是 GET：问题原文此前是查询参数，会**原样进 URL**，于是出现在
+  // nginx 的 access log（$request 默认落盘）、CDN / 反向代理日志、浏览器历史里。
+  // 用户问的可能是一段带密钥的代码或内部资料 —— 这些内容不该出现在运维日志里，
+  // 排查问题时也不该被任何人顺手读到。放到请求体后，日志里只剩下路径。
+  // 前端本来就用 fetch 手动读流（不是 EventSource），改用 POST 无额外代价。
+  //
+  // 顺带把参数换成 ChatDto：原先 @Query 直接取参**绕过 DTO**，@MaxLength 全部失效，
+  // 只能在方法体里手写一遍长度校验（超长 question 按 token 计费、
+  // 超长 sessionId 会在付费调用之后才因 VARCHAR(36) 溢出报 500）。
+  // 走 DTO 后这些由全局 ValidationPipe 统一兜住。
+  @Post('stream/history')
   // SSE 装饰器：标识该接口为 Server-Sent Events 流式输出
   @Sse()
   // Swagger 操作描述：SSE 流式输出（带历史上下文）
   @ApiOperation({ summary: 'SSE 流式输出（带历史上下文）' })
   // 带历史的流式输出接口，接收问题、sessionId 和当前用户
   async streamWithHistory(
-    // question / sessionId 的真实运行时类型是 string | undefined（查询参数），
-    // 标成 string 是类型说谎，漏传时 TS 不会提示。question 必填故显式校验；
-    // sessionId 可选，下面用 `|| randomUUID()` 兜底。
-    // 写成 `string | undefined` 而非 `question?: string`：装饰器参数必须保持"必填位置"，
-    // 在必填参数 user 之前用 `?` 会直接编译报错（TS1016 必选参数不能位于可选参数后）
-    @Query('question') question: string | undefined, // 从查询参数获取用户问题
-    @Query('sessionId') sessionId: string | undefined, // 从查询参数获取会话 ID
+    @Body() dto: ChatDto, // 请求体：question（必填）+ sessionId（可选），校验见 ChatDto
     @CurrentUser() user: { id: string; username: string }, // 从装饰器获取当前用户
   ): Promise<Observable<MessageEvent>> { // 返回类型为 SSE 消息可观察流
-    if (!question?.trim()) {
-      throw new BadRequestException('缺少必填查询参数 question');
+    // DTO 的 @IsNotEmpty 只挡空串，挡不住纯空白。这里补上 trim 判定，
+    // 否则 "   " 会一路传到 LLM 调用里变成一次纯付钱的空提问。
+    if (!dto.question.trim()) {
+      throw new BadRequestException('提问内容不能为空');
     }
     // 如果未传 sessionId 则自动生成一个新的
-    const sid = sessionId || randomUUID();
+    const sid = dto.sessionId || randomUUID();
     // 调用服务层带历史的流式聊天方法
-    const stream = await this.aiService.streamChatWithHistory(question, sid, user.id);
+    const stream = await this.aiService.streamChatWithHistory(dto.question, sid, user.id);
     // 将流数据转换为 Observable 并通过 pipe 管道处理
     return from(stream).pipe(
       // map 操作符：将每个数据块转换为 SSE 消息格式

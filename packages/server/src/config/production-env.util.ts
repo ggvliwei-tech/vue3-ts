@@ -16,7 +16,9 @@
  *
  * 逃生舱：本机演示 / 私有部署确实需要带着占位密钥跑起来，可显式设置
  * `ALLOW_INSECURE_DEFAULTS=true` 跳过校验（此时会打一条醒目告警）。
- * `docker-compose.yml` 默认打开该开关以保证"一键启动"可用 —— 对外部署前必须关掉。
+ * `docker-compose.yml` 的默认值是 false —— 即默认 fail-closed。
+ * 早先那里默认 true 是为了让「一键启动」能跑起来，代价是这道防线在文档
+ * 主路径上等于不存在：照 README 部署的人不会记得回头把它关掉。
  */
 
 /** 本项自检生效的环境；与 sms.service.ts 对 staging 的处理保持一致 */

@@ -44,27 +44,48 @@ vue3-monorepo/
 ```bash
 # 1. 准备环境变量
 cp .env.example .env
-# 修改 JWT_SECRET、密码等敏感配置
+# 修改 JWT_ACCESS_SECRET / JWT_REFRESH_SECRET / DB_PWD / REDIS_PASSWORD / MYSQL_ROOT_PASSWORD
+# 生成随机密钥（两个 JWT 密钥**必须不同**）：
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
-# 2. 一键启动（构建镜像 + 启动容器）
+# 2. 预建挂载目录并改属主（Linux/macOS 必做，见下方说明）
+mkdir -p ./logs/backend ./uploads/backend
+sudo chown -R 1001:1001 ./logs/backend ./uploads/backend
+
+# 3. 一键启动（构建镜像 + 启动容器）
 docker compose up -d --build
 
-# 3. 查看启动日志
+# 4. 查看启动日志
 docker compose logs -f backend
 
-# 4. 访问
+# 5. 访问
 #   Admin:    http://localhost:8080
 #   App H5:   http://localhost:8081
 #   API:      http://localhost:3000
-#   Swagger:  http://localhost:3000/api-docs
 #   健康检查: http://localhost:3000/health
+#   注意 Swagger（/api-docs）在生产环境是关闭的，见下方说明
 
-# 5. 停止
+# 6. 停止
 docker compose down
 
-# 6. 完全清理（含数据卷）
+# 7. 完全清理（含数据卷）
 docker compose down -v
 ```
+
+**部署清单（上线前逐项确认）**
+
+| 项 | 为什么 |
+|---|---|
+| `.env` 里的 5 个密钥都已改成随机值 | 仓库里的默认值公开可查。带着占位密钥上线等于把 JWT 签名密钥公开 —— 任何人都能自签管理员令牌 |
+| `ALLOW_INSECURE_DEFAULTS` **未设置或为 false** | 这是跳过启动期密钥自检的逃生舱。它默认关闭；**保持关闭**，让配错的密钥在启动时就暴露，而不是等被利用时才发现 |
+| `./logs/backend`、`./uploads/backend` 已 `mkdir` 且 `chown 1001:1001` | 容器内以非 root 的 `nestjs`(uid 1001) 运行。若由 Docker 以 root 创建这两个目录，日志写不进、上传报 EACCES —— 启动阶段**不报错**，上线后第一次上传才炸 |
+| `DB_NAME` 保持 `vue3_monorepo` | 初始化脚本 `nest-db.sql` 里的库名是硬编码的。改了名字会建出一个空库，14 张表依旧建进原库，后端连上空库 |
+| 短信：`SMS_MOCK` 按需设置 | 阿里云 SDK 尚未接入，`production` 下真实通道固定返回 503，即「忘记密码 / 短信登录」不可用。临时办法是设 `SMS_MOCK=true`，验证码写入 `./logs/backend` 由运维取；正式上线请接入 SDK |
+| 已规划数据库备份 | 仓库只提供 `mysql_data` 命名卷，**没有**备份脚本。`nest-db.sql` 含 `DROP TABLE`，不要在已有数据的环境重跑 |
+
+> **Linux 上的目录权限**：`docker compose up` 时若 `./logs/backend` / `./uploads/backend` 不存在，Docker daemon 会以 root 创建它们（属主 root:root、权限 755），容器内的 `nestjs` 用户随即失去写权限。这一步只在首次部署时需要，之后目录已存在就不会被重建。
+>
+> **Swagger**：`main.ts` 只在非生产环境挂载 `/api-docs`。compose 里 `NODE_ENV=production`，所以该地址在生产是 404 —— 需要接口文档请用「方式二」在本地起后端。
 
 ### 方式二：本地开发
 
@@ -285,18 +306,31 @@ readinessProbe:
 
 ### 部署前检查
 
-- [ ] 修改所有默认密码
+- [ ] 修改所有默认密码（两个 JWT 密钥必须不同）
+- [ ] `ALLOW_INSECURE_DEFAULTS` 保持未设置或 `false`（不要跳过启动期密钥自检）
+- [ ] `mkdir -p ./logs/backend ./uploads/backend && chown -R 1001:1001`（否则上传静默失败）
+- [ ] `DB_NAME` 保持 `vue3_monorepo`（`nest-db.sql` 里库名硬编码）
 - [ ] `NODE_ENV=production`
 - [ ] 检查 `synchronize: false`（TypeORM 不自动改生产库）
 - [ ] 关闭 Swagger（自动：生产环境不挂载）
+- [ ] MySQL / Redis 端口只绑 `127.0.0.1`（compose 默认已是）
+- [ ] 短信：接入 SDK 后保持 `SMS_MOCK=false`；未接入则该功能不可用
 - [ ] 配置 HTTPS（推荐前置 Nginx + Let's Encrypt）
 - [ ] 配置日志收集（Filebeat / Promtail → ELK / Loki）
 - [ ] 配置监控告警（/health 探针 + 错误日志触发）
-- [ ] 数据库备份策略（每日 mysqldump）
+- [ ] 数据库备份策略（每日 mysqldump）—— 仓库**未提供**备份脚本，需自行编写
 
 ### 扩容建议
 
 - 后端无状态，多实例部署（Nginx upstream 负载均衡）
+  - ⚠️ 有**两处进程内状态**需要在扩容前先改掉，否则多实例行为不一致：
+    1. RBAC 的 L1 缓存是每个进程各自一份的 `Map`。踢下线 / 改角色 / 禁用用户时，
+       只有处理该请求的实例会清缓存，其余实例仍持有旧权限直到自身 TTL（约 10 分钟）到期
+       —— 表现为「同一次强制下线，一半请求立刻 403、一半继续放行」。
+       修法是改用 Redis pub/sub 广播失效，或把 L1 TTL 压到秒级。
+    2. 审计日志清理 cron 的 `running` 标志只在单进程内有效，
+       每个实例都会在凌晨 3 点各跑一遍（按主键删除所以幂等，但日志计数会翻倍、
+       `sys_audit_log` 上会多出成倍的锁竞争）。修法是换成 Redis `SETNX` 分布式锁。
 - MySQL 主从 + 读写分离
 - Redis Cluster（多设备会话可分片）
 - 日志目录挂载共享存储（避免容器重启丢失）
@@ -311,11 +345,16 @@ pnpm test
 # 覆盖率报告
 pnpm --filter @project/server test:cov
 
-# 当前单测（服务端 10 个 spec）
-# - common/:  GlobalExceptionFilter / RefreshTokenGuard / pagination.util
+# 当前单测（服务端 14 个 spec）
+# - common/:  GlobalExceptionFilter / RefreshTokenGuard
+#             client-ip.util / pagination.util / random-filename.util / token-version.util
+# - config/:  production-env.util
 # - modules/: LoginThrottlerService / SessionService / ChatGateway / ChatService
 #             RbacService / SmsService / UserCrudService
 # 前端：shared 有 vitest（auth-storage / token-refresh），admin / app 暂无单测
+#
+# ⚠️ CI 目前只跑 `--filter @project/server test`，shared 的两个用例不会执行。
+#    本地验证前端请显式跑：pnpm --filter @project/shared test
 ```
 
 ## 📝 开发规范

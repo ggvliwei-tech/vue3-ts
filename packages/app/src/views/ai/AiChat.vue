@@ -12,6 +12,9 @@ import { consumeSSEWithHistory } from '@/utils/sse'
 import { refreshAccessToken } from '@project/shared/token-refresh'
 // 认证状态统一从 auth-storage 读取
 import { getToken } from '@project/shared/auth-storage'
+// 剪贴板写入封装：非安全上下文（http + 非 localhost）下 navigator.clipboard 不可用，
+// 由封装内部回退到 execCommand，调用方只需判返回值
+import { copyText } from '@project/shared'
 // 从 vant 中导入 showToast 轻提示组件方法
 import { showToast, showDialog } from 'vant'
 // 导入 MarkdownIt 库用于将 Markdown 渲染为 HTML
@@ -94,8 +97,8 @@ async function retryStreamWithToken(
     await consumeSSEWithHistory(text, sessionId.value, newToken, {
       // 正常接收数据块时追加到 AI 消息中
       onChunk: (chunk) => {
-        messages.value[aiMessageIndex].content += parseSSEData(chunk)
-        scrollToBottom(chatContainerRef.value)
+        patchMessage(aiMessageIndex, (msg) => { msg.content += parseSSEData(chunk) })
+        scrollToBottomThrottled()
       },
       // 流式完成时的回调
       onDone: () => {
@@ -105,9 +108,9 @@ async function retryStreamWithToken(
       // 流式出错时的回调
       onError: (err) => {
         // 如果消息内容为空则显示错误提示
-        if (!messages.value[aiMessageIndex].content) {
-          messages.value[aiMessageIndex].content = `流式输出错误：${err.message}`
-        }
+        patchMessage(aiMessageIndex, (msg) => {
+          if (!msg.content) msg.content = `流式输出错误：${err.message}`
+        })
         isStreaming.value = false
         abortController = null
         showToast(err.message || '流式输出失败')
@@ -176,6 +179,52 @@ import { useScrollToBottom as scrollToBottom } from '@/composables/useScrollToBo
 const chatContainerRef = ref<HTMLDivElement | null>(null)
 // 定义 AbortController 用于中断正在进行的 SSE 请求
 let abortController: AbortController | null = null
+
+// 代码块「已复制」文案回滚用的定时器（1.5s）。持有引用是为了能在卸载 / 再次点击时取消
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null
+
+// 待执行的滚动帧句柄，0 表示当前没有排队的滚动
+let scrollRafId = 0
+
+/**
+ * 流式输出期间的滚动到底：同一帧内只滚一次。
+ *
+ * scrollToBottom 读的是 el.scrollHeight —— 布局属性，读它会把整个消息列表
+ * 同步重排一遍。而 chunk 的到达频率远高于屏幕刷新率，一秒内可能触发几十上百次，
+ * 其中绝大多数对用户没有任何可见差异，纯粹是把主线程按在重排上。
+ * 合并到每帧一次即可，行为上仍是"跟着最新内容走"。
+ */
+function scrollToBottomThrottled() {
+  // 本帧已经排过队了，后到的 chunk 不需要再排一次
+  if (scrollRafId) return
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = 0
+    // useScrollToBottom 内部会先 await nextTick，所以这里不必等 DOM 更新
+    void scrollToBottom(chatContainerRef.value)
+  })
+}
+
+/**
+ * 安全地改写指定索引的消息，消息已被移除时静默跳过并返回 false。
+ *
+ * 为什么需要它：流式回调里捕获的 aiMessageIndex 只是"发送那一刻"的数组下标。
+ * 用户在流式输出过程中点了「清空对话」，messages 会被整体置空 —— 后续任何
+ * `messages.value[i].content` 都会抛 TypeError。
+ *
+ * 这条异常链很隐蔽：它在 SSE 的 onChunk 里抛出 → 被 sse.ts 的 catch 转交 onError
+ * → onError 里同样的解引用再抛一次 → 最终成为 sendStreamMessage 的未处理 rejection
+ * → isStreaming 永远停在 true，输入框保持 disabled、按钮停在「停止」，
+ * 用户必须手动点一次「停止」才能恢复。
+ *
+ * 修复分两层：clearChat 里先中断流（治本，见该函数），这里再兜一层
+ * （治标但必要 —— abort 之后仍可能有已入队的 chunk 到达）。
+ */
+function patchMessage(index: number, mutate: (msg: Message) => void): boolean {
+  const msg = messages.value[index]
+  if (!msg) return false
+  mutate(msg)
+  return true
+}
 
 // 组件挂载时恢复上次会话
 onMounted(async () => {
@@ -278,12 +327,34 @@ function parseSSEData(raw: string): string {
   }
 }
 
-// 将 Markdown 内容渲染为 HTML 的函数
-function renderMarkdown(content: string): string {
+/**
+ * Markdown 渲染结果缓存，键是消息对象本身。
+ *
+ * 模板里每条 AI 消息都要调一次 renderMarkdown，而**组件每次重渲染都会把这个调用
+ * 重跑一遍**：流式期间每来一个 chunk 会改 messages 里的一条，在输入框里每敲一个字
+ * 也会改 inputText（模板里 `!inputText.trim()` 是渲染依赖）。没有缓存时，这两种
+ * 情况都会把所有历史 AI 消息的 Markdown 重新解析一遍 —— 代价是「消息条数」倍，
+ * 而其中真正变了内容的只有正在流式输出的那一条。
+ *
+ * 用 WeakMap 而不是往 Message 上加字段：值里存了「上次渲染时的 content」，
+ * 下次读取时比对不一致就自动重算。这样无论将来是谁、在哪里改了 content，
+ * 都不存在"忘记同步缓存"这种可能。消息被清空（clearChat）后缓存也随对象一起释放。
+ */
+const markdownCache = new WeakMap<Message, { source: string; html: string }>()
+
+/** 将消息内容渲染为 HTML（带缓存，见 markdownCache 的说明） */
+function renderMarkdown(msg: Message): string {
   // 如果内容为空则返回空字符串
-  if (!content) return ''
-  // 使用 markdown-it 实例将 Markdown 渲染为 HTML
-  return md.render(content)
+  if (!msg.content) return ''
+  const cached = markdownCache.get(msg)
+  // 命中缓存的唯一条件：这条消息自上次渲染后内容没变过。
+  // 注意这里必须真的读一次 msg.content —— 它同时是这次渲染的响应式依赖，
+  // 提前 return 掉会让后续 chunk 无法触发重渲染。
+  if (cached && cached.source === msg.content) return cached.html
+  // 缓存未命中（或内容已变）：用 markdown-it 实例重新渲染
+  const html = md.render(msg.content)
+  markdownCache.set(msg, { source: msg.content, html })
+  return html
 }
 
 // 事件委托：处理代码块复制按钮的点击
@@ -304,31 +375,30 @@ async function onCodeBlockClick(event: MouseEvent) {
   }
 
   const textEl = target.querySelector('.code-copy-text')
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.position = 'fixed'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-    }
-
-    target.classList.add('copied')
-    if (textEl) textEl.textContent = '已复制'
-    showToast('已复制')
-
-    setTimeout(() => {
-      target.classList.remove('copied')
-      if (textEl) textEl.textContent = '复制'
-    }, 1500)
-  } catch {
+  // 走 shared 的 copyText：navigator.clipboard 在非安全上下文（局域网 http 访问，
+  // 手机真机联调）下不存在，这里手动兜底的那段逻辑与 AccountBook 里是同一件事，
+  // 统一到一处避免两边的兜底行为各自漂移
+  const ok = await copyText(text)
+  if (!ok) {
     showToast('复制失败，请手动选择')
+    return
   }
+
+  target.classList.add('copied')
+  if (textEl) textEl.textContent = '已复制'
+  showToast('已复制')
+
+  // 记住这个定时器：1.5 秒后要回滚按钮文案，而这段时间里用户完全可能
+  // 已经切走页面 / 清空对话让这个 DOM 节点被移除。不清理的话，
+  // 定时器仍会准时触发并去改一个已经脱离文档的节点（无异常，但白做）；
+  // 组件卸载时更该一并清掉，避免回调里闭包持有的整个消息列表被拖住不释放。
+  // 同一个按钮连点多次时，先取消上一个，否则先触发的那个会提前把文案重置回去。
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+  copyResetTimer = setTimeout(() => {
+    copyResetTimer = null
+    target.classList.remove('copied')
+    if (textEl) textEl.textContent = '复制'
+  }, 1500)
 }
 
 // 流式发送消息的异步函数（打字机效果）
@@ -382,7 +452,7 @@ async function sendStreamMessage() {
         // 检测 SSE 数据块是否表示令牌失效
         if (isTokenExpiredMsg(parsed)) {
           // 清除已追加的 token 过期内容
-          messages.value[aiMessageIndex].content = ''
+          patchMessage(aiMessageIndex, (msg) => { msg.content = '' })
           // 终止当前流式请求
           abortController?.abort()
           // 刷新 token 后重试一次（刷新走全局统一入口，不会与其他路径并发轮换 RT）
@@ -393,15 +463,15 @@ async function sendStreamMessage() {
             return
           }
           // token 刷新也失败时显示提示
-          messages.value[aiMessageIndex].content = 'Token 刷新失败，请重新登录'
+          patchMessage(aiMessageIndex, (msg) => { msg.content = 'Token 刷新失败，请重新登录' })
           isStreaming.value = false
           abortController = null
           showToast('Token 刷新失败')
           return
         }
         // 正常内容：将解析后的数据追加到 AI 消息中
-        messages.value[aiMessageIndex].content += parsed
-        scrollToBottom(chatContainerRef.value)
+        patchMessage(aiMessageIndex, (msg) => { msg.content += parsed })
+        scrollToBottomThrottled()
       },
       // 流式完成时的回调函数
       onDone: () => {
@@ -421,9 +491,9 @@ async function sendStreamMessage() {
         }
 
         // 如果消息内容为空则显示错误提示
-        if (!messages.value[aiMessageIndex].content) {
-          messages.value[aiMessageIndex].content = `流式输出错误：${error.message}`
-        }
+        patchMessage(aiMessageIndex, (msg) => {
+          if (!msg.content) msg.content = `流式输出错误：${error.message}`
+        })
         // 重置流式输出状态
         isStreaming.value = false
         // 清空 AbortController 引用
@@ -442,9 +512,9 @@ async function sendStreamMessage() {
     }
 
     // 如果消息内容为空则显示错误提示
-    if (!messages.value[aiMessageIndex].content) {
-      messages.value[aiMessageIndex].content = `请求失败：${err.message}`
-    }
+    patchMessage(aiMessageIndex, (msg) => {
+      if (!msg.content) msg.content = `请求失败：${err.message}`
+    })
     // 重置流式输出状态
     isStreaming.value = false
     // 清空 AbortController 引用
@@ -456,6 +526,8 @@ async function sendStreamMessage() {
 function stopStreaming() {
   // 调用 AbortController 的 abort 方法中断当前流式请求
   abortController?.abort()
+  // 清引用：留着它会让下一次 sendStreamMessage 之前的旧 signal 状态残留
+  abortController = null
   // 重置流式输出状态
   isStreaming.value = false
 }
@@ -477,6 +549,14 @@ async function clearChat() {
   }
 
   // 用户确认后执行清空操作
+  //
+  // 必须先中断正在进行的流式请求，再清空数组 —— 顺序反了会卡死页面：
+  // 流没停时下一个 chunk 会去写 messages.value[aiMessageIndex]，
+  // 而数组已被置空，该下标是 undefined；异常在 SSE 回调里抛出并被转交 onError，
+  // onError 里同样的解引用再抛一次，最终成为未处理的 rejection，
+  // isStreaming 停在 true → 输入框与发送按钮永久 disabled。
+  // （patchMessage 已兜住越界，这里是治本：不让流继续跑下去）
+  stopStreaming()
   // 清空消息列表数组
   messages.value = []
   // 重置会话 ID
@@ -493,6 +573,18 @@ async function clearChat() {
 onUnmounted(() => {
   // 中断可能正在进行的流式请求
   abortController?.abort()
+  // 取消「已复制」文案的回滚定时器。不清的话，1.5s 后回调仍会执行，
+  // 去操作一个已经卸载的 DOM 节点（target 与 textEl 都已脱离文档）
+  if (copyResetTimer) {
+    clearTimeout(copyResetTimer)
+    copyResetTimer = null
+  }
+  // 取消排队中的滚动帧。留着它虽然不会出错（chatContainerRef 已为 null，
+  // 回调里是空操作），但没必要让一个已卸载组件的闭包多存活一帧
+  if (scrollRafId) {
+    cancelAnimationFrame(scrollRafId)
+    scrollRafId = 0
+  }
 })
 </script>
 
@@ -559,7 +651,7 @@ onUnmounted(() => {
             v-if="msg.role === 'assistant'"
             class="message-content markdown-body"
             @click="onCodeBlockClick"
-            v-html="renderMarkdown(msg.content)"
+            v-html="renderMarkdown(msg)"
           ></div>
           <!-- 用户消息内容：纯文本显示 -->
           <div v-else class="message-content">{{ msg.content }}</div>

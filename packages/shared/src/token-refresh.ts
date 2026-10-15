@@ -144,10 +144,17 @@ export function handleSessionExpired(): void {
  *
  * 其他标签页通过 storage 事件感知到 token 被清空后自行登出，
  * 不需要额外的广播通道。
+ *
+ * 与 handleSessionExpired 一样要走 onAuthCleared：
+ * 主动登出同样是"会话已结束"，除了清 localStorage，还必须让各端做收尾 ——
+ * 至少包括清空 Pinia 里的响应式状态（存储层清了、store 不会自己跟着变），
+ * 以及断开仍然存活的 WebSocket。此前这里只清存储不通知，
+ * 结果是登出后 socket 仍以旧 JWT 保持连接，服务端 presence 里该用户一直"在线"。
  */
 export function notifyLogout(): void {
   stopSilentRefresh()
   clearAuth()
+  onAuthCleared?.()
 }
 
 // ====================== 静默续期 ======================

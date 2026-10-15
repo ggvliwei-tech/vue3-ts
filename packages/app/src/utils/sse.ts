@@ -36,14 +36,20 @@ async function consume(
   token: string,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
+  body?: unknown,
 ): Promise<void> {
   try {
     const response = await fetch(url, {
-      method: 'GET',
+      // 用 POST 提交失败：问题原文若放在查询参数里会原样进 URL，
+      // 进而落到 nginx access log / 代理日志 / 浏览器历史。
+      // 服务端（ai.controller 的两个 @Sse）同样已改为 POST + 请求体。
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
       },
+      body: JSON.stringify(body ?? {}),
       signal,
     })
 
@@ -100,6 +106,10 @@ function resolveToken(explicit?: string): string {
 
 /**
  * 通过 fetch 消费 SSE 流式输出（带 sessionId 上下文）
+ *
+ * 走 POST + JSON body，不再把 question 拼进查询参数（见 consume 内的说明）；
+ * 对应服务端 ai.controller 的 `@Post('stream/history')`。
+ *
  * @param question 用户提问
  * @param sessionId 会话 ID
  * @param token 可选；不传则从统一存储层（auth-storage）自动读取
@@ -113,7 +123,6 @@ export async function consumeSSEWithHistory(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
 ): Promise<void> {
-  const params = new URLSearchParams({ question, sessionId })
-  const url = `${getBaseURL()}/api/v1/ai/stream/history?${params}`
-  await consume(url, resolveToken(token), callbacks, signal)
+  const url = `${getBaseURL()}/api/v1/ai/stream/history`
+  await consume(url, resolveToken(token), callbacks, signal, { question, sessionId })
 }

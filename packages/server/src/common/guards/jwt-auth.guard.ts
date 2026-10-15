@@ -67,8 +67,14 @@ export class JwtAuthGuard implements CanActivate {
 
     try {
       // 第三步：验证 Token 签名
+      // 显式锁定算法白名单，与 chat.gateway.ts 的 verify 保持一致。
+      // 当前的密钥是 HMAC 对称密钥，jsonwebtoken 对此类密钥的默认算法集本就是
+      // HS256/384/512，所以现在也无法被 alg=none 或 RS256→HS256 混淆绕过 ——
+      // 写上是为了把这条边界显式固化：日后若把密钥换成非对称的（RS256 + JWKS），
+      // 默认算法集会随之放宽，那时这里就是唯一拦得住混淆攻击的地方。
       const payload = this.jwtService.verify(token, {
         secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+        algorithms: ['HS256'],
       })
 
       // 第四步：检查吊销状态（强制下线拦截）

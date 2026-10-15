@@ -26,6 +26,8 @@ import { RbacService } from '../rbac/rbac.service'
 import { SmsService } from '../sms/sms.service'
 import { SessionService } from '../auth/session.service'
 import { AuditEvents } from '../audit/audit.events'
+// 手机号脱敏：审计日志里只落掩码形态，不落完整号码
+import { maskPhone } from '../../common/utils/mask.util'
 
 @Injectable()
 export class UserCrudService {
@@ -124,6 +126,14 @@ export class UserCrudService {
     if (existingUser) {
       throw new ConflictException('用户名已注册')
     }
+    // ⚠️ 已知取舍：这里区分了"用户名已注册"/"手机号已注册"，而注册接口对匿名开放，
+    // 于是它同时也是一个「手机号是否注册过」的查询接口（用户枚举）。
+    // 之所以保留区分：手机号注册是主流程，用户必须知道"这个号已经注册过，去登录"，
+    // 统一改成"注册失败"会把这个明确的指引变成一句无用提示。
+    // 现有的缓解手段是接口上的 @Throttle(5/min)（见 user.controller.ts 的 register）——
+    // 单 IP 每分钟只能试探 5 个号码，批量枚举的成本远高于收益。
+    // 若日后这个残余风险不可接受，正解是把手机号校验前移到"注册需先通过短信验证"，
+    // 而不是把错误文案改模糊。
     const existingPhone = await this.userRepo.findOne({
       where: { phone: createUserDto.phone },
     })
@@ -156,6 +166,8 @@ export class UserCrudService {
 
   /**
    * 切换用户状态（启用 / 禁用）
+   *  - 内置超管 admin 不允许被禁用
+   *  - 用一条 SQL 原子取反，避免并发下的丢失更新
    *  - 禁用时主动吊销该用户所有 session
    *  - 发审计事件
    */
@@ -163,9 +175,31 @@ export class UserCrudService {
     const target = await this.userRepo.findOneBy({ id: userId })
     if (!target) throw new NotFoundException('用户不存在')
 
-    target.status = target.status === 1 ? 0 : 1
-    await this.userRepo.save(target)
-    if (target.status === 0) {
+    // 保护内置超管：admin 被禁用后没有任何账号能登录后台，只能直接改库恢复。
+    // 只拦「启用 → 禁用」这一个方向 —— 若 admin 因故处于禁用态，
+    // 放行「禁用 → 启用」是唯一的自助恢复路径，一并拦掉等于自断退路。
+    if (target.username === 'admin' && target.status === 1) {
+      throw new BadRequestException('内置超级管理员 admin 不允许禁用')
+    }
+
+    // 交给数据库在同一条语句里取反。
+    // 原先的「读实体 → 改 status 字段 → save()」是 read-modify-write：
+    // 两个管理员同时点同一个用户时，双方各自读到同一个旧值、各自取反成同一个
+    // 新值，后写入的覆盖先写入的 —— 两次点击只生效一次，其中一人的意图被静默丢弃。
+    // 数据库里做 1 - status 则每次执行都必然翻转，不存在这个窗口。
+    await this.userRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: () => '1 - status' })
+      .where('id = :id', { id: userId })
+      .execute()
+
+    // 取反后回读一次拿到真正生效的值：响应文案与审计详情都要用它，
+    // 而并发场景下它未必等于「target.status 取反」。
+    const updated = await this.userRepo.findOneBy({ id: userId })
+    const newStatus = updated?.status ?? (target.status === 1 ? 0 : 1)
+
+    if (newStatus === 0) {
       await this.sessionService.removeAll(target.id)
     }
     this.events.emit(AuditEvents.LOG, {
@@ -175,12 +209,12 @@ export class UserCrudService {
         status: 1,
         resource: 'user',
         resourceId: userId,
-        detail: { newStatus: target.status },
+        detail: { newStatus },
       },
     })
     return {
-      msg: `用户 ${target.username} 已${target.status === 1 ? '启用' : '禁用'}`,
-      status: target.status,
+      msg: `用户 ${target.username} 已${newStatus === 1 ? '启用' : '禁用'}`,
+      status: newStatus,
     }
   }
 
@@ -190,14 +224,19 @@ export class UserCrudService {
    *  - 成功后踢下线所有设备
    */
   async resetPasswordByPhone(dto: ForgotPasswordDto) {
+    // 审计里只落脱敏号码。审计表长期留存且可导出 CSV，
+    // 写完整手机号等于把它复制到另一个不受用户密码保护、且多个管理员可见的地方。
+    // 见 common/utils/mask.util.ts 的说明。
+    const maskedPhone = maskPhone(dto.phone)
+
     const isValid = await this.smsService.verifyCode(dto.phone, dto.code)
     if (!isValid) {
       this.events.emit(AuditEvents.LOG, {
         action: 'reset-password',
         ctx: {
-          username: dto.phone,
+          username: maskedPhone,
           status: 0,
-          detail: { reason: '验证码错误', phone: dto.phone },
+          detail: { reason: '验证码错误', phone: maskedPhone },
         },
       })
       throw new BadRequestException('验证码错误或已过期')
@@ -208,9 +247,9 @@ export class UserCrudService {
       this.events.emit(AuditEvents.LOG, {
         action: 'reset-password',
         ctx: {
-          username: dto.phone,
+          username: maskedPhone,
           status: 0,
-          detail: { reason: '手机号未注册', phone: dto.phone },
+          detail: { reason: '手机号未注册', phone: maskedPhone },
         },
       })
       throw new NotFoundException('该手机号未注册')
@@ -229,7 +268,8 @@ export class UserCrudService {
         status: 1,
         resource: 'user',
         resourceId: user.id,
-        detail: { phone: dto.phone },
+        // userId + resourceId 已经唯一确定了当事人，号码只留脱敏形态即可
+        detail: { phone: maskedPhone },
       },
     })
     return { msg: '密码重置成功，请使用新密码登录' }

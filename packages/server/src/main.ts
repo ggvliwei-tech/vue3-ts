@@ -12,6 +12,7 @@ import helmet from 'helmet'; // 安全 HTTP 头（防 XSS/Clickjacking/MIME snif
 import compression from 'compression'; // gzip 压缩响应体
 import { networkInterfaces } from 'os'; // Node 内置模块，用于获取本机网络接口信息
 import { checkProductionEnv, formatProductionEnvIssues } from './config/production-env.util'; // 生产环境配置自检
+import { isOriginAllowed } from './common/utils/cors.util'; // CORS 来源判定（与 WS 网关共用）
 
 /**
  * 收集本机所有可用的 IPv4 地址（排除回环地址 127.0.0.1）
@@ -96,17 +97,14 @@ async function bootstrap() {
   })
 
   // ========== CORS ==========
+  // 判定逻辑与 chat.gateway.ts 的 WebSocket 网关共用（common/utils/cors.util.ts）：
+  // 两条链路曾经各维护一份白名单，WS 那份还停留在硬编码开发端口上，生产必错。
   const allowedOrigins = configService.get<string[]>('CORS_ORIGINS') || []
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true)
-      if (allowedOrigins.includes(origin)) return callback(null, true)
-      if (process.env.NODE_ENV !== 'production') {
-        const lanRegex = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/
-        if (lanRegex.test(origin)) return callback(null, true)
-      }
-      callback(new Error(`CORS 拒绝：来源 ${origin} 不在白名单中`), false)
-    },
+    origin: (origin, callback) =>
+      isOriginAllowed(origin, allowedOrigins, process.env.NODE_ENV)
+        ? callback(null, true)
+        : callback(new Error(`CORS 拒绝：来源 ${origin} 不在白名单中`), false),
     credentials: true,
   })
 

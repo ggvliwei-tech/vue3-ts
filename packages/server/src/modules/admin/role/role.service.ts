@@ -139,11 +139,20 @@ export class RoleService {
       throw new BadRequestException(`内置角色 ${role.code} 不允许删除`)
     }
 
-    // 先清缓存，再删关联和角色
-    await this.clearAffectedUserCache(id)
+    // 先取出受影响的用户 ID，**必须在删除 sys_user_role 之前查** ——
+    // 关联行删掉之后就再也查不出谁持有该角色，缓存也就永远清不掉了。
+    const affectedUserIds = await this.collectAffectedUserIds(id)
+
+    // 先删数据，再清缓存。
+    // 顺序反过来（先清后删）会留一个真实的越权窗口：清理与删除之间若有请求进来，
+    // 它会读到「仍含该角色」的权限集并重新写进缓存，而此后不会再有人清第二次，
+    // 于是被删角色的权限继续放行整个缓存 TTL。
+    // 删完再清则不存在这个窗口：清完之后的任何读都只能读到已删除的状态。
     await this.rolePermRepo.delete({ roleId: id })
     await this.userRoleRepo.delete({ roleId: id })
     await this.roleRepo.delete({ id })
+
+    await this.clearUserCaches(affectedUserIds)
   }
 
   /**
@@ -203,10 +212,28 @@ export class RoleService {
   }
 
   /**
+   * 内部：查出持有该角色的所有用户 ID
+   */
+  private async collectAffectedUserIds(roleId: number): Promise<number[]> {
+    const userRoles = await this.userRoleRepo.find({ where: { roleId } })
+    return userRoles.map((ur) => ur.userId)
+  }
+
+  /**
+   * 内部：按用户 ID 批量清理 RBAC 缓存
+   */
+  private async clearUserCaches(userIds: number[]): Promise<void> {
+    await Promise.all(userIds.map((userId) => this.rbacService.clearUserCache(userId)))
+  }
+
+  /**
    * 内部：清理持有该角色的所有用户的 RBAC 缓存
+   *
+   * 适用于「关联行仍然存在」的场景（update / assignPermissionsById）。
+   * 删除角色请走 collectAffectedUserIds + clearUserCaches —— 那时关联行已经没了，
+   * 本方法会查出空集，静默什么都不清。
    */
   private async clearAffectedUserCache(roleId: number): Promise<void> {
-    const userRoles = await this.userRoleRepo.find({ where: { roleId } })
-    await Promise.all(userRoles.map((ur) => this.rbacService.clearUserCache(ur.userId)))
+    await this.clearUserCaches(await this.collectAffectedUserIds(roleId))
   }
 }

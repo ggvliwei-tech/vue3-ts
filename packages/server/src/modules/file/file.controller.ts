@@ -45,6 +45,10 @@ export class FileController {
   async findAll(
     @Query('page') page: string | undefined, // 页码参数，默认第 1 页
     @Query('limit') limit: string | undefined, // 每页数量参数，默认 10 条（上限 MAX_PAGE_SIZE）
+    // 当前用户：服务层据此做归属过滤（非 admin 只能看到自己上传的文件）。
+    // 必须写在 module 之前 —— TS1016：必选参数不能位于可选参数之后。
+    // 装饰器与参数声明顺序无关，NestJS 按装饰器取参，调整顺序不影响路由行为。
+    @CurrentUser() user: { id: number; roles?: string[] },
     @Query('module') module?: string, // 模块筛选参数，可选
   ) { // 方法参数列表结束
     // 参数类型标注为 string（查询串的真实运行时类型）。
@@ -55,6 +59,7 @@ export class FileController {
       parsePositiveInt(page, 1),
       parsePositiveInt(limit, 10, MAX_PAGE_SIZE),
       module,
+      user,
     );
   }
 

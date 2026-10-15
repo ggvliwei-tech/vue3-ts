@@ -1,5 +1,5 @@
 // 导入依赖注入装饰器和异常类
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 // 导入配置服务，用于读取环境变量配置
 import { ConfigService } from '@nestjs/config';
 // 导入 Repository 注入装饰器
@@ -77,6 +77,9 @@ export class FileService {
   // 当前使用的存储策略，根据配置动态切换
   private storage: FileStorage;
 
+  // 日志实例：上传/删除出现"半截状态"时要留下可追溯的线索
+  private readonly logger = new Logger(FileService.name);
+
   // 构造函数注入依赖
   constructor(
     private configService: ConfigService, // 注入配置服务
@@ -93,8 +96,20 @@ export class FileService {
 
   /**
    * 分页查询文件列表
+   *
+   * 非 admin 用户**只能看到自己上传的文件**。
+   * 此前这里只按 module 过滤、不按 uploadUserId，而同一模块的 remove() 却做了
+   * 归属校验 —— 两者口径不一致：任何持 file:list 的人（内置 editor 角色即有）
+   * 都能翻页枚举全站文件的 originalName 与可直接访问的 url，再逐个下载别人的私有文件。
+   *
+   * @param currentUser 当前登录用户，用于判定 admin 与归属过滤
    */
-  async findAll(page = 1, limit = 10, module?: string) {
+  async findAll(
+    page = 1,
+    limit = 10,
+    module?: string,
+    currentUser?: { id: number; roles?: string[] },
+  ) {
     const skip = (page - 1) * limit;
     // 计算跳过的记录数（偏移量）
     const where: any = {};
@@ -102,6 +117,13 @@ export class FileService {
     if (module) {
       // 如果传入了模块参数
       where.module = module; // 按模块过滤
+    }
+    // 归属过滤：口径与 remove() 保持一致（admin 可看全部）
+    // currentUser 缺省时不加过滤 —— 仅用于内部调用（如管理端聚合统计），
+    // HTTP 入口（file.controller.ts）始终会传入，不存在绕过路径。
+    const isAdmin = currentUser?.roles?.includes('admin') ?? false;
+    if (currentUser && !isAdmin) {
+      where.uploadUserId = currentUser.id;
     }
     const [list, total] = await this.fileRepo.findAndCount({
       // 查询数据并获取总数
@@ -131,6 +153,14 @@ export class FileService {
     // 1. 基础校验：检查文件缓冲区是否存在
     if (!file?.buffer) {
       throw new BadRequestException('文件缓冲区为空，上传失败');
+    }
+    // 原始文件名长度校验。sys_file.original_name 是 VARCHAR(255)，客户端可以在
+    // multipart 里放任意长度的 filename —— 超长时 MySQL 严格模式直接抛
+    // ER_DATA_TOO_LONG，被全局过滤器兜成 500（用户看不出是文件名太长）。
+    // 而且这个文件名是**先落盘再入库**的，等到入库才失败时文件已经在磁盘上了。
+    // 在动手写盘之前就拦掉，报错也明确。
+    if (file.originalname.length > 255) {
+      throw new BadRequestException('文件名过长（最多 255 个字符）');
     }
     // 提取文件扩展名
     const ext = file.originalname.substring(file.originalname.lastIndexOf('.')); // 从原始文件名中提取扩展名
@@ -179,8 +209,26 @@ export class FileService {
       uploadUserId, // 上传人用户ID
       createTime: Date.now(), // 上传时间
     });
-    // 保存记录到数据库
-    await this.fileRepo.save(record);
+    // 保存记录到数据库。
+    // 落库失败必须把刚上传的物理文件删掉再抛 —— 否则文件已经躺在磁盘/OSS 上，
+    // 而库里没有任何记录指向它：没有 filePath、没有 url，任何清理流程都找不到它，
+    // 也没人会来删。每次"上传成功但入库失败"就永久泄漏一个文件（本地是磁盘，
+    // OSS 是按量计费）。
+    try {
+      await this.fileRepo.save(record);
+    } catch (err) {
+      try {
+        await this.storage.delete(res.filePath);
+      } catch (cleanupErr) {
+        // 回滚本身失败：记录已经不存在了，这个文件成了孤儿。
+        // 把路径打出来，让运维能手工清理，不要静默丢掉这条线索。
+        this.logger.error(
+          `[File] 入库失败且回滚物理文件失败，产生孤儿文件：path=${res.filePath} url=${res.url} —— ${(cleanupErr as Error).message}`,
+          (cleanupErr as Error).stack,
+        );
+      }
+      throw err;
+    }
 
     return record;
   }
@@ -208,13 +256,37 @@ export class FileService {
       throw new ForbiddenException('只能删除自己上传的文件')
     }
 
-    // 删除云端/本地物理文件
+    // 删除顺序：**先物理文件，后数据库记录**。这个顺序不要调换。
+    //
+    // 两种顺序都可能在中间失败，但后果不对称：
+    //  - 先物理后库（当前）：物理已删、删库失败 → 记录还在、指向一个不存在的文件。
+    //    用户看到一张裂图，重试一次即可删掉。重试是安全的 —— 两个存储实现的
+    //    delete 都对「文件已不存在」幂等（LocalStorage 先 existsSync 再 unlink，
+    //    OSS 的 delete 对不存在的 key 也返回成功），不会因为文件没了就报错。
+    //  - 先库后物理（反例）：记录已删、物理删除失败 → 记录没了，指针也就丢了，
+    //    这个文件再也没法被任何流程找到并清理。而它的 URL 仍然有效、仍能公开访问
+    //    （本地是 nginx 静态目录，无鉴权），于是用户以为"已删除"的文件实际还挂着。
+    //    这是安全后果，比裂图严重得多，而且不可恢复。
+    //
+    // 因此这里选择"可能留下一条可重试的脏记录"，而不是"可能留下一个不可回收的
+    // 公开文件"。
     if (file.filePath) {
       // 如果文件路径存在
       await this.storage.delete(file.filePath); // 调用存储策略删除物理文件
     }
-    // 删除数据库记录
-    await this.fileRepo.delete(id); // 根据 ID 删除数据库中的记录
+    try {
+      // 删除数据库记录
+      await this.fileRepo.delete(id); // 根据 ID 删除数据库中的记录
+    } catch (err) {
+      // 物理文件已经删掉了，但记录没删成。这不算"什么都没发生"：
+      // 该 URL 已经 404，而列表里还有这一条。把 id 与路径打出来，
+      // 便于运维按图索骥清理，而不是留一条看不出所以然的 500。
+      this.logger.error(
+        `[File] 物理文件已删除但数据库记录删除失败：id=${id} path=${file.filePath} —— ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+      throw err;
+    }
     return true; // 返回删除成功标识
   }
 }

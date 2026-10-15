@@ -48,14 +48,73 @@ jobs:
       - name: 类型检查（四包）
         run: pnpm type-check
 
-      - name: 单元测试
-        run: pnpm --filter @project/server test
+      # 与 type-check 同类的"假绿灯"风险：pnpm -r 会静默跳过缺少脚本的包。
+      # 例如 shared 的 vitest 用例在只跑 server 时完全不执行，CI 依旧全绿。
+      - name: 校验测试门禁覆盖含测试的包
+        run: |
+          node -e "
+            const fs = require('fs');
+            const expected = ['shared', 'server'];
+            const missing = expected.filter((p) => {
+              const s = JSON.parse(fs.readFileSync('packages/' + p + '/package.json', 'utf8')).scripts || {};
+              return !s['test'];
+            });
+            if (missing.length) {
+              console.error('缺少 test 脚本，测试门禁会出现假绿灯: ' + missing.join(', '));
+              process.exit(1);
+            }
+            console.log('test 覆盖: ' + expected.join(', '));
+          "
+
+      # 用根级 `pnpm test`（= pnpm -r test）而不是 --filter @project/server：
+      # 后者只跑 jest，shared 的 vitest 用例一条都不会执行。
+      - name: 单元测试（递归全包）
+        run: pnpm test
+
+      # lint 此前完全没进门禁，风格与常见错误（未使用变量、误用 any 之外的真问题）
+      # 只能靠人肉 review。当前基线是 0 error / 若干 warning，warning 不阻断。
+      - name: 代码规范检查
+        run: pnpm lint:check
 
       - name: 构建 shared + admin + app
         run: pnpm build:all
 
       - name: 构建 server
         run: pnpm build:server
+
+      # 防回归：TypeORM 的实体 glob 一旦写成 cwd 相对字符串
+      # （'dist/**\/*.entity{.ts,.js}'），本地开发完全正常、容器里却解析为空 ——
+      # 容器的 CMD 是 `node packages/server/dist/main.js` 而 WORKDIR 是 /app，
+      # glob 会去找 /app/dist，那个目录不存在。后果很隐蔽：启动照常成功
+      # （/health 只做 SELECT 1、不碰实体元数据），直到第一次调用仓储方法才抛
+      # EntityMetadataNotFoundError，所有查库接口 500。
+      # 类型检查、单测、构建全都发现不了它，只有真跑起容器才暴露 ——
+      # 所以这里直接对**编译产物**做断言。
+      - name: 校验实体 glob 不依赖 cwd
+        run: |
+          node -e "
+            const fs = require('fs');
+            const src = fs.readFileSync('packages/server/dist/app.module.js', 'utf8');
+            // 断言放宽到「entities 数组里必须出现 __dirname」：写死成
+            // path_1.join 会绑死 tsc 的辅助函数命名，换个 import 写法就误报。
+            if (!/entities:\s*\[[^\]]*__dirname[^\]]*\]/.test(src)) {
+              console.error('app.module 的 entities 配置不再基于 __dirname，容器内会解析为空');
+              process.exit(1);
+            }
+            const count = (function walk(d) {
+              let n = 0;
+              for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+                const p = d + '/' + e.name;
+                n += e.isDirectory() ? walk(p) : (e.name.endsWith('.entity.js') ? 1 : 0);
+              }
+              return n;
+            })('packages/server/dist');
+            if (count === 0) {
+              console.error('dist 中没有任何 *.entity.js，实体没被编译进去');
+              process.exit(1);
+            }
+            console.log('实体 glob 基于 __dirname，dist 内实体文件数: ' + count);
+          "
 
       # admin 曾配置 rollupOptions.external: ['@project/shared']，构建会"成功"但产物里
       # 残留浏览器无法解析的裸 import，因此额外校验产物自包含

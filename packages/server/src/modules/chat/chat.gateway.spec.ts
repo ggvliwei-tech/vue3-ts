@@ -80,6 +80,20 @@ function payloadsOf(emitMock: jest.Mock, event: string) {
   return emitMock.mock.calls.filter((c) => c[0] === event).map((c) => c[1])
 }
 
+/**
+ * Redis 的 fake。提到 describe 外面是为了让用例能改它的返回值
+ * （比如测发消息限流时把 incr 调大）。
+ *
+ * 默认值：exists=false / get=null（未吊销），incr=1（窗口内第 1 条，永不触发限流）。
+ */
+const mockRedisService = {
+  exists: jest.fn(async () => false),
+  get: jest.fn(async () => null),
+  incr: jest.fn(async () => 1),
+  expire: jest.fn(async () => 1),
+  ttl: jest.fn(async () => 10),
+}
+
 describe('ChatGateway', () => {
   let gateway: ChatGateway
   let fake: ReturnType<typeof createFakeServer>
@@ -100,15 +114,7 @@ describe('ChatGateway', () => {
         { provide: JwtService, useValue: { verify: jest.fn() } },
         { provide: ConfigService, useValue: { get: jest.fn() } },
         { provide: ChatService, useValue: mockChatService },
-        {
-          provide: RedisService,
-          useValue: {
-            // 设备级黑名单（exists）与用户级令牌版本号（get）各查一次，
-            // 两者都返回"未吊销"，让 handleConnection 的测试只关注它自己的逻辑
-            exists: jest.fn(async () => false),
-            get: jest.fn(async () => null),
-          },
-        },
+        { provide: RedisService, useValue: mockRedisService },
         { provide: UserCrudService, useValue: { findUserEntity: jest.fn() } },
         {
           provide: RbacService,
@@ -392,6 +398,36 @@ describe('ChatGateway', () => {
       expect(payloadsOf(client.emit, 'msg-sent')).toEqual([
         expect.objectContaining({ id: 11, senderId: 1, content: 'hi' }),
       ])
+    })
+
+    it('超出窗口额度时拒绝，且**在写库之前**就拒绝', async () => {
+      const client = createFakeSocket({ rooms: new Set(['5']) })
+      mockChatService.isUserInRoom.mockResolvedValueOnce(true)
+      // 21 > WS_MSG_LIMIT(20)
+      mockRedisService.incr.mockResolvedValueOnce(21)
+
+      await expect(
+        gateway.handleMessage(client, { roomId: 5, content: 'hi' }),
+      ).rejects.toMatchObject({ status: 429 })
+
+      // 关键断言：限流必须在任何 DB 往返之前生效。
+      // 若将来有人把 assertMessageRate 挪到 saveMessage 之后，
+      // 「拒绝」就变成「先写库再拒绝」，这道闸也就白设了。
+      expect(mockChatService.isUserInRoom).not.toHaveBeenCalled()
+      expect(mockChatService.saveMessage).not.toHaveBeenCalled()
+    })
+
+    it('首次自增时挂过期时间，避免计数键永不过期', async () => {
+      const client = createFakeSocket({ rooms: new Set(['5']) })
+      mockChatService.isUserInRoom.mockResolvedValueOnce(true)
+      mockChatService.saveMessage.mockResolvedValueOnce({ id: 12, createdAt: 1 })
+
+      await gateway.handleMessage(client, { roomId: 5, content: 'hi' })
+
+      expect(mockRedisService.expire).toHaveBeenCalledWith(
+        'ws:msg:rate:1',
+        expect.any(Number),
+      )
     })
   })
 })

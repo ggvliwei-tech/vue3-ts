@@ -11,7 +11,6 @@
  */
 import { Injectable, BadRequestException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import fs from 'fs'
 import { Document } from '@langchain/core/documents'
 import { PDFParse } from 'pdf-parse'
 import { ChromaClient } from 'chromadb'
@@ -57,11 +56,20 @@ export class RagService {
   }
 
   /** 读取并解析 PDF 全文 */
-  private async readPdf(filePath: string): Promise<string> {
-    if (!fs.existsSync(filePath)) {
-      throw new BadRequestException('文件不存在')
+  /**
+   * 校验魔术字节并解析 PDF 文本。
+   *
+   * 直接吃内存里的 Buffer，不落盘：multer 在本项目里用的是默认的 memoryStorage
+   * （全仓没有任何 MulterModule / diskStorage 配置），上传文件只有 buffer、
+   * **没有 path 字段**。此前这里按磁盘路径读，导致 file.path === undefined →
+   * existsSync(undefined) === false → 恒定抛「文件不存在」，该接口从未成功过。
+   */
+  private async readPdf(buffer: Buffer): Promise<string> {
+    // 魔术字节校验：扩展名和 Content-Type 都是客户端说了算的，不能作为判据。
+    // 与 file 模块的做法保持一致（file.service.ts 里也是校验魔术字节）。
+    if (buffer.length < 5 || buffer.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      throw new BadRequestException('文件内容不是合法的 PDF')
     }
-    const buffer = fs.readFileSync(filePath)
     const parser = new PDFParse({ data: buffer })
     const pdfRes = await parser.getText()
     return pdfRes.text
@@ -74,11 +82,11 @@ export class RagService {
 
   /**
    * 解析 PDF 并写入向量库
-   * @param filePath PDF 磁盘路径
+   * @param buffer PDF 文件内容（由 multer memoryStorage 提供）
    * @param collectionName collection 名
    */
-  async ingestPdf(filePath: string, collectionName = DEFAULT_COLLECTION): Promise<true> {
-    const text = await this.readPdf(filePath)
+  async ingestPdf(buffer: Buffer, collectionName = DEFAULT_COLLECTION): Promise<true> {
+    const text = await this.readPdf(buffer)
     const chunks = this.splitText(text)
     if (chunks.length === 0) return true
 

@@ -1,3 +1,4 @@
+import { join } from 'path'; // 拼接实体文件的绝对路径（见下方 entities 配置的说明）
 import { Module } from '@nestjs/common'; // NestJS 模块装饰器
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'; // APP_INTERCEPTOR 用于全局注册拦截器，APP_GUARD 用于全局注册守卫
 import { ClassSerializerInterceptor } from '@nestjs/common'; // class-transformer 序列化拦截器，配合 @Expose/@Exclude 使用
@@ -63,7 +64,15 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
         username: configService.getOrThrow<string>('DB_USER'), // 数据库用户名
         password: configService.getOrThrow<string>('DB_PWD'), // 数据库密码
         database: configService.getOrThrow<string>('DB_NAME'), // 数据库名称
-        entities: ['dist/**/*.entity{.ts,.js}'], // 实体文件路径，TypeORM 自动映射表结构
+        // 实体文件路径，TypeORM 自动映射表结构。
+        // 必须用 __dirname 拼绝对路径，不能写成相对字符串 'dist/**/*.entity{.ts,.js}'：
+        // 那个写法是相对 process.cwd() 解析的。本地开发 cwd 正好是 packages/server，
+        // 看起来没问题；但容器里 CMD 是 `node packages/server/dist/main.js` 且
+        // WORKDIR 是 /app（日志与上传目录都基于 cwd 解析，不能改），
+        // glob 会去找 /app/dist —— 那个目录不存在，命中 0 个实体。
+        // 后果是启动照常成功（/health 只做 SELECT 1，不碰实体元数据），
+        // 直到第一次调用仓储方法才抛 EntityMetadataNotFoundError，所有查库接口 500。
+        entities: [join(__dirname, '**/*.entity{.ts,.js}')],
         // 表结构**不**由 TypeORM 维护：synchronize 恒为 false（所有环境，包括本地开发）。
         // nest-db.sql 才是权威 schema，实体装饰器只做映射元数据。
         // 上面这行注释掉的写法（NODE_ENV !== 'production'）才是"非生产环境自动同步"，

@@ -67,10 +67,14 @@ export class RefreshTokenGuard implements CanActivate {
     }
 
     // 第二步：验证 Token 签名
+    // 显式锁定算法白名单，与 JwtAuthGuard / chat.gateway.ts 保持一致。
+    // 见 JwtAuthGuard 处的说明：当前对称密钥下并非存在可利用的混淆漏洞，
+    // 写在这里是为了把边界固化下来，避免日后改用非对称密钥时被默认算法集放宽。
     let payload: { sub: number; username: string; sessionId?: string }
     try {
       payload = this.jwtService.verify(token, {
         secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        algorithms: ['HS256'],
       })
     } catch {
       throw new UnauthorizedException('刷新令牌过期或非法')

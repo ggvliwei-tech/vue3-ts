@@ -19,6 +19,11 @@ import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston'
 import { randomInt } from 'crypto'
 import { RedisService } from '../redis/redis.service'
 
+/** 日配额默认按这个时区切天（短信通道为阿里云，面向国内用户） */
+const DEFAULT_DAILY_TZ = 'Asia/Shanghai'
+/** 日配额 key 的 TTL：一天。按日期分键，旧键靠这个自然过期，无需清理 */
+const DAILY_COUNT_TTL = 86_400
+
 @Injectable()
 export class SmsService implements OnModuleInit {
   /** 验证码有效期（5 分钟） */
@@ -30,12 +35,52 @@ export class SmsService implements OnModuleInit {
   /** 单个验证码允许的最大校验失败次数，超过即作废 */
   private readonly MAX_VERIFY_ATTEMPTS = 5
 
+  /** 「今天」的日期格式化器，按 SMS_DAILY_TZ 计算，构造期即确定 */
+  private readonly dailyFormatter: Intl.DateTimeFormat
+
   constructor(
     private configService: ConfigService,
     private redisService: RedisService,
     @Inject(WINSTON_MODULE_NEST_PROVIDER)
     private readonly logger: LoggerService,
-  ) {}
+  ) {
+    // 放在构造函数而非 onModuleInit：单测里直接 new 出服务实例很常见，
+    // 依赖生命周期钩子会让 formatter 在测试中为 undefined。
+    this.dailyFormatter = this.buildDailyFormatter()
+  }
+
+  /**
+   * 构造日配额切天用的格式化器。
+   *
+   * 时区名非法时 Intl 会抛 RangeError —— 那是进程启动期的异常，
+   * 会让「发送验证码」这条链路整体不可用。一个写错的环境变量不该有这种杀伤力，
+   * 因此退回 UTC 并告警，而不是把异常抛出去。
+   */
+  private buildDailyFormatter(): Intl.DateTimeFormat {
+    const tz = this.configService.get<string>('SMS_DAILY_TZ') || DEFAULT_DAILY_TZ
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
+    } catch {
+      this.logger.warn({
+        level: 'warn',
+        message:
+          `[SMS] SMS_DAILY_TZ="${tz}" 不是合法时区名，日配额改按 UTC 切天。` +
+          '此时国内用户的"今天"会在每天早上 08:00 翻篇，日限额偏松。',
+        context: 'SmsService',
+      })
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
+    }
+  }
 
   // ====================== Redis Key 辅助方法 ======================
 
@@ -47,9 +92,23 @@ export class SmsService implements OnModuleInit {
     return `sms:limit:${phone}`
   }
 
+  /**
+   * 取「今天」的日期串（YYYY-MM-DD），按配置时区计算。
+   *
+   * 不能写 `new Date().toISOString().slice(0, 10)` —— 那是 **UTC** 日期。
+   * 后端容器默认没有设 TZ（docker-compose 里只有 mysql 服务设了），
+   * 进程时区就是 UTC，于是国内用户看到的"今天"每天早上 08:00 翻篇：
+   * 日限额实际按 08:00 → 次日 08:00 计，而文案写的是"今日…请明天再试"，
+   * 两者对不上，用户上午 8 点后会莫名重获 10 次配额。
+   * 用 en-CA 的短日期格式（恰好是 YYYY-MM-DD）换取"按指定时区取日期"，
+   * 不必为此引入日期库。
+   */
+  private todayStr(): string {
+    return this.dailyFormatter.format(new Date())
+  }
+
   private getDailyCountKey(phone: string) {
-    const date = new Date().toISOString().slice(0, 10)
-    return `sms:count:${phone}:${date}`
+    return `sms:count:${phone}:${this.todayStr()}`
   }
 
   /** 某手机号当前验证码的连续校验失败次数 */
@@ -70,23 +129,43 @@ export class SmsService implements OnModuleInit {
 
   // ====================== 防刷校验 ======================
 
-  private async checkRateLimit(phone: string): Promise<void> {
-    const cooldown = await this.redisService.get(this.getCooldownKey(phone))
-    if (cooldown) {
-      throw new BadRequestException(`发送过于频繁，请 ${cooldown} 秒后重试`)
-    }
-    const countStr = await this.redisService.get(this.getDailyCountKey(phone))
-    const count = countStr ? parseInt(countStr, 10) : 0
-    if (count >= this.MAX_DAILY_COUNT) {
-      throw new BadRequestException('今日发送次数已达上限，请明天再试')
-    }
+  /**
+   * 占住冷却位；已被占用则拒绝。
+   *
+   * 必须用 SET NX EX 一步完成，不能拆成「get 判空 → set 占位」：
+   * 拆开就存在 TOCTOU 窗口 —— 两个并发请求同时读到"没有冷却"，于是双双放行、
+   * 两条短信都发出去。攻击者只要并发发请求就能完全绕过冷却，
+   * 把「1 分钟 1 条」变成「一次请求数 = 并发数」。
+   * Redis 的 SET NX 是原子的，判断与占位天然同一步完成。
+   */
+  private async acquireCooldown(phone: string): Promise<void> {
+    const key = this.getCooldownKey(phone)
+    const acquired = await this.redisService.setnx(key, '1', this.COOLDOWN_TTL)
+    if (acquired === 1) return
+
+    // 没抢到：读一下剩余秒数，让提示文案给出真实等待时间
+    const remain = await this.redisService.ttl(key)
+    throw new BadRequestException(
+      `发送过于频繁，请 ${remain > 0 ? remain : this.COOLDOWN_TTL} 秒后重试`,
+    )
   }
 
-  private async recordSend(phone: string): Promise<void> {
-    await this.redisService.set(this.getCooldownKey(phone), '60', this.COOLDOWN_TTL)
-    const count = await this.redisService.getClient().incr(this.getDailyCountKey(phone))
+  /**
+   * 日配额：先自增、再用返回值判断。
+   *
+   * 同样是为了消除 TOCTOU —— 「先读计数再比较」在两个并发请求下会双双读到同一个
+   * 未超限的值。INCR 是原子的，用它的返回值当判据就不存在这个窗口。
+   * 代价是被拒绝的那一次也会计入（多算 1 次），这是安全方向：宁可少放行一次。
+   */
+  private async assertDailyQuota(phone: string): Promise<void> {
+    const key = this.getDailyCountKey(phone)
+    const count = await this.redisService.getClient().incr(key)
+    // 仅首次自增时设 TTL：每次都续期会让计数永不过期
     if (count === 1) {
-      await this.redisService.expire(this.getDailyCountKey(phone), 86400)
+      await this.redisService.expire(key, DAILY_COUNT_TTL)
+    }
+    if (count > this.MAX_DAILY_COUNT) {
+      throw new BadRequestException('今日发送次数已达上限，请明天再试')
     }
   }
 
@@ -141,32 +220,40 @@ export class SmsService implements OnModuleInit {
    * 开发联调请查看服务端日志。
    */
   async sendCode(phone: string): Promise<{ msg: string }> {
-    // 1. 防刷校验
-    await this.checkRateLimit(phone)
+    // 1. 原子占住冷却位（并发安全的防刷第一道闸）
+    await this.acquireCooldown(phone)
 
-    // 2. 生成验证码
-    const code = this.generateCode()
+    try {
+      // 2. 日配额（原子自增，第二道闸）
+      await this.assertDailyQuota(phone)
 
-    // 3. 存储验证码到 Redis（5 分钟过期）
-    await this.redisService.set(this.getCodeKey(phone), code, this.CODE_TTL)
+      // 3. 生成验证码
+      const code = this.generateCode()
 
-    // 4. 记录发送行为（防刷计数）
-    await this.recordSend(phone)
+      // 4. 存储验证码到 Redis（5 分钟过期）
+      await this.redisService.set(this.getCodeKey(phone), code, this.CODE_TTL)
 
-    // 5. Mock / 真实发送
-    if (this.isMockEnabled()) {
-      // Mock 模式：验证码只写结构化日志（不返回给前端），联调时从 logs 里取
-      this.logger.log({
-        level: 'info',
-        message: `[SMS Mock] phone=${phone}, code=${code}, ttl=${this.CODE_TTL}s`,
-        context: 'SmsService',
-      })
-      // 对外文案与真实通道一致：是否走 mock 是服务端内部实现，
-      // 回一句「Mock 模式」既泄露实现细节，也会让终端用户困惑。
-      return { msg: '验证码已发送' }
+      // 5. Mock / 真实发送
+      if (this.isMockEnabled()) {
+        // Mock 模式：验证码只写结构化日志（不返回给前端），联调时从 logs 里取
+        this.logger.log({
+          level: 'info',
+          message: `[SMS Mock] phone=${phone}, code=${code}, ttl=${this.CODE_TTL}s`,
+          context: 'SmsService',
+        })
+      } else {
+        await this.sendViaAliyun(phone, code)
+      }
+    } catch (err) {
+      // 这次请求什么都没发出去，冷却位必须放掉 —— 否则用户（以及运维联调时）
+      // 要为一个失败请求白等 60 秒。日配额计数**不**回退：它的职责是防刷量，
+      // 宁可多算一次也不给刷量留缺口。
+      await this.redisService.del(this.getCooldownKey(phone)).catch(() => undefined)
+      throw err
     }
 
-    await this.sendViaAliyun(phone, code)
+    // 对外文案与真实通道一致：是否走 mock 是服务端内部实现，
+    // 回一句「Mock 模式」既泄露实现细节，也会让终端用户困惑。
     return { msg: '验证码已发送' }
   }
 

@@ -26,6 +26,14 @@ logs
 **/logs
 *.log
 
+# 上传目录（运行时数据，不是源码）
+# Dockerfile.server 里有 `COPY packages/server ./packages/server`，
+# 本地跑过开发环境的话这个目录里躺着真实用户的图片。不带这几条，
+# 它们会一起进构建上下文 —— 白白撑大上下文、让每次构建的缓存失效，
+# 也把本地数据无谓地复制进构建层。
+uploads
+**/uploads
+
 # 环境变量（含密钥，绝不能进构建上下文）
 # ⚠️ 必须带 ** 前缀：只写 .env 仅匹配根目录，
 # packages/server/.env 仍会被 Dockerfile 里的 COPY packages/server 带进镜像

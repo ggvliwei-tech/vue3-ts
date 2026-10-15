@@ -5,7 +5,9 @@
  * - 权限码：role:list / role:create / role:update / role:delete / role:assign-permission
  */
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+// 确认框封装（取消时返回 false 而不是抛异常，见 utils/confirm.ts）
+import { confirmAction } from '@/utils/confirm'
 import {
   listRoles,
   createRole,
@@ -175,11 +177,12 @@ async function handleSubmit() {
 
 /** 删除角色 */
 async function handleDelete(row: Role) {
-  await ElMessageBox.confirm(`确定要删除角色「${row.name}」吗？该操作不可恢复！`, '警告', {
-    confirmButtonText: '删除',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
+  const confirmed = await confirmAction(
+    `确定要删除角色「${row.name}」吗？该操作不可恢复！`,
+    '警告',
+    { confirmButtonText: '删除' },
+  )
+  if (!confirmed) return
   try {
     await deleteRole(row.id)
     ElMessage.success('删除成功')

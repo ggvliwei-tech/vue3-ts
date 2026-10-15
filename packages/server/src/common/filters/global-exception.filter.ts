@@ -44,6 +44,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name)
 
   catch(exception: unknown, host: ArgumentsHost): void {
+    // WebSocket 上下文（chat.gateway 的 @SubscribeMessage）没有 HTTP 的 req / res。
+    // 不做这个分流的话，下面第一行 getOrGenRequestId(request) 会去读
+    // request.headers —— WS 上下文里 getRequest() 给到的是 socket 本身，
+    // 它没有 headers 属性，于是取属性即抛 TypeError。
+    // 过滤器自己再抛异常，等于异常处理链路整体失效：客户端拿不到任何错误码，
+    // 服务端只剩一条 init 阶段的噪音日志。必须在这里就分出去。
+    if (host.getType() !== 'http') {
+      this.handleWsException(exception, host)
+      return
+    }
+
     const ctx = host.switchToHttp()
     const response = ctx.getResponse<Response>()
     const request = ctx.getRequest<Request>()
@@ -122,5 +133,44 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       requestId,
       timestamp: Date.now(),
     })
+  }
+
+  /**
+   * WebSocket 上下文下的异常出口。
+   *
+   * 没有 HTTP 响应可写，改为向该 socket 推一条 `error` 事件 ——
+   * 与 chat.gateway 里手工 client.emit('error', { code, msg }) 的形状保持一致，
+   * 前端（ChatRoom.vue 的 onError）不必区分错误来自哪里。
+   *
+   * 拿不到 client 时只记日志：宁可少推一条事件，也不能在过滤器里再抛异常。
+   */
+  private handleWsException(exception: unknown, host: ArgumentsHost): void {
+    let code = Number(HttpStatus.INTERNAL_SERVER_ERROR)
+    let msg = '系统内部错误'
+
+    if (exception instanceof HttpException) {
+      code = exception.getStatus()
+      const res = exception.getResponse()
+      if (typeof res === 'string') {
+        msg = res
+      } else if (res && typeof res === 'object') {
+        const r = res as Record<string, unknown>
+        // ValidationPipe 抛的是 { message: string[] }，拼成一行才可读
+        msg = Array.isArray(r.message)
+          ? (r.message as string[]).join('; ')
+          : ((r.message as string) ?? exception.message)
+      }
+    }
+
+    this.logger.error(
+      `[WS] ${code} ${msg} —— ${(exception as Error)?.stack ?? String(exception)}`,
+    )
+
+    try {
+      const client = host.switchToWs().getClient<{ emit?: (ev: string, data: unknown) => void }>()
+      client?.emit?.('error', { code, msg })
+    } catch (emitErr) {
+      this.logger.error(`[WS] 推送错误事件失败: ${(emitErr as Error).message}`)
+    }
   }
 }

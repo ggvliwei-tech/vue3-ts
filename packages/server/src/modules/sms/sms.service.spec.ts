@@ -32,6 +32,9 @@ describe('SmsService', () => {
     set: jest.fn(),
     del: jest.fn(),
     expire: jest.fn(),
+    // 冷却位改用 SET NX（原子），配套的 setnx / ttl 两个方法
+    setnx: jest.fn(),
+    ttl: jest.fn(),
     getClient: jest.fn(),
   }
   const mockConfigService = { get: jest.fn() }
@@ -45,6 +48,10 @@ describe('SmsService', () => {
       incr: jest.fn(async () => incrValue),
     })
     mockRedisService.get.mockResolvedValue(null)
+    // 默认抢到冷却位（未处于冷却期）
+    mockRedisService.setnx.mockResolvedValue(1)
+    mockRedisService.ttl.mockResolvedValue(-1)
+    mockRedisService.del.mockResolvedValue(1)
     mockConfigService.get.mockImplementation((key: string) =>
       key === 'NODE_ENV' ? 'development' : undefined,
     )
@@ -63,21 +70,43 @@ describe('SmsService', () => {
 
   describe('sendCode', () => {
     it('冷却期内重复发送应被拒绝', async () => {
-      mockRedisService.get.mockImplementation(async (key: string) =>
-        key.startsWith('sms:limit:') ? '42' : null,
-      )
+      // 抢不到冷却位（SET NX 返回 0），剩余 42 秒
+      mockRedisService.setnx.mockResolvedValue(0)
+      mockRedisService.ttl.mockResolvedValue(42)
 
       await expect(service.sendCode(PHONE)).rejects.toThrow(
         /发送过于频繁.*42 秒/,
       )
     })
 
-    it('达到每日发送上限应被拒绝', async () => {
-      mockRedisService.get.mockImplementation(async (key: string) =>
-        key.startsWith('sms:count:') ? '10' : null,
+    it('冷却判定用 SET NX 原子完成，不是先 get 再 set（否则并发即可绕过）', async () => {
+      await service.sendCode(PHONE)
+
+      // 判断与占位必须是同一次调用，中间不能有 get → set 的窗口
+      expect(mockRedisService.setnx).toHaveBeenCalledWith(
+        `sms:limit:${PHONE}`,
+        '1',
+        60,
       )
+      expect(mockRedisService.get).not.toHaveBeenCalledWith(`sms:limit:${PHONE}`)
+    })
+
+    it('达到每日发送上限应被拒绝', async () => {
+      // 原子自增后返回值超过上限（第 11 次）
+      incrValue = 11
 
       await expect(service.sendCode(PHONE)).rejects.toThrow(/今日发送次数已达上限/)
+    })
+
+    it('发送失败时释放冷却位（否则用户要为一次没发出去的请求白等 60 秒）', async () => {
+      // 真实通道未接入 → sendViaAliyun 抛 503
+      mockConfigService.get.mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'production'
+        return undefined
+      })
+
+      await expect(service.sendCode(PHONE)).rejects.toThrow(/短信服务暂不可用/)
+      expect(mockRedisService.del).toHaveBeenCalledWith(`sms:limit:${PHONE}`)
     })
 
     it('即使 Mock 模式也不能把验证码回传给调用方', async () => {
@@ -183,6 +212,31 @@ describe('SmsService', () => {
       service.onModuleInit()
 
       expect(mockLogger.warn).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('日配额按配置时区切天（不是 UTC）', () => {
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    /**
+     * 回归：日配额 key 里的日期必须按 SMS_DAILY_TZ（默认 Asia/Shanghai）算，
+     * 不能是 UTC 日期。
+     *
+     * 后端容器默认没有设 TZ（compose 里只给 mysql 设了），进程时区就是 UTC。
+     * 用 toISOString() 取日期的话，国内用户的"今天"会在每天早上 08:00 翻篇 ——
+     * 用户上午会莫名重获 10 次配额，而文案写的是"今日…请明天再试"。
+     */
+    it('UTC 与东八区跨天时，取东八区的日期', async () => {
+      // 2026-10-15T20:00:00Z = 北京时间 2026-10-16 04:00
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-15T20:00:00Z'))
+
+      await service.sendCode(PHONE)
+
+      const incrKey = mockRedisService.getClient().incr.mock.calls[0][0]
+      expect(incrKey).toBe(`sms:count:${PHONE}:2026-10-16`)
+      expect(incrKey).not.toBe(`sms:count:${PHONE}:2026-10-15`)
     })
   })
 

@@ -17,6 +17,17 @@ import { FileEntity } from '../../file/entities/file.entity'
 // 审计实体
 import { AuditLog } from '../../audit/entities/audit-log.entity'
 
+/** 一天的毫秒数 */
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+/**
+ * 趋势图按东八区日历日切桶。
+ * 与 MySQL 的 --default-time-zone=+08:00（见 docker-compose.yml）以及
+ * SmsService 的日配额口径保持一致 —— 同一个系统里"一天从几点开始"
+ * 只能有一个答案。中国自 1991 年起不再实行夏令时，UTC+8 是固定偏移，
+ * 因此可以用常量而不是时区数据库。
+ */
+const TREND_TZ_OFFSET_MS = 8 * 60 * 60 * 1000
+
 /**
  * Dashboard 统计 Service
  *
@@ -122,36 +133,55 @@ export class DashboardService {
   /**
    * 近 N 天每天的新增用户数（趋势）
    * 用一条 GROUP BY 查询替代 N 次循环 count，避免 N 次往返
+   *
+   * ⚠️ 桶与标签必须由**同一个时间戳**推出，且都以本地日历日为准。
+   * 此前的实现是「按滚动 24 小时切桶（now - createTime），却用
+   * new Date(now - (i+1)*一天) 的日历日期当标签」，两者错开一整天：
+   * 今天上午 9 点注册的用户落在 i=0 那个桶里，而该桶的标签是**昨天**的日期，
+   * 图表上表现为"今天的注册量显示在昨天那一列"，且随着 now 推进，
+   * 同一批数据会整天在图上缓慢左移（每次刷新都不同）。
    */
   async getUserTrend(days = 7): Promise<{ date: string; count: number }[]> {
-    const oneDayMs = 24 * 60 * 60 * 1000
     const now = Date.now()
-    const since = now - days * oneDayMs
+    // 东八区「今天」的零点（用 epoch 毫秒表示）
+    const todayStart =
+      Math.floor((now + TREND_TZ_OFFSET_MS) / ONE_DAY_MS) * ONE_DAY_MS -
+      TREND_TZ_OFFSET_MS
+    const since = todayStart - (days - 1) * ONE_DAY_MS
 
-    // 用 FLOOR(createTime / oneDayMs) 把毫秒时间戳归桶到"距今天数"
-    // 再按桶分组计数，最后在 JS 端补全缺失日期为 0
+    // 平移到东八区后按整日归桶，得到"日历日序号"（整数）
     const rows = await this.userRepo
       .createQueryBuilder('u')
-      .select(`FLOOR((:now - u.createTime) / :oneDay)`, 'daysAgo')
+      .select(`FLOOR((u.createTime + :offset) / :oneDay)`, 'dayIndex')
       .addSelect('COUNT(*)', 'count')
-      .where('u.createTime >= :since', { now, oneDay: oneDayMs, since })
-      .groupBy('daysAgo')
-      .getRawMany<{ daysAgo: string; count: string }>()
+      .where('u.createTime >= :since', {
+        offset: TREND_TZ_OFFSET_MS,
+        oneDay: ONE_DAY_MS,
+        since,
+      })
+      .groupBy('dayIndex')
+      .getRawMany<{ dayIndex: string; count: string }>()
 
-    // 索引化：daysAgo -> count
+    // 索引化：日历日序号 -> count
     const bucket = new Map<number, number>()
     for (const r of rows) {
-      bucket.set(Number(r.daysAgo), Number(r.count))
+      bucket.set(Number(r.dayIndex), Number(r.count))
     }
 
-    // 按日期顺序补全
+    // 按日期顺序补全缺失日期为 0
     const result: { date: string; count: number }[] = []
     for (let i = days - 1; i >= 0; i--) {
-      const start = now - (i + 1) * oneDayMs
-      const d = new Date(start)
-      const date = `${d.getMonth() + 1}/${d.getDate()}`
-      // daysAgo 是"距 now 的天数"（向下取整），i 是循环里的"天数索引"
-      result.push({ date, count: bucket.get(i) ?? 0 })
+      const dayStart = todayStart - i * ONE_DAY_MS
+      // 用平移后的时间戳取 UTC 年月日 == 东八区日历日，
+      // 这样标签与桶序号由同一个 dayStart 推出，天然对齐，
+      // 也不受服务器进程时区（容器默认 UTC）影响。
+      const shifted = dayStart + TREND_TZ_OFFSET_MS
+      const d = new Date(shifted)
+      const date = `${d.getUTCMonth() + 1}/${d.getUTCDate()}`
+      result.push({
+        date,
+        count: bucket.get(Math.floor(shifted / ONE_DAY_MS)) ?? 0,
+      })
     }
     return result
   }

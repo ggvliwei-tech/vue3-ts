@@ -19,5 +19,7 @@
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
 }

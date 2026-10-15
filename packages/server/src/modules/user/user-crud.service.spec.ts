@@ -17,7 +17,7 @@
 
 import { Test, TestingModule } from '@nestjs/testing'
 import { EventEmitter2 } from '@nestjs/event-emitter'
-import { ConflictException, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common'
 import { getRepositoryToken } from '@nestjs/typeorm'
 import { User } from './entities/user.entity'
 import { RbacService } from '../rbac/rbac.service'
@@ -28,7 +28,9 @@ import { AuditEvents } from '../audit/audit.events'
 import * as bcrypt from 'bcrypt'
 import { QueryFailedError } from 'typeorm'
 
-// findAll 走 createQueryBuilder 链式调用，mock 需支持链式返回自身
+// 两处走 createQueryBuilder 的链式调用，mock 需支持链式返回自身：
+//  - findAll：select / orderBy / skip / take / andWhere → getManyAndCount
+//  - toggleStatus：update / set / where → execute
 const mockQb = {
   select: jest.fn().mockReturnThis(),
   orderBy: jest.fn().mockReturnThis(),
@@ -36,6 +38,10 @@ const mockQb = {
   take: jest.fn().mockReturnThis(),
   andWhere: jest.fn().mockReturnThis(),
   getManyAndCount: jest.fn(),
+  update: jest.fn().mockReturnThis(),
+  set: jest.fn().mockReturnThis(),
+  where: jest.fn().mockReturnThis(),
+  execute: jest.fn(async () => ({ affected: 1 })),
 }
 
 const mockUserRepo = {
@@ -187,11 +193,17 @@ describe('UserCrudService', () => {
   })
 
   describe('toggleStatus - 切换用户状态', () => {
+    // 两次 findOneBy：第一次读目标用户，第二次回读取反后的真实值。
+    // 必须显式给出第二次的返回值，否则测试会走 `?? target.status === 1 ? 0 : 1`
+    // 的兜底分支 —— 那样等于没验证「回读」，断言通过也说明不了什么。
+    function stubToggle(oldStatus: 0 | 1, newStatus: 0 | 1) {
+      mockUserRepo.findOneBy
+        .mockResolvedValueOnce({ id: 1, username: 'alice', status: oldStatus, phone: '1', createTime: 1 })
+        .mockResolvedValueOnce({ id: 1, username: 'alice', status: newStatus })
+    }
+
     it('1 → 0 时调用 removeAll（禁用需吊销所有会话）', async () => {
-      mockUserRepo.findOneBy.mockResolvedValueOnce({
-        id: 1, username: 'alice', status: 1, phone: '1', createTime: 1,
-      })
-      mockUserRepo.save.mockResolvedValueOnce({ id: 1, status: 0 })
+      stubToggle(1, 0)
 
       const result = await service.toggleStatus(1)
       expect(result.status).toBe(0)
@@ -199,10 +211,7 @@ describe('UserCrudService', () => {
     })
 
     it('0 → 1 时不应调用 removeAll', async () => {
-      mockUserRepo.findOneBy.mockResolvedValueOnce({
-        id: 1, username: 'alice', status: 0, phone: '1', createTime: 1,
-      })
-      mockUserRepo.save.mockResolvedValueOnce({ id: 1, status: 1 })
+      stubToggle(0, 1)
 
       const result = await service.toggleStatus(1)
       expect(result.status).toBe(1)
@@ -215,8 +224,7 @@ describe('UserCrudService', () => {
     })
 
     it('切换状态后应发审计事件', async () => {
-      mockUserRepo.findOneBy.mockResolvedValueOnce({ id: 1, username: 'a', status: 1 })
-      mockUserRepo.save.mockResolvedValueOnce({ id: 1, status: 0 })
+      stubToggle(1, 0)
 
       await service.toggleStatus(1)
       expect(mockEvents.emit).toHaveBeenCalledWith(
@@ -226,6 +234,40 @@ describe('UserCrudService', () => {
           ctx: expect.objectContaining({ status: 1 }),
         }),
       )
+    })
+
+    // 钉住「并发下不丢更新」这条不变量：取反必须交给数据库用一条 UPDATE 完成。
+    // 若有人改回「读实体 → 改 status → save()」，两个管理员同时点同一个用户时
+    // 双方会各自读到同一个旧值、各自取反成同一个新值，后写入的覆盖先写入的 ——
+    // 两次点击只生效一次，其中一人的意图被静默丢弃。
+    it('用一条原子 UPDATE 取反，而不是 read-modify-write 的 save()', async () => {
+      stubToggle(1, 0)
+
+      await service.toggleStatus(1)
+
+      expect(mockQb.set).toHaveBeenCalledWith({ status: expect.any(Function) })
+      expect(mockQb.where).toHaveBeenCalledWith('id = :id', { id: 1 })
+      expect(mockQb.execute).toHaveBeenCalled()
+      expect(mockUserRepo.save).not.toHaveBeenCalled()
+    })
+
+    it('内置超管 admin 启用态不允许被禁用', async () => {
+      mockUserRepo.findOneBy.mockResolvedValueOnce({
+        id: 1, username: 'admin', status: 1, phone: '1', createTime: 1,
+      })
+
+      await expect(service.toggleStatus(1)).rejects.toThrow(BadRequestException)
+      expect(mockQb.execute).not.toHaveBeenCalled()
+    })
+
+    it('admin 处于禁用态时放行启用（唯一的自助恢复路径）', async () => {
+      mockUserRepo.findOneBy
+        .mockResolvedValueOnce({ id: 1, username: 'admin', status: 0, phone: '1', createTime: 1 })
+        .mockResolvedValueOnce({ id: 1, username: 'admin', status: 1 })
+
+      const result = await service.toggleStatus(1)
+      expect(result.status).toBe(1)
+      expect(mockQb.execute).toHaveBeenCalled()
     })
   })
 })

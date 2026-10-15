@@ -39,6 +39,10 @@ export interface UsePagedListOptions<T> {
   pageSize?: number
   /** 拉数据函数 */
   fetcher: (q: PageQuery) => Promise<PageRes<T>>
+  /** 加载失败时的回调，用于弹提示 / 上报 */
+  onError?: (err: unknown) => void
+  /** 失败时是否清空列表，默认 false（保留上一次的数据） */
+  clearOnError?: boolean
 }
 
 export interface UsePagedListReturn<T> {
@@ -74,6 +78,24 @@ export function usePagedList<T = unknown>(
       })
       list.value = res.list as T[]
       total.value = res.total
+    } catch (err) {
+      // 异常必须在这里吃掉。load() 有三个触发点，其中两个 —— 下面两个 watch
+      // 回调、以及模块初始化时的首次加载 —— 都没有 await 也没有 catch，
+      // 抛出去就是 unhandled rejection。前端表现则是**静默的空表**：
+      // 接口 500 时 loading 归位、list 仍为空，用户看到"暂无数据"，
+      // 完全分不清"真的没数据"和"请求挂了"。
+      //
+      // 默认保留上一次的列表，不清空：一次网络抖动不该把已经看到的数据抹掉。
+      // 确实需要清空的场景（比如切换了筛选条件，旧数据已无意义）传 clearOnError。
+      if (options.clearOnError) {
+        list.value = [] as T[]
+        total.value = 0
+      }
+      if (options.onError) {
+        options.onError(err)
+      } else {
+        console.error('[usePagedList] 加载列表失败', err)
+      }
     } finally {
       loading.value = false
     }

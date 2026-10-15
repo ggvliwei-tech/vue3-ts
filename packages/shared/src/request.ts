@@ -59,7 +59,7 @@ export interface ApiRes<T = unknown> {
  */
 function getBaseURL(): string {
   // 从 Vite 环境变量中读取 API 地址，如果没有则返回空字符串
-  return (import.meta as any).env?.VITE_API_BASE_URL ?? ''
+  return import.meta.env?.VITE_API_BASE_URL ?? ''
 }
 
 // 创建默认的全局请求实例

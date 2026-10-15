@@ -98,19 +98,43 @@ export function connectWebSocket(handlers: WSEventHandlers = {}): Socket {
   }
 
   // 从环境变量获取 API 地址，将 http/https 转为 ws/wss
-  const baseURL = (import.meta as any).env?.VITE_API_BASE_URL ?? ''
+  const baseURL = import.meta.env?.VITE_API_BASE_URL ?? ''
   const wsUrl = baseURL.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
 
   // 创建 Socket.IO 连接
   socket = io(`${wsUrl}/ws`, {
-    // 认证信息：携带 Bearer token
-    auth: { token: `Bearer ${token}` },
+    // 认证信息用**函数**形式（socket.io-client v4 支持），每次握手都重新求值。
+    //
+    // 不能传静态对象：access token 只有 15 分钟，而这个 socket 是长期存活的。
+    // 传 `{ token: 'Bearer ' + token }` 会把建连那一刻的令牌固化成闭包常量，
+    // 于是任何一次「连接断开 → 自动重连」都会拿着早已过期的旧令牌去握手，
+    // 被 handleConnection 拒掉。改成函数后每次重连读的都是当前有效令牌
+    // （token-refresh 刷新后会写回 auth-storage，这里读到的就是新的）。
+    auth: (cb: (data: Record<string, unknown>) => void) =>
+      cb({ token: `Bearer ${getToken() ?? ''}` }),
     // 传输方式：优先 WebSocket，降级为 HTTP 长轮询
     transports: ['websocket', 'polling'],
     // 自动重连配置
     reconnection: true,             // 启用自动重连
     reconnectionDelay: 1000,        // 首次重连延迟 1 秒
-    reconnectionAttempts: 5,        // 最多重连 5 次
+    // 一直重试，不设上限。
+    //
+    // 原来写的是 5 次：按指数退避算下来只覆盖约 31 秒。手机切后台、地铁进隧道、
+    // 局域网切换 Wi-Fi —— 这些场景动辄断几分钟，5 次早就用完了，socket 就此永久死亡。
+    // 表现是用户回到聊天室看到横幅一直挂着「连接中...」，但实际一次都没在连，
+    // 必须退出再进入页面才能恢复（重进会走 connectWebSocket 新建 socket 的分支）。
+    //
+    // 为什么不担心「令牌已失效时无限重试把服务端打爆」：
+    // 认证失败的路径是服务端在 handleConnection 里 emit('error') + client.disconnect()，
+    // 客户端收到的断开原因是 'io server disconnect'，而 socket.io 对这个原因
+    // **不做自动重连**（规范如此：服务端主动断开的连接需由客户端显式 connect 才恢复）。
+    // 所以这条路上根本不会进入重试循环。
+    // 真正会走到重试的只有 transport close / ping timeout 这类网络原因，
+    // 那种情况下服务端本来就不可达，重试间隔由下面的 reconnectionDelayMax 兜住。
+    reconnectionAttempts: Infinity,
+    // 指数退避的上限：不设的话第 10 次重试要等 1000 * 2^10 ≈ 17 分钟，
+    // 网络恢复了用户也感知不到。封顶 10 秒，恢复延迟可控。
+    reconnectionDelayMax: 10000,
   })
 
   // 绑定事件（含 onConnect 同步触发语义）

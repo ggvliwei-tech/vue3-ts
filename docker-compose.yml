@@ -19,22 +19,42 @@
 #      - Health: http://localhost:3000/health
 # ============================================================
 
-version: '3.8'
+# 注：`version:` 顶层字段已被 Compose V2 废弃（设了只会在每次命令时打一条
+# warning），故不再声明；V2 会自动识别本文件格式。
+
+# 统一的日志轮转配置：容器 stdout 走 json-file 驱动，不设 max-size 会无限增长
+# 直到写满磁盘。各服务通过 `<<: *default-logging` 引用。
+# 注意必须放在 services 之外的顶层，否则会被 Compose 当成一个服务。
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
+
   # ==================== 数据库 ====================
   mysql:
     image: mysql:8.0
     container_name: vue3-monorepo-mysql
     restart: unless-stopped
+    logging: *default-logging
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      # ⚠️ DB_NAME 目前**不可改**：初始化脚本 packages/server/nest-db.sql 里
+      #    `CREATE DATABASE ... vue3_monorepo` 与 `USE vue3_monorepo` 是硬编码的。
+      #    改成别的名字，MySQL 会建出一个空库并把权限授给它，而 14 张表依旧建进
+      #    vue3_monorepo —— 后端连上空库，登录直接报 Table doesn't exist。
       MYSQL_DATABASE: ${DB_NAME:-vue3_monorepo}
       MYSQL_USER: ${DB_USER:-vue3_user}
       MYSQL_PASSWORD: ${DB_PWD:-vue3_pass_2026}
       TZ: Asia/Shanghai
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      # 只绑回环地址，理由与 backend 的 3000 端口相同：MySQL 只应经 app-net 内网
+      # 被 backend 访问。默认 `3306:3306` 会发布到 0.0.0.0，任何能连上宿主机的人
+      # 都能用仓库里公开的默认口令（vue3_pass_2026 / root123456）直接拖库。
+      # 需要从宿主机连库调试时，127.0.0.1:3306 依然可用。
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       # 首次启动自动执行初始化脚本
@@ -58,8 +78,12 @@ services:
     image: redis:7-alpine
     container_name: vue3-monorepo-redis
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      # 同 mysql：Redis 里存着全部 refresh token 与令牌版本号，
+      # 发布到 0.0.0.0 + 公开默认口令 = 任何人都能读走会话或伪造一条
+      # refresh:token:{userId}:{sessionId} 去换合法 access token，直接接管账号。
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     command:
@@ -67,6 +91,9 @@ services:
       - --appendonly=yes
       - --requirepass=${REDIS_PASSWORD:-redis_pass_2026}
       - --maxmemory-policy=allkeys-lru
+      # 上限必须显式设置：只给 maxmemory-policy 而不给 maxmemory，
+      # 淘汰策略根本不会触发，Redis 会一路吃满宿主机内存直到被 OOM Killer 干掉。
+      - --maxmemory=${REDIS_MAXMEMORY:-512mb}
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass_2026}", "ping"]
       interval: 10s
@@ -82,6 +109,7 @@ services:
       dockerfile: Dockerfile.server
     container_name: vue3-monorepo-backend
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       mysql:
         condition: service_healthy
@@ -104,13 +132,20 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_pass_2026}
-      # ⚠️ 下面所有 `${VAR:-默认值}` 里的默认值都是**公开在仓库里的占位值**，
-      #    意味着照抄本文件直接 `docker compose up` 起的服务，其 JWT 签名密钥
-      #    是全世界都知道的 —— 任何人都能自签一个管理员令牌，无需任何账号密码。
-      #    这正是 ALLOW_INSECURE_DEFAULTS=true 存在的原因：让「一键启动」能跑起来。
-      #    一旦要对外提供服务，请复制 .env.example 为 .env、填入真实密钥，
-      #    并把 ALLOW_INSECURE_DEFAULTS 设为 false（后端会拒绝用占位密钥启动）。
-      ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-true}
+      # ⚠️ 下面所有 `${VAR:-默认值}` 里的默认值都是**公开在仓库里的占位值**。
+      #    照抄本文件直接 `docker compose up` 起的服务，其 JWT 签名密钥是全世界
+      #    都知道的 —— 任何人都能自签一个管理员令牌，无需任何账号密码。
+      #
+      #    默认值为 **false**：不带 .env 直接 `docker compose up` 时，后端会在
+      #    建连之前做一次配置自检，发现占位密钥就打印逐项修复指引并 exit(1)。
+      #    这是刻意的 fail-closed —— 配置事故的后果（密钥公开 → 任意伪造登录态）
+      #    是静默的，外观与「服务正常运行」完全一致；而一个起不来的进程，
+      #    运维 5 秒内就会发现。
+      #
+      #    正式部署：`cp .env.example .env`，按提示填入真实密钥（生成方式见
+      #    packages/server/src/config/production-env.util.ts 末尾的提示）。
+      #    仅本机演示、确实想带着占位密钥跑起来，才显式设 true。
+      ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-false}
       # JWT（生产环境务必修改）
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-please-change-me-access-secret-in-production-32chars-min}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
@@ -139,6 +174,7 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-3.5-turbo}
       # 容器内的 localhost 指向容器自身，Ollama 若跑在宿主机需用 host.docker.internal
+      # （该域名由下面的 extra_hosts 映射，仅 Linux 需要 —— Docker Desktop 自带）
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5}
       # OSS（按需配置）
@@ -164,6 +200,10 @@ services:
       # 同样要求宿主机目录对 uid 1001 可写：
       #   mkdir -p ./uploads/backend && sudo chown -R 1001:1001 ./uploads/backend
       - ./uploads/backend:/app/uploads
+    # host.docker.internal 在 Docker Desktop（Mac/Windows）上开箱即用，
+    # 但 Linux 上不存在 —— 缺了它，选 LLM_TYPE=local_ollama 时 DNS 解析直接 ENOTFOUND。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/health"]
       interval: 30s
@@ -180,8 +220,13 @@ services:
       dockerfile: Dockerfile.admin
     container_name: vue3-monorepo-admin
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
-      - backend
+      # 用 service_healthy 而不是短语法 `- backend`：短语法只等容器**创建**，
+      # 而 nginx 的 `proxy_pass http://backend:3000` 在启动时就要解析主机名，
+      # backend 还没就绪时 nginx 会直接 `host not found in upstream` 启动失败。
+      backend:
+        condition: service_healthy
     ports:
       - "${ADMIN_PORT:-8080}:80"
     networks:
@@ -194,8 +239,10 @@ services:
       dockerfile: Dockerfile.app
     container_name: vue3-monorepo-app
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "${APP_H5_PORT:-8081}:80"
     networks:

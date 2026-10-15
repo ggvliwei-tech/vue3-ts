@@ -6,6 +6,7 @@ import { ChatMemberEntity } from './entities/chat-member.entity';
 import { ChatMessageEntity } from './entities/chat-message.entity';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
+import { parsePositiveInt } from '../../common/utils/pagination.util';
 
 // 可注入服务装饰器：标记该类为 NestJS 可注入服务
 @Injectable()
@@ -239,7 +240,13 @@ export class ChatService {
 
   // 获取房间历史消息（分页，仅房间成员可见）
   async getMessages(dto: QueryMessagesDto, userId: number) {
-    const { roomId, page = 1, limit = 50 } = dto;  // 解构参数，设默认值
+    const { roomId } = dto;  // 解构参数
+    // 分页参数统一走 parsePositiveInt 兜底，而不是直接信任 dto：
+    // DTO 上的 @Max 只在经过 ValidationPipe 的 HTTP 入口生效，本方法也可能被
+    // 其他地方直接调用。NaN / 超限值一旦进入 TypeORM 会抛 TypeORMError
+    // （非 HttpException → 被全局过滤器兜成 500）。
+    const page = parsePositiveInt(dto.page, 1, 10_000);
+    const limit = parsePositiveInt(dto.limit, 50);
     // 归属校验：没有它，遍历 roomId 即可拖走全站聊天记录
     await this.assertUserInRoom(userId, roomId);
     const skip = (page - 1) * limit;  // 计算跳过的记录数

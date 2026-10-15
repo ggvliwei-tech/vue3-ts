@@ -5,7 +5,9 @@
  * - 权限码：permission:list / permission:create / permission:update / permission:delete
  */
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+// 确认框封装（取消时返回 false 而不是抛异常，见 utils/confirm.ts）
+import { confirmAction } from '@/utils/confirm'
 import {
   listPermissions,
   listPermissionModules,
@@ -154,11 +156,15 @@ async function handleSubmit() {
 }
 
 async function handleDelete(row: Permission) {
-  await ElMessageBox.confirm(
+  // 用 confirmAction 而不是裸的 ElMessageBox.confirm：后者在用户点「取消」时
+  // 是 reject 的，而这个 handler 挂在 @click 上没人 catch，会变成
+  // Uncaught (in promise) cancel（详见 utils/confirm.ts）
+  const confirmed = await confirmAction(
     `确定要删除权限「${row.name}」吗？\n若有角色正在使用该权限，将无法删除。`,
     '警告',
-    { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    { confirmButtonText: '删除', type: 'warning' },
   )
+  if (!confirmed) return
   try {
     await deletePermission(row.id)
     ElMessage.success('删除成功')

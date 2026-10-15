@@ -20,6 +20,8 @@ import { refreshToken } from '@/api/user'
 import { syncPermissions } from '@/permission'
 // 导入 v-permission 按钮级权限指令
 import { permission as vPermission } from '@/directives/permission'
+// 给权限同步加等待上限，避免后端慢时首屏长时间白屏
+import { settleWithin } from '@project/shared'
 
 // Element Plus 命令式组件 CSS（auto-import 不会自动加载）
 // 手动导入 Message 消息提示组件的 CSS 样式
@@ -62,10 +64,18 @@ app.directive('permission', vPermission)
 // 先拉最新的 roles/permissions 再渲染，可避免首屏用陈旧权限渲染出已被撤销的入口
 // （admin 此前完全没有这一步，权限只在登录那一刻写入，改角色必须重新登录才生效）。
 //
-// 注意这里的 .finally 是**会阻塞挂载**的：syncPermissions 内部虽然吞掉了异常，
-// 但 Promise 仍要等 profile 请求 settle 才回调，而 axios 默认超时 15s。
-// 后端慢时首屏就是一段白屏。要真非阻塞，得把 app.mount 移出 finally，
-// 改成挂载后在后台刷新。
-syncPermissions().finally(() => {
+// 但不能无限等：syncPermissions 内部吞掉了异常，Promise 要等 profile 请求 settle
+// 才回调，而 axios 默认超时 15s —— 后端慢或不可达时首屏就是 15 秒白屏。
+// 这里给等待加上限：正常情况下（后端几百毫秒内响应）仍然先拿到新权限再渲染，
+// 超时则退回本地缓存放行，同步请求继续在后台跑，回来后会写进 store。
+const PERMISSION_SYNC_TIMEOUT = 3000
+
+settleWithin(syncPermissions(), PERMISSION_SYNC_TIMEOUT, () => {
+  // 用 console 而不是 ElMessage：此刻 app 还没 mount，Element Plus 的
+  // 消息组件没有挂载点，调用会静默失效
+  console.warn(
+    `[Admin] 权限同步超过 ${PERMISSION_SYNC_TIMEOUT}ms 未返回，先用本地缓存挂载；后台同步完成后权限会自动更新`,
+  )
+}).then(() => {
   app.mount('#app')
 })

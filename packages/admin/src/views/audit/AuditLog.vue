@@ -7,6 +7,8 @@
 import { onMounted, ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { get } from '@project/shared/request'
+// 剪贴板写入（带非安全上下文兜底）
+import { copyText } from '@project/shared'
 
 // ========== 类型定义 ==========
 interface AuditLogItem {
@@ -177,12 +179,11 @@ function handleViewDetail(row: AuditLogItem) {
 /** 复制详情 JSON 到剪贴板 */
 async function copyDetail() {
   if (!currentLog.value?.detail) return
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(currentLog.value.detail, null, 2))
-    ElMessage.success('已复制到剪贴板')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+  // 走 shared 的 copyText：navigator.clipboard 在非安全上下文（局域网 http 访问）
+  // 下不存在，直接调用会抛 TypeError；copyText 会退回 execCommand 并告诉我们成败
+  const ok = await copyText(JSON.stringify(currentLog.value.detail, null, 2))
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.error('复制失败，请手动选择文本复制')
 }
 
 /** 导出当前查询结果为 CSV */
@@ -199,7 +200,15 @@ function handleExport() {
   // 转义函数：包含逗号/引号/换行的字段需要用双引号包裹
   const escape = (v: any) => {
     if (v === null || v === undefined) return ''
-    const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    let s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    // 公式注入防护（CWE-1236 / CSV Injection）：
+    // Excel / WPS 会把以 = + - @ 开头的单元格当作公式求值，制表符(0x09)与
+    // 回车(0x0D)开头也被部分实现视为公式起始。而本表导出的字段**大多用户可控** ——
+    // username（可自行注册）、userAgent、detail（请求体 JSON）都在其中。
+    // 攻击者注册一个名为 `=cmd|'/c calc'!A1` 的账号，管理员导出 CSV 用 Excel
+    // 打开即触发 DDE / 公式执行。
+    // 前置一个单引号使内容退化为纯文本 —— 用双引号包裹是不够的，Excel 仍会求值。
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
     if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
     return s
   }

@@ -14,6 +14,8 @@ import { login } from '@/api/user'
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 登录后需要补一次静默续期排期
 import { scheduleSilentRefresh } from '@project/shared/token-refresh'
+// 登录后跳转目标的校验（只放行站内路径，见函数注释）
+import { safeRedirectPath } from '@project/shared'
 
 // 获取路由器实例，用于页面跳转
 const router = useRouter()
@@ -75,8 +77,11 @@ async function handleLogin() {
     scheduleSilentRefresh()
     // 显示登录成功消息提示
     ElMessage.success('登录成功')
-    // 跳转到之前页面或默认的仪表盘页面
-    router.push((route.query.redirect as string) || '/dashboard')
+    // 跳转到之前页面或默认的仪表盘页面。
+    // redirect 来自 URL 查询串，必须校验后再用 —— 直接 push 未校验的值，
+    // `?redirect=//evil.com` 会让 pushState 撞上同源检查抛 SecurityError，
+    // 用户明明登录成功却卡在登录页。
+    router.push(safeRedirectPath(route.query.redirect, '/dashboard'))
   } catch (e: any) {
     // 捕获登录异常，显示错误消息
     ElMessage.error(e.message || '登录失败')

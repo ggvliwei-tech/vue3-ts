@@ -61,12 +61,20 @@ export class UserRoleService {
       .where('ur.role_id = :roleId', { roleId })
       .select(['u.id AS id', 'u.username AS username', 'u.phone AS phone', 'u.status AS status', 'ur.createTime AS createTime'])
       .orderBy('ur.createTime', 'DESC')
+      // 必须有唯一列兜底排序。批量分配角色时若干行的 createTime 会落在同一毫秒，
+      // 只按它排序时这些行的相对顺序由数据库自行决定，且**每次查询都可能不同** ——
+      // 表现为翻页时同一用户在第 1 页和第 2 页各出现一次，另一个用户则一页都见不到。
+      .addOrderBy('ur.userId', 'ASC')
       .skip((page - 1) * pageSize)
       .take(pageSize)
-    const [list, total] = await qb.getRawMany().then(async (list) => {
-      const cnt = await this.userRoleRepo.count({ where: { roleId } })
-      return [list, cnt]
-    })
+
+    // total 与 list 必须来自同一个查询条件的求值。
+    // 原先用 userRoleRepo.count({ where: { roleId } }) 单独数一次：
+    // 那是另一条 SQL、另一个 where 子句，与上面这个 QB（含 innerJoin User）
+    // 各写各的 —— 一旦日后给 QB 加了过滤条件（比如排除已删除用户），
+    // 很容易只改 QB 忘了改 count，分页器就会显示一个永远翻不到底的页数。
+    // getCount() 复用同一个 QB 的条件（会自动去掉 skip/take），天然不会漂移。
+    const [list, total] = await Promise.all([qb.getRawMany(), qb.getCount()])
     return { roleId, roleCode: role.code, list, total, page, pageSize }
   }
 
