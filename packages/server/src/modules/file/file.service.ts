@@ -156,8 +156,10 @@ export class FileService {
     }
 
     // 3. 调用存储策略上传文件
+    // mimetype 一并替换为魔术字节嗅探结果：OSS 分支会把它写成对象的 Content-Type，
+    // 用客户端声明的值等于让上传方自己决定文件对外的响应类型
     const res: UploadResult = await this.storage.upload(
-      { ...file, buffer: uploadBuffer }, // 传入压缩后的文件缓冲区
+      { ...file, buffer: uploadBuffer, mimetype: realMime },
       module, // 模块标识
     );
 

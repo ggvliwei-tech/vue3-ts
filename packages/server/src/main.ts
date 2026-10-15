@@ -11,6 +11,7 @@ import cookieParser from 'cookie-parser'; // 导入 cookie-parser 中间件，�
 import helmet from 'helmet'; // 安全 HTTP 头（防 XSS/Clickjacking/MIME sniffing）
 import compression from 'compression'; // gzip 压缩响应体
 import { networkInterfaces } from 'os'; // Node 内置模块，用于获取本机网络接口信息
+import { checkProductionEnv, formatProductionEnvIssues } from './config/production-env.util'; // 生产环境配置自检
 
 /**
  * 收集本机所有可用的 IPv4 地址（排除回环地址 127.0.0.1）
@@ -31,6 +32,18 @@ function getLocalIPv4Addresses(): string[] {
 }
 
 async function bootstrap() {
+  // ========== 生产环境配置自检（必须排在最前面） ==========
+  // 放在 NestFactory.create 之前：此时还没连数据库/Redis，密钥有问题可以立刻退出，
+  // 不必先建连接再回滚。另外此时 winston logger 尚未就绪，只能用 console 输出。
+  const envCheck = checkProductionEnv()
+  if (envCheck.errors.length > 0) {
+    console.error(formatProductionEnvIssues(envCheck))
+    process.exit(1)
+  }
+  if (envCheck.warnings.length > 0) {
+    console.warn(formatProductionEnvIssues(envCheck))
+  }
+
   // 用 nest-winston 替换 NestJS 默认 console logger
   // bufferLogs: true 表示先把日志缓存，等 logger 实例就绪后统一输出
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true })
@@ -38,6 +51,22 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService)
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER)
+
+  // ========== 反向代理信任链（必须在读 req.ip 之前设置） ==========
+  // 本项目的部署形态是 nginx 反代，nginx 的 `$proxy_add_x_forwarded_for` 会在
+  // 客户端传来的 X-Forwarded-For 后面**追加**真实来源，真值在最右边：
+  //     客户端伪造  X-Forwarded-For: 1.2.3.4
+  //     nginx 转发  X-Forwarded-For: 1.2.3.4, 5.6.7.8   ← 5.6.7.8 才是真的
+  //
+  // 不设 trust proxy 时 Express 完全忽略 XFF，req.ip 恒等于「上一跳」的地址 ——
+  // 容器部署下就是 nginx 容器的内网 IP，全站用户共用一个限流桶；
+  // 设成 true 则走到另一个极端：原样采信最左边的值，等于让客户端自己决定限流键。
+  // 只有数字 1（信任 1 跳）能从右往左跳过 nginx、取到那个追加进去的真实来源，
+  // 客户端伪造的前缀会被丢弃。全局 ThrottlerGuard 用的也是 req.ip，一处生效两处受益。
+  //
+  // ⚠️ 前提是后端只能经 nginx 访问：若能直连本服务，攻击者可以自己伪造整条 XFF 链。
+  // 这也是 docker-compose 把 3000 端口绑到 127.0.0.1 的原因。
+  app.set('trust proxy', 1)
 
   // ========== 安全中间件 ==========
   // helmet：设置安全 HTTP 响应头（X-Frame-Options / X-Content-Type-Options / CSP 等）

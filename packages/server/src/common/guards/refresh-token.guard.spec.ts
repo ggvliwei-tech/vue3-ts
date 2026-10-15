@@ -190,11 +190,8 @@ describe('RefreshTokenGuard', () => {
         '1',
         ACCESS_TTL_SECONDS,
       )
-      expect(mockRedisService.set).not.toHaveBeenCalledWith(
-        `blacklist:token:${USER_ID}`,
-        expect.anything(),
-        expect.anything(),
-      )
+      // 且全程只写了这一个 key —— 没有任何用户级吊销动作
+      expect(mockRedisService.set).toHaveBeenCalledTimes(1)
     })
   })
 

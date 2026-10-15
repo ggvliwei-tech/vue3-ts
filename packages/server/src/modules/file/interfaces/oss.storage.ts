@@ -6,8 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import OSS from 'ali-oss';
 // 导入上传结果和文件存储接口
 import { UploadResult, FileStorage } from './file-storage.interface';
-// 导入路径处理模块
-import * as path from 'path';
+// 导入随机文件名生成工具（local / oss 两个实现共用，避免其中一处被改漏）
+import { generateRandomFileName } from '../../../common/utils/random-filename.util';
 
 // 标记为可注入的服务，实现 FileStorage 接口
 @Injectable()
@@ -47,16 +47,17 @@ export class OssStorage implements FileStorage {
     const date = new Date();
     // 生成年/月/日格式的文件夹路径
     const dateFolder = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
-    // 提取文件扩展名
-    const ext = path.extname(file.originalname);
-    // 生成唯一文件名：时间戳 + 随机字符串 + 扩展名，防止覆盖
-    const saveName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    // 生成唯一文件名：密码学随机 + 扩展名，防止覆盖与枚举（见 random-filename.util.ts）
+    const saveName = generateRandomFileName(file.originalname);
 
     // 拼接 OSS 存储路径，去除多余的斜杠
     const ossKey = `${this.uploadFolder}/${folder}/${dateFolder}/${saveName}`.replace(/\/+/g, '/');
 
-    // 将文件缓冲区上传到 OSS
-    await this.getClient().put(ossKey, file.buffer);
+    // 将文件缓冲区上传到 OSS。
+    // 必须显式带上 mime：ali-oss 的 put 在不传 mime 时会写 application/octet-stream，
+    // 结果是图片经 CDN 打开变成"下载"而不是渲染 —— 本地存储由 nginx 按后缀推断，
+    // 所以只有走 OSS 才会暴露这个问题。
+    await this.getClient().put(ossKey, file.buffer, { mime: file.mimetype });
 
     // 拼接文件可访问的 CDN URL
     const url = `${this.cdnDomain}/${ossKey}`;

@@ -1,20 +1,26 @@
 /**
  * 短信服务
  *
- * 关键修复：
- *  - 不再通过 API 响应回传 mockCode（避免前端直接拿到验证码绕过短信链路）
- *  - Mock 仅在 development 环境生效，staging / production 强制走真实通道
- *  - console.log 替换为 winston 结构化日志
+ * 安全要点：
+ *  - 任何模式下都不通过 API 响应回传验证码：mock 模式只写服务端日志，
+ *    避免前端直接拿到验证码绕过短信链路。
+ *  - Mock 默认只在 development 生效；staging / production 需要显式
+ *    `SMS_MOCK=true` 才开启（见 isMockEnabled），开启时启动日志会告警。
  */
-import { BadRequestException, Inject, Injectable } from '@nestjs/common'
-import type { LoggerService } from '@nestjs/common'
+import {
+  Inject,
+  Injectable,
+  ServiceUnavailableException,
+  BadRequestException,
+} from '@nestjs/common'
+import type { LoggerService, OnModuleInit } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston'
 import { randomInt } from 'crypto'
 import { RedisService } from '../redis/redis.service'
 
 @Injectable()
-export class SmsService {
+export class SmsService implements OnModuleInit {
   /** 验证码有效期（5 分钟） */
   private readonly CODE_TTL = 300
   /** 单个手机号发送冷却时间（1 分钟） */
@@ -87,14 +93,44 @@ export class SmsService {
   // ====================== Mock 模式判断 ======================
 
   /**
-   * Mock 仅在 development 环境生效
-   *  - production / staging 强制走真实通道
-   *  - SMS_MOCK=false 可在 dev 环境显式关闭
+   * 是否走 Mock 短信通道
+   *
+   *  - development：默认开启，写 `SMS_MOCK=false` 可关闭
+   *  - production / staging：默认关闭，**仅** `SMS_MOCK=true`（严格等于字符串 true）才开启
+   *
+   * 为什么生产也留了开关：阿里云短信 SDK 尚未接入（sendViaAliyun 仍是占位实现），
+   * 生产下强制关闭 mock 的后果是「发送验证码」接口必然抛错 —— 忘记密码、短信登录
+   * 整条链路不可用。私有部署 / 演示环境可显式打开 mock 先把流程跑通。
+   *
+   * 打开 mock 不等于放开安全口子：验证码只写服务端日志、**从不回传给前端**，
+   * 攻击者拿不到码。真正的代价是用户收不到短信，需要运维从 logs 里取码。
+   * 正式上线仍应接入 SDK 并保持本开关关闭（见 onModuleInit 的启动告警）。
    */
   private isMockEnabled(): boolean {
     const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'development'
-    if (nodeEnv === 'production' || nodeEnv === 'staging') return false
-    return this.configService.get<string>('SMS_MOCK') !== 'false'
+    const mockFlag = this.configService.get<string>('SMS_MOCK')
+    if (nodeEnv === 'production' || nodeEnv === 'staging') {
+      return mockFlag === 'true'
+    }
+    return mockFlag !== 'false'
+  }
+
+  /**
+   * 启动期自检：生产/预发若正在用 mock 通道，明确告警。
+   * 这类配置错误不写日志的话，只有等用户报「收不到验证码」才会暴露。
+   */
+  onModuleInit(): void {
+    const nodeEnv = this.configService.get<string>('NODE_ENV') ?? 'development'
+    if ((nodeEnv === 'production' || nodeEnv === 'staging') && this.isMockEnabled()) {
+      this.logger.warn({
+        level: 'warn',
+        message:
+          `[SMS] ${nodeEnv} 环境正在使用 Mock 短信通道（SMS_MOCK=true）：` +
+          '验证码不会真实下发，只写在本日志里，终端用户收不到。' +
+          '正式上线请接入短信 SDK 并移除 SMS_MOCK。',
+        context: 'SmsService',
+      })
+    }
   }
 
   // ====================== 发送验证码 ======================
@@ -119,23 +155,40 @@ export class SmsService {
 
     // 5. Mock / 真实发送
     if (this.isMockEnabled()) {
-      // Mock 模式：写到结构化日志（不返回给前端），开发联调从 logs 取
+      // Mock 模式：验证码只写结构化日志（不返回给前端），联调时从 logs 里取
       this.logger.log({
         level: 'info',
         message: `[SMS Mock] phone=${phone}, code=${code}, ttl=${this.CODE_TTL}s`,
         context: 'SmsService',
       })
-      return { msg: '验证码已发送（Mock 模式，请查看服务端日志）' }
+      // 对外文案与真实通道一致：是否走 mock 是服务端内部实现，
+      // 回一句「Mock 模式」既泄露实现细节，也会让终端用户困惑。
+      return { msg: '验证码已发送' }
     }
 
     await this.sendViaAliyun(phone, code)
     return { msg: '验证码已发送' }
   }
 
-  // 阿里云短信发送（预留接口，参数待接入 SDK 后使用，故以 _ 前缀标记）
+  /**
+   * 阿里云短信发送（预留接口，参数待接入 SDK 后使用，故以 _ 前缀标记）
+   *
+   * 走到这里说明「生产环境 + 真实通道」，而真实通道尚未接入，属于服务端没准备好，
+   * 因此抛 503 而不是 400；文案也必须面向终端用户 —— 早先的版本把
+   * 「请先 npm install @alicloud/...」直接抛给前端，用户看不懂，还暴露了实现细节。
+   * 运维侧同时打 error 日志，指明两条出路（接 SDK 或临时开 mock）。
+   */
   private async sendViaAliyun(_phone: string, _code: string): Promise<void> {
-    throw new BadRequestException(
-      '阿里云短信 SDK 未安装，请先 npm install @alicloud/dysmsapi20170525 @alicloud/openapi-client',
+    this.logger.error({
+      level: 'error',
+      message:
+        '[SMS] 短信通道未接入：sendViaAliyun 仍是占位实现，本次验证码未发出。' +
+        '请接入 @alicloud/dysmsapi20170525 + @alicloud/openapi-client 补全发送逻辑；' +
+        '若只是想让流程先跑通，可临时设置 SMS_MOCK=true（验证码只写日志）。',
+      context: 'SmsService',
+    })
+    throw new ServiceUnavailableException(
+      '短信服务暂不可用，请稍后重试或联系管理员',
     )
   }
 

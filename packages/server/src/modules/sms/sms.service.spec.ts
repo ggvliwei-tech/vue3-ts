@@ -102,13 +102,87 @@ describe('SmsService', () => {
       expect(code).toMatch(/^[1-9]\d{5}$/)
     })
 
-    it('生产环境不应走 Mock 分支', async () => {
-      mockConfigService.get.mockImplementation((key: string) =>
-        key === 'NODE_ENV' ? 'production' : undefined,
-      )
+  })
 
-      // 真实通道未接入，应抛出 SDK 未安装的错误而不是静默走 Mock
-      await expect(service.sendCode(PHONE)).rejects.toThrow(/阿里云短信 SDK/)
+  describe('sendCode - Mock 开关（生产默认关闭）', () => {
+    /**
+     * 设定 NODE_ENV / SMS_MOCK 两个配置项
+     */
+    const setEnv = (nodeEnv: string, smsMock: string | undefined) => {
+      mockConfigService.get.mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return nodeEnv
+        if (key === 'SMS_MOCK') return smsMock
+        return undefined
+      })
+    }
+
+    it('生产环境未设 SMS_MOCK 时走真实通道（未接入 → 503，而不是静默 mock）', async () => {
+      setEnv('production', undefined)
+
+      // 文案必须面向终端用户，不能把「请先 npm install」这类实现细节抛给前端
+      await expect(service.sendCode(PHONE)).rejects.toThrow(
+        /短信服务暂不可用，请稍后重试或联系管理员/,
+      )
+      // 运维侧要能从日志看出根因和两条出路
+      expect(mockLogger.error).toHaveBeenCalled()
+      // 真实通道不会把验证码打进 info 日志
+      expect(mockLogger.log).not.toHaveBeenCalled()
+    })
+
+    it('生产环境 SMS_MOCK 为其他真值字符串时仍走真实通道（严格判定 true）', async () => {
+      setEnv('production', '1')
+
+      await expect(service.sendCode(PHONE)).rejects.toThrow(/短信服务暂不可用/)
+    })
+
+    it('生产环境 SMS_MOCK=true 时才允许走 mock（私有部署应急开关）', async () => {
+      setEnv('production', 'true')
+
+      await expect(service.sendCode(PHONE)).resolves.toEqual({
+        msg: '验证码已发送',
+      })
+      expect(mockLogger.log).toHaveBeenCalled()
+    })
+
+    it('staging 与 production 同策略', async () => {
+      setEnv('staging', undefined)
+      await expect(service.sendCode(PHONE)).rejects.toThrow(/短信服务暂不可用/)
+
+      setEnv('staging', 'true')
+      await expect(service.sendCode(PHONE)).resolves.toEqual({
+        msg: '验证码已发送',
+      })
+    })
+
+    it('开发环境默认走 mock（无需设任何变量）', async () => {
+      setEnv('development', undefined)
+
+      await expect(service.sendCode(PHONE)).resolves.toEqual({
+        msg: '验证码已发送',
+      })
+      expect(mockLogger.log).toHaveBeenCalled()
+    })
+
+    it('开发环境 SMS_MOCK=false 时走真实通道（可提前验证 503 提示）', async () => {
+      setEnv('development', 'false')
+
+      await expect(service.sendCode(PHONE)).rejects.toThrow(/短信服务暂不可用/)
+    })
+
+    it('生产环境开着 mock 时启动期必须告警（否则只等用户报"收不到验证码"）', () => {
+      setEnv('production', 'true')
+      service.onModuleInit()
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('Mock 短信通道') }),
+      )
+    })
+
+    it('开发环境走 mock 不告警（这是预期行为，不该刷日志）', () => {
+      setEnv('development', undefined)
+      service.onModuleInit()
+
+      expect(mockLogger.warn).not.toHaveBeenCalled()
     })
   })
 

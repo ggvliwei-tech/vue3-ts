@@ -162,8 +162,6 @@ interface Message {
 const messages = ref<Message[]>([])
 // 定义输入框文本的响应式数据
 const inputText = ref('')
-// 定义非流式请求加载状态的响应式数据
-const loading = ref(false)
 // 定义当前会话 ID 的响应式数据
 const sessionId = ref('')
 // 定义是否正在流式输出的响应式数据
@@ -337,8 +335,8 @@ async function onCodeBlockClick(event: MouseEvent) {
 async function sendStreamMessage() {
   // 获取输入框中的文本并去除首尾空格
   const text = inputText.value.trim()
-  // 如果文本为空或正在加载中或正在流式输出，则直接返回
-  if (!text || loading.value || isStreaming.value) return
+  // 文本为空或正在流式输出时直接返回（发送键此时也已被禁用）
+  if (!text || isStreaming.value) return
 
   // 清空输入框内容
   inputText.value = ''
@@ -581,10 +579,6 @@ onUnmounted(() => {
         />
       </div>
 
-      <!-- 加载中指示器：非流式请求加载时显示 -->
-      <div v-if="loading && !isStreaming" class="message-row message-ai">
-        <van-loading type="spinner" size="20" vertical>思考中...</van-loading>
-      </div>
     </div>
 
     <!-- 底部输入区域 -->
@@ -610,13 +604,12 @@ onUnmounted(() => {
         >
           停止
         </van-button>
-        <!-- 非流式时显示发送按钮 -->
+        <!-- 非流式（即未在输出）时显示发送按钮 -->
         <van-button
           v-else
           type="primary"
           size="small"
           round
-          :loading="loading"
           :disabled="!inputText.trim()"
           @click="sendStreamMessage"
         >

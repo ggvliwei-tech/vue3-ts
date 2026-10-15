@@ -182,8 +182,8 @@ sys_user ──< sys_user_role >── sys_role ──< sys_role_permission >─
 
 - **角色**：admin / editor / user 等
 - **权限码**：`user:list` / `book:create` / `admin:audit` 等细粒度操作
-- **后端校验链**：`JwtAuthGuard`（验 Token + 黑名单） → `PermissionsGuard`（校验 `@Permissions` 装饰器） → Redis 缓存读权限码 → 命中即放行
-- **前端双层控制**：路由 `meta.permissions` 控制页面 + `v-permission` 指令控制按钮
+- **后端校验链**：`JwtAuthGuard`（验 Token + 两级吊销） → `PermissionsGuard`（校验 `@Permissions` 装饰器） → Redis 缓存读权限码 → 命中即放行
+- **前端双层控制**：路由 `meta.permissions` 控制页面 + `v-permission` 指令控制按钮。两端都已注册该指令，App 端已在 6 处使用（账本 / 聊天室 / 文件），Admin 端暂为路由级单层
 - **缓存策略**：登录时从 DB 读权限码写入 Redis，请求时优先读缓存
 
 ### 5.2 JWT 双 Token + 多设备会话

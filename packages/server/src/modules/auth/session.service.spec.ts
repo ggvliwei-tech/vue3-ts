@@ -5,9 +5,10 @@
  *  1. create / get / update / remove 基础 CRUD 正常路径
  *  2. listSessions 按 loginTime 倒序，损坏数据容错
  *  3. remove 同时拉黑该设备（access token 立即失效）
- *  4. removeAll 清空所有 RT + 设置用户级黑名单
- *  5. 黑名单两种粒度互不干扰：设备级只影响那一台，用户级影响全部
- *  6. 黑名单 TTL 对齐 access token 有效期（不能短于它）
+ *  4. removeAll 清空所有 RT + 递增用户令牌版本号（全部设备的 access token 失效）
+ *  5. 两种吊销粒度互不干扰：设备级只影响那一台，用户级版本号影响全部
+ *  6. 设备级黑名单 TTL 对齐 access token 有效期（不能短于它）
+ *  7. 令牌版本号单调递增，且不因后续登录被重置（回归：旧实现会复活旧令牌）
  *  7. UUID 格式校验（newSessionId）
  */
 
@@ -15,6 +16,7 @@ import { Test, TestingModule } from '@nestjs/testing'
 import { ConfigService } from '@nestjs/config'
 import { SessionService, SessionInfo } from './session.service'
 import { RedisService } from '../redis/redis.service'
+import { isTokenRevoked } from '../../common/utils/token-version.util'
 
 // access token 有效期 30m = 1800s，黑名单 TTL 必须与它对齐
 const ACCESS_TOKEN_TTL_SECONDS = 1800
@@ -84,6 +86,14 @@ const mockRedisService = {
       if (hash.delete(f)) count++
     }
     return count
+  }),
+  // 真实 Redis 的 INCR 会保留已有 TTL，这里一并模拟，避免误以为版本号会过期
+  incr: jest.fn(async (key: string) => {
+    const entry = redisStore.get(key)
+    const current = parseInt(entry?.value ?? '0', 10)
+    const next = (Number.isFinite(current) ? current : 0) + 1
+    redisStore.set(key, { value: String(next), expiresAt: entry?.expiresAt })
+    return next
   }),
 }
 
@@ -232,8 +242,8 @@ describe('SessionService', () => {
     })
   })
 
-  describe('removeAll - 清空全部 + 用户级黑名单', () => {
-    it('应删除所有 RT + Hash + 设置用户级黑名单', async () => {
+  describe('removeAll - 清空全部 + 递增令牌版本号', () => {
+    it('应删除所有 RT + Hash，并递增用户令牌版本号', async () => {
       const hash = new Map<string, string>([
         ['sess-1', JSON.stringify({ sessionId: 'sess-1', loginTime: 1, ip: 'a', userAgent: 'ua' })],
         ['sess-2', JSON.stringify({ sessionId: 'sess-2', loginTime: 2, ip: 'b', userAgent: 'ub' })],
@@ -246,26 +256,46 @@ describe('SessionService', () => {
       expect(mockRedisService.del).toHaveBeenCalledWith('refresh:token:1:sess-1')
       expect(mockRedisService.del).toHaveBeenCalledWith('refresh:token:1:sess-2')
       expect(mockRedisService.del).toHaveBeenCalledWith('session:1')
-      // 用户级黑名单已设置
-      expect(redisStore.has('blacklist:token:1')).toBe(true)
+      // 版本号 0 → 1：此前签发的 access token 全部失效
+      expect(mockRedisService.incr).toHaveBeenCalledWith('auth:ver:1')
+      expect(await service.getTokenVersion(1)).toBe(1)
     })
 
-    it('默认黑名单 TTL 应对齐 access token 有效期而非写死 900', async () => {
+    it('版本号必须单调递增，且不设 TTL（过期归零会让比较失效）', async () => {
       await service.removeAll(1)
-      expect(mockRedisService.set).toHaveBeenCalledWith(
-        'blacklist:token:1',
-        '1',
-        ACCESS_TOKEN_TTL_SECONDS,
-      )
+      await service.removeAll(1)
+
+      expect(await service.getTokenVersion(1)).toBe(2)
+      expect(redisStore.get('auth:ver:1')?.expiresAt).toBeUndefined()
     })
 
-    it('允许自定义黑名单 TTL', async () => {
-      await service.removeAll(1, 60)
-      expect(mockRedisService.set).toHaveBeenCalledWith(
-        'blacklist:token:1',
-        '1',
-        60,
-      )
+    it('回归：踢全部设备后，旧令牌不会因为用户重新登录而复活', async () => {
+      // 旧实现把「用户级黑名单」做成一个布尔开关，而登录成功必须删掉它
+      // （否则刚签发的新令牌也被拦下），删除的瞬间旧令牌全部复活。
+      // 版本号方案没有这个开关：登录只是把当前版本号写进新令牌，
+      // 旧令牌带的版本 < 当前版本，依然被拒。
+      const currentVersionBeforeKick = await service.getTokenVersion(1)
+      await service.removeAll(1) // 管理员踢掉该用户全部设备
+      const currentVersionAfterKick = await service.getTokenVersion(1)
+
+      // 踢下线之前的令牌：版本号比当前小 → 应判定为已吊销
+      expect(
+        isTokenRevoked(currentVersionBeforeKick, currentVersionAfterKick),
+      ).toBe(true)
+      // 重新登录后签发的令牌：版本号等于当前值 → 放行
+      expect(isTokenRevoked(currentVersionAfterKick, currentVersionAfterKick)).toBe(false)
+      // 关键：登录不清任何东西，版本号仍停在踢下线后的值
+      expect(currentVersionAfterKick).toBe(currentVersionBeforeKick + 1)
+    })
+
+    it('从未被踢过的用户，版本号读出 0', async () => {
+      expect(await service.getTokenVersion(1)).toBe(0)
+      expect(redisStore.has('auth:ver:1')).toBe(false)
+    })
+
+    it('版本号被外部写脏时退回 0（fail-open，而非把用户锁死）', async () => {
+      redisStore.set('auth:ver:1', { value: 'not-a-number' })
+      expect(await service.getTokenVersion(1)).toBe(0)
     })
   })
 
@@ -284,8 +314,8 @@ describe('SessionService', () => {
 
       expect(redisStore.has('blacklist:session:1:sess-1')).toBe(true)
       expect(redisStore.has('blacklist:session:1:sess-2')).toBe(false)
-      // 设备级拉黑不应连带触发用户级拉黑（否则"多设备互不影响"就失效了）
-      expect(redisStore.has('blacklist:token:1')).toBe(false)
+      // 设备级拉黑不应连带触发用户级吊销（否则"多设备互不影响"就失效了）
+      expect(mockRedisService.incr).not.toHaveBeenCalled()
     })
   })
 })

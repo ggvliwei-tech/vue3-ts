@@ -4,7 +4,8 @@
  * 权限的唯一真源在 admin 后台（sys_role / sys_permission / sys_role_permission），
  * app 端只负责「消费」：登录时后端把当前用户的 permissions 一并下发，
  * 这里把权限码收敛成常量 + 提供功能入口配置 + 同步逻辑，
- * 供路由守卫、首页宫格、v-permission 指令共用。
+ * 供路由守卫、首页宫格共用（v-permission 指令直接用 AuthStore，
+ * 因为它可能在 pinia 尚未激活时于任意组件内被解析）。
  *
  * 注意：前端过滤只是体验层（不该看到的入口不展示），
  * 真正的安全边界在后端 PermissionsGuard 和 ChatGateway 的连接校验上。
@@ -95,9 +96,4 @@ export async function syncPermissions(): Promise<boolean> {
 export function hasAnyPermission(permissions: string[]): boolean {
   if (permissions.length === 0) return true
   return useAuthStore().hasAnyPermission(permissions)
-}
-
-/** 按权限过滤首页功能入口 */
-export function filterHomeEntries(): HomeEntry[] {
-  return HOME_ENTRIES.filter((entry) => hasAnyPermission(entry.permissions))
 }

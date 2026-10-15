@@ -104,6 +104,13 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_pass_2026}
+      # ⚠️ 下面所有 `${VAR:-默认值}` 里的默认值都是**公开在仓库里的占位值**，
+      #    意味着照抄本文件直接 `docker compose up` 起的服务，其 JWT 签名密钥
+      #    是全世界都知道的 —— 任何人都能自签一个管理员令牌，无需任何账号密码。
+      #    这正是 ALLOW_INSECURE_DEFAULTS=true 存在的原因：让「一键启动」能跑起来。
+      #    一旦要对外提供服务，请复制 .env.example 为 .env、填入真实密钥，
+      #    并把 ALLOW_INSECURE_DEFAULTS 设为 false（后端会拒绝用占位密钥启动）。
+      ALLOW_INSECURE_DEFAULTS: ${ALLOW_INSECURE_DEFAULTS:-true}
       # JWT（生产环境务必修改）
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-please-change-me-access-secret-in-production-32chars-min}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
@@ -111,6 +118,12 @@ services:
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
       # CORS
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:8081}
+      # 短信：production 下 mock 默认关闭，走真实通道。而真实通道（阿里云 SDK）
+      # 尚未接入，所以默认配置下「发送验证码」返回 503。
+      # 想让忘记密码 / 短信登录先跑通：设为 true，验证码会写到 ./logs/backend，
+      # 由运维从日志里取（不会下发给用户，也不回传前端）。
+      # 正式上线请接入短信 SDK 并保持 false。
+      SMS_MOCK: ${SMS_MOCK:-false}
       # 文件存储：留空/其他值 = 本地磁盘，oss 才走 OSS
       # 后两项**必须传**：代码里 path.resolve(cwd, undefined) 会直接抛 TypeError，
       # 缺了等价于容器起不来（此前这里没有这两个变量，后端容器会反复重启）。
@@ -136,7 +149,12 @@ services:
       OSS_CDN_DOMAIN: ${OSS_CDN_DOMAIN:-}
       OSS_UPLOAD_FOLDER: ${OSS_UPLOAD_FOLDER:-uploads}
     ports:
-      - "${APP_PORT:-3000}:3000"
+      # 只绑回环地址：后端必须**只能**经 nginx 访问。
+      # 后端用 `app.set('trust proxy', 1)` 从 X-Forwarded-For 里取真实客户端 IP
+      # （那份值由 nginx 追加，客户端伪造的前缀会被丢弃）。若 3000 端口对外可达，
+      # 攻击者就能直连并自己伪造整条 XFF 链 —— 登录限流、全局限流的键全部失效。
+      # 写 127.0.0.1 而不是删掉整行：宿主机上 curl localhost:3000/health 仍可用。
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
     volumes:
       # 日志持久化到宿主机。
       # 注意：bind mount 会盖掉镜像里 /app/logs 的属主，若宿主机 ./logs/backend

@@ -26,6 +26,11 @@ import { UserCrudService } from '../user/user-crud.service';
 import { RbacService } from '../rbac/rbac.service';
 // 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
 import { AuthKeys } from '../../common/constants/auth-keys';
+// 令牌版本号解析/判定（与 JwtAuthGuard 共用同一套规则）
+import {
+  isTokenRevoked,
+  parseTokenVersion,
+} from '../../common/utils/token-version.util';
 
 /**
  * socket.data 的形状
@@ -113,19 +118,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         algorithms: ['HS256'],
       });
 
-      // 安全加固：检查 Redis 黑名单（与 JwtAuthGuard 保持一致）
+      // 安全加固：检查吊销状态（与 JwtAuthGuard 保持一致）
       // 两种粒度都要查，缺任一种都会让对应的踢下线操作被 WS 绕过：
       //  - 用户级：踢全部设备（forceKick 不带 sessionId / logout-all）
+      //      走令牌版本号 auth:ver:{userId} —— token 里带的版本小于当前版本即失效。
+      //      不能用「用户级黑名单布尔值」：那个键在重新登录时要被清掉，
+      //      否则新令牌也会被拦；而清掉的瞬间，此前吊销的旧 access token 会全部复活。
       //  - 设备级：仅踢当前设备（RT 复用检测 / 踢指定设备）
       // sessionId 是签发 access token 时的必填字段（见 AuthService.login），故无条件检查
-      const blacklistHits = await Promise.all([
-        this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
+      const [sessionHit, versionRaw] = await Promise.all([
         this.redisService.exists(
           AuthKeys.blacklistSession(payload.sub, payload.sessionId),
         ),
+        this.redisService.get(AuthKeys.tokenVersion(payload.sub)),
       ]);
-      if (blacklistHits.some((hit) => hit)) {
-        this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 已在黑名单中`);
+      if (
+        sessionHit ||
+        isTokenRevoked(payload.tokenVersion, parseTokenVersion(versionRaw))
+      ) {
+        this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 已被强制下线`);
         client.emit('error', { code: 401, msg: '账号已被强制下线，请重新登录' });
         client.disconnect();
         return;

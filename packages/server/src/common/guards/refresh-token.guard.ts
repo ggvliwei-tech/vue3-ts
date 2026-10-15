@@ -29,9 +29,10 @@ import { parseJwtExpiry } from '../utils/jwt.util'
  *     → 判定为令牌盗用 → 吊销**该设备**会话（删该 sessionId 的 RT +
  *       加设备级黑名单）并抛 401。
  *
- * 注意「只吊销该设备」是刻意的，不是遗漏：用户级 key 会让一台设备出问题
- * 就把该用户其他设备一起踢下线，与「多设备会话互不影响」的承诺矛盾
- * （见实现里 blacklistSession 与 blacklistUser 的区分）。
+ * 注意「只吊销该设备」是刻意的，不是遗漏：这里的场景是**单台设备**的令牌疑似
+ * 被盗，只该断掉这一台。用用户级的手段（`SessionService.removeAll` / 令牌版本号）
+ * 会让一台设备出问题就把该用户其他设备一起踢下线，与「多设备会话互不影响」
+ * 的承诺矛盾。
  * 需要「踢该用户全部设备」请走 AuthService.forceKick / logout-all。
  */
 @Injectable()
@@ -119,8 +120,8 @@ export class RefreshTokenGuard implements CanActivate {
         `[RT 复用检测] userId=${payload.sub} sessionId=${payload.sessionId} - 检测到刷新令牌被盗用/会话失效`,
       )
       // 只吊销「该设备」：删 RT + 加设备级黑名单
-      // 注意黑名单必须用设备级 key，不能用 blacklist:token:{userId} ——
-      // 用户级黑名单会被 JwtAuthGuard 应用到该用户的所有请求上，
+      // 注意必须用设备级 key，不能走 SessionService.removeAll / 令牌版本号 ——
+      // 用户级的吊销会被 JwtAuthGuard 应用到该用户的所有请求上，
       // 于是一台设备出问题会把该用户其他设备一起踢下线，
       // 与"多设备会话互不影响"的产品承诺直接矛盾。
       await this.redisService.del(

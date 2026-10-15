@@ -15,6 +15,14 @@ WORKDIR /app/packages/shared
 RUN pnpm install --frozen-lockfile && pnpm build
 
 WORKDIR /app/packages/app
+
+# 后端地址（构建期注入）。留空 = 走相对路径，由本镜像的 nginx 把 /api/ 反代到 backend。
+# 需要前端直连别的域名时：docker compose build --build-arg VITE_API_BASE_URL=https://api.xxx.com
+# 注：Vite 里 process.env 的优先级高于 .env.production（见 vite 的 loadEnv 实现），
+#     所以这个 ENV 一定能覆盖仓库里的 packages/app/.env.production。
+ARG VITE_API_BASE_URL=
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+
 RUN pnpm install --frozen-lockfile && pnpm build
 
 FROM nginx:1.27-alpine AS runtime

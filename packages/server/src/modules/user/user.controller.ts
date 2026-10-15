@@ -34,6 +34,8 @@ import { UserCrudService } from './user-crud.service';
 import { CreateUserDto } from './dto/create-user.dto';
 // 登录用户 DTO，定义登录请求的数据结构和校验规则
 import { LoginUserDto } from './dto/login-user.dto';
+// 客户端 IP 提取（统一走 Express 的 trust proxy 解析，不自行解析 XFF 头）
+import { getClientIp } from '../../common/utils/client-ip.util';
 // JWT 认证守卫，用于保护需要登录验证的接口
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 // 权限守卫，基于 @Permissions 装饰器做细粒度校验
@@ -125,12 +127,10 @@ export class UserController {
   ) {
     // Origin 白名单校验（防 CSRF）
     this.assertSafeOrigin(req)
-    // 提取客户端 IP：优先取代理转发的 X-Forwarded-For，否则取 socket.remoteAddress
-    // 兼容 Nginx/Cloudflare 等反代场景
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown'
+    // 提取客户端 IP：交给 Express 按 trust proxy（见 main.ts）解析。
+    // 不要自己解析 X-Forwarded-For 头 —— 它是客户端可控的，取最左边那个值
+    // 等于让攻击者自定义限流键（详见 common/utils/client-ip.util.ts）
+    const ip = getClientIp(req)
     // 提取 User-Agent 头，用于多设备会话展示
     const userAgent = (req.headers['user-agent'] as string) || 'unknown'
     // 调用认证服务的 login 方法，传入 ip + userAgent 用于 IP 限流与多设备会话

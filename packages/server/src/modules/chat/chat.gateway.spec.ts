@@ -102,7 +102,12 @@ describe('ChatGateway', () => {
         { provide: ChatService, useValue: mockChatService },
         {
           provide: RedisService,
-          useValue: { exists: jest.fn(async () => false) },
+          useValue: {
+            // 设备级黑名单（exists）与用户级令牌版本号（get）各查一次，
+            // 两者都返回"未吊销"，让 handleConnection 的测试只关注它自己的逻辑
+            exists: jest.fn(async () => false),
+            get: jest.fn(async () => null),
+          },
         },
         { provide: UserCrudService, useValue: { findUserEntity: jest.fn() } },
         {

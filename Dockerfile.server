@@ -2,50 +2,66 @@
 # NestJS 后端镜像 - 多阶段构建
 # ============================================================
 # 设计要点：
-#  1. 多阶段：减小最终镜像体积（devDependencies 不进生产镜像）
-#  2. pnpm workspace 模式：依赖 @project/shared 等本地包，需要先 build shared
+#  1. 多阶段：devDependencies 不进生产镜像
+#  2. 依赖目录必须**保持 pnpm workspace 的相对层级**（见下方「关于目录形状」）
 #  3. 生产模式：TypeScript 编译产物 dist/ + 只装 production 依赖
 #  4. 健康检查：直接复用 /health 端点
 #  5. 非 root 用户运行：提高安全性
+#
+# ----------------------------------------
+# 关于目录形状（改这个文件前务必先读）
+# ----------------------------------------
+# pnpm 不用扁平化的 node_modules，而是在 workspace 根建一个虚拟 store：
+#
+#   /app/node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>   ← 真实文件
+#   /app/packages/server/node_modules/<pkg>  →  符号链接指向上面的真实文件
+#
+# 这些符号链接是**相对的**（pnpm 刻意如此，为了让 node_modules 可搬运）。
+# 也就是说 `packages/server/node_modules/@nestjs/common` 里存的是
+# `../../../../node_modules/.pnpm/...` 这样一串 `..`，它的含义完全取决于
+# 这个链接自己处在第几层目录。
+#
+# 所以下面 runtime 阶段**不能**把 `packages/server/node_modules` 拷成 `/app/node_modules`
+# —— 那样链接会浅三层，`..` 全部越出根目录变成 `/node_modules/.pnpm/...`，
+# 镜像能构建成功、但一启动就是 MODULE_NOT_FOUND。必须原样保留
+# `packages/server/node_modules` 与 `node_modules/.pnpm` 的相对位置。
+#
+# 另：这里没有 `@project/shared`。server 的源码从不 import 它（只有 admin / app 在用），
+# 早先版本为它单独建了一个 shared-builder 阶段并往 node_modules/@project/shared 里
+# 塞文件，那既指错了地方（符号链接指向 packages/shared，不是 node_modules 下），
+# 也白装了一整套前端依赖。依赖已从 packages/server/package.json 移除。
 # ============================================================
 
-# -------- 阶段 1：构建 @project/shared --------
-# shared 是 workspace 包，server 依赖它，必须先 build
-FROM node:22-alpine AS shared-builder
-RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
-WORKDIR /app
-# 只拷贝 workspace 顶层文件和 shared 包源码（缓存友好）
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
-COPY packages/shared ./packages/shared
-WORKDIR /app/packages/shared
-RUN pnpm install --frozen-lockfile --prod=false
-RUN pnpm build
-
-# -------- 阶段 2：构建 server 应用 --------
-FROM node:22-alpine AS server-builder
+# -------- 阶段 1：编译 server --------
+# 需要 devDependencies（nest build / typescript 都在 dev 里），故不带 --prod
+FROM node:22-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /app
 
-# 拷贝 workspace 顶层文件
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
-
-# 拷贝 server 包
 COPY packages/server ./packages/server
 
-# 从 shared-builder 拷贝已编译的 shared 包（含 dist）
-COPY --from=shared-builder /app/packages/shared/dist ./packages/shared/dist
-COPY --from=shared-builder /app/packages/shared/package.json ./packages/shared/package.json
-
-# 安装 server 依赖（含 devDependencies，因为需要 nest build）
+# --frozen-lockfile：锁文件与 package.json 不一致时直接失败，避免镜像里的依赖
+# 与开发机悄悄漂移。工作区里其余包（admin/app/shared）不在构建上下文里也没关系 ——
+# pnpm 只校验它实际看到的项目。
 RUN pnpm install --frozen-lockfile
 
-# 编译 server
 WORKDIR /app/packages/server
 RUN pnpm build
 
-# 清理 devDependencies + 缓存（保留 runtime 必需文件）
-RUN pnpm prune --prod && \
-    rm -rf node_modules/.cache .pnpm-store logs
+# -------- 阶段 2：只装生产依赖 --------
+# 单独开一个阶段而不是在阶段 1 上 `pnpm prune --prod`：
+# prune 在 workspace 下会去动共享的虚拟 store，边界不清晰；这里从零装一份
+# 干净的生产依赖，`.pnpm` 里只有运行时真正需要的包。
+FROM node:22-alpine AS prod-deps
+RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
+WORKDIR /app
+
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
+# 只需要 package.json（不拷贝源码）：pnpm 靠它解析依赖清单
+COPY packages/server/package.json ./packages/server/package.json
+
+RUN pnpm install --frozen-lockfile --prod
 
 # -------- 阶段 3：运行镜像 --------
 FROM node:22-alpine AS runtime
@@ -64,13 +80,15 @@ ENV NODE_ENV=production \
     APP_HOST=0.0.0.0 \
     LOG_LEVEL=info
 
-# 拷贝生产构建产物
-COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/dist ./dist
-COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/package.json ./
-COPY --from=server-builder --chown=nestjs:nodejs /app/packages/server/node_modules ./node_modules
-# 共享包（在 node_modules 中通过 workspace 符号链接）
-COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/package.json ./node_modules/@project/shared/package.json
-COPY --from=server-builder --chown=nestjs:nodejs /app/packages/shared/dist ./node_modules/@project/shared/dist
+# ========== 运行时依赖（两处，缺一不可，相对位置不能改） ==========
+# 1) workspace 根的虚拟 store：所有第三方包的真实文件都在这里
+COPY --from=prod-deps --chown=nestjs:nodejs /app/node_modules ./node_modules
+# 2) 本包的 node_modules：一堆指向上面 .pnpm 的相对符号链接
+COPY --from=prod-deps --chown=nestjs:nodejs /app/packages/server/node_modules ./packages/server/node_modules
+
+# ========== 构建产物 ==========
+COPY --from=builder --chown=nestjs:nodejs /app/packages/server/dist ./packages/server/dist
+COPY --from=builder --chown=nestjs:nodejs /app/packages/server/package.json ./packages/server/package.json
 
 # 日志目录（与 winston.config.ts 中 LOG_DIR = process.cwd()/logs 对齐）
 # 上传目录必须在这里预先建好并改属主：/app 是 WORKDIR 由 root 创建的（755），
@@ -89,4 +107,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # tini 作为 PID 1，正确转发 SIGTERM/SIGINT 给 Node 进程，配合 nestjs 的 enableShutdownHooks 实现优雅关闭
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/main.js"]
+
+# 入口保持在工作区根（而不是 cd 进 packages/server）：
+# winston 的日志目录与 LocalStorage 的上传目录都基于 process.cwd() 解析，
+# 而 docker-compose 挂的是 /app/logs 与 /app/uploads —— cwd 一变，挂载就落空。
+CMD ["node", "packages/server/dist/main.js"]

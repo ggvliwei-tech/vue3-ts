@@ -38,7 +38,6 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.3",
     "@nestjs/websockets": "^11.1.28",
-    "@project/shared": "workspace:*",
     "ali-oss": "^6.23.0",
     "bcrypt": "^6.0.0",
     "chromadb": "^3.5.0",

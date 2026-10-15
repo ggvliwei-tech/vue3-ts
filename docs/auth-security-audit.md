@@ -40,7 +40,8 @@
 
 访问受保护接口 → 请求头携带 Authorization: Bearer <access_token>
   ↓  JwtAuthGuard 验证 Access Token
-  ↓  request.user = { sub, username }
+  ↓  查吊销状态（两种粒度，见下方「吊销」段）
+  ↓  request.user = { ...payload, id, roles, permissions }
 
 Access Token 过期 (401) → 共享拦截器自动发起刷新
   ↓  POST /api/v1/user/refresh-token (HttpOnly Cookie 自动携带)
@@ -49,9 +50,19 @@ Access Token 过期 (401) → 共享拦截器自动发起刷新
   ↓  排队中的 401 请求用新 Token 重试
 
 登出 → POST /api/v1/user/logout (需有效 JWT)
-  ↓  Redis 删除 refresh:token:{userId} (服务端吊销)
+  ↓  Redis 删除 refresh:token:{userId}:{sessionId} (服务端吊销)
+  ↓  写设备级黑名单，让这台设备的 Access Token 立即失效
   ↓  清除 refresh_token Cookie
 ```
+
+**吊销（两种粒度，key 定义集中在 `common/constants/auth-keys.ts`）**
+
+| 场景 | 手段 | 生效范围 |
+|------|------|----------|
+| RT 复用检测命中 / 踢指定设备 | `blacklist:session:{userId}:{sessionId}`（TTL = Access Token 有效期） | 仅该设备 |
+| 踢全部设备 / 登出全部 / 禁用 / 密码重置 | `auth:ver:{userId}` 令牌版本号 +1 | 该用户所有设备 |
+
+版本号方案取代了早先的「用户级黑名单布尔值」。旧实现必须在新登录时删掉那个键（否则新令牌也会被拦下），而删除的瞬间，**此前被吊销的 Access Token 会全部复活**；版本号没有这个共享开关，登录无需清理任何东西 —— 新令牌的 `payload.tokenVersion` 天然等于当前值，而旧令牌因为更小会被拒。该键刻意不设 TTL：计数器一旦过期归零，`小于当前版本` 的比较就失去意义。
 
 ### 1.3 API 端点清单
 
@@ -83,6 +94,10 @@ Access Token 过期 (401) → 共享拦截器自动发起刷新
 | 11 | **DB 唯一约束** | 数据库层面防止重复用户名 | ✅ 合格 |
 | 12 | **WebSocket JWT 鉴权** | Socket 连接时验证 JWT | ✅ 合格 |
 | 13 | **401 自动刷新 + 请求队列** | 并发请求不会触发多次刷新，避免竞态条件 | ✅ 优秀 |
+| 14 | **登录限流 + 账号锁定** | `LoginThrottlerService`：IP 滑动窗口 + 连续失败锁定；客户端 IP 由 `app.set('trust proxy', 1)` 解析，伪造 XFF 前缀会被丢弃 | ✅ 优秀 |
+| 15 | **RBAC 权限码校验** | `PermissionsGuard` 按接口 `@Permissions` 校验；WS 链路单独校验 `chat:room`（REST 守卫管不到长连接） | ✅ 优秀 |
+| 16 | **两级令牌吊销** | 设备级黑名单 + 用户级令牌版本号（见 1.2 末「吊销」段），踢下线立即可生效且不可被后续登录撤销 | ✅ 优秀 |
+| 17 | **RT 轮换宽限窗口** | 30s 内允许并发刷新复用上一枚 RT，避免多标签页互相作废导致的刷新风暴 | ✅ 优秀 |
 
 ---
 
@@ -103,7 +118,7 @@ Access Token 过期 (401) → 共享拦截器自动发起刷新
 | R4 | **Access Token 存储在 localStorage** | 虽然 Refresh Token 通过 HttpOnly Cookie 保护，但 Access Token 存储在 `localStorage`，XSS 攻击可读取 | XSS 攻击可窃取 Access Token (15m 内有效)，在有效期内可发起任意请求 |
 | R5 | **无密码复杂度要求** | `CreateUserDto` 仅校验 `IsNotEmpty()`，无最小长度、无复杂度规则 | 用户可设置 `123`、`abc` 等弱密码 |
 | R6 | **（已修复）无 RBAC (基于角色的访问控制)** | 已落地完整 RBAC：`modules/rbac/` + `permissions.guard.ts`，`nest-db.sql` 内置 3 个角色 / 30 个权限码，接口按 `@Permissions` 权限码校验 | 已消除 |
-| R7 | **（已修复）Admin 面板无鉴权实现** | 已实现登录页 + 路由守卫 + `v-permission` 按钮级权限 | 已消除 |
+| R7 | **（已修复）Admin 面板无鉴权实现** | 已实现登录页 + 路由守卫（按 `meta.permissions` 校验）。按钮级指令 `v-permission` 两端都已注册，但**目前只有 App 端实际用上**（`AccountBook` / `RoomList` / `FileList` 共 6 处）；Admin 端 0 处使用，操作按钮对所有能进页面的人可见，缺权限时点了才被后端 403 | 已消除（Admin 按钮级为待补项） |
 
 ### 🟢 低风险
 
@@ -112,7 +127,7 @@ Access Token 过期 (401) → 共享拦截器自动发起刷新
 | R8 | **Access Token 有效期较短 (15m)** | 过期即触发刷新，刷新链路异常时用户体验差 | 可用性风险非安全风险，但可能诱导前端降低安全配置 |
 | R9 | **无额外 CSRF 防护 Token** | 仅依赖 SameSite Cookie 防御 CSRF，缺乏双重提交 Token 等纵深防御 | SameSite 在老旧浏览器中不支持 |
 | R10 | **数据库 seed 使用弱密码** | 种子管理员密码注释显示为 `123456`，初始密码过弱 | 初始环境可被轻易登录 |
-| R11 | **无密码修改后的 Token 吊销** | 无密码修改端点（当前无此功能），但未来实现时需注意刷新 Token 的吊销 | 密码修改后旧 Refresh Token 仍有效 |
+| R11 | **（已修复）密码重置后的 Token 吊销** | `POST /user/forgot-password` → `UserCrudService.resetPasswordByPhone` 写入新哈希后调用 `SessionService.removeAll`，连同设备级黑名单与用户令牌版本号一起递增，旧 Access / Refresh Token 立即失效 | 已消除 |
 
 ---
 
@@ -183,8 +198,8 @@ Access Token 过期 (401) → 共享拦截器自动发起刷新
 |------|------|------|
 | 架构设计 | ⭐⭐⭐⭐ | 双 Token + HttpOnly Cookie + 服务端吊销 + Token 轮换，架构优秀 |
 | 实现质量 | ⭐⭐⭐⭐ | 代码结构清晰，拦截器处理了 401 自动刷新和请求队列，细节到位 |
-| 密钥管理 | ⭐⭐ | 缺少 `.env.example`，密钥强度不足，本地环境存在泄露风险 |
-| 访问控制 | ⭐⭐ | 无 RBAC，所有认证用户权限一致，Admin 面板无鉴权 |
-| 防护措施 | ⭐⭐⭐ | 有 bcrypt、模糊错误、CORS、SameSite，但缺少限流和密码复杂度 |
+| 密钥管理 | ⭐⭐⭐ | 模板（`.env.example`）已补齐；**仓库里的历史提交仍带着真实 `.env`**，上线前必须轮换密钥并清理历史 |
+| 访问控制 | ⭐⭐⭐⭐ | 已落地 RBAC（3 角色 / 30 权限码 + `@Permissions` + 路由守卫）；Admin 端按钮级指令已注册但未使用 |
+| 防护措施 | ⭐⭐⭐⭐ | 有 bcrypt、模糊错误、CORS、SameSite、IP 限流 + 账号锁定；密码复杂度校验仍缺失 |
 
-**结论**: 鉴权架构设计本身是**优秀**的，采用了业界最佳实践（双 Token、HttpOnly、服务端吊销、Token 轮换）。主要风险集中在**密钥管理**和**防护覆盖**两个方面，属于可快速修复的配置/补充问题，不影响核心架构的正确性。
+**结论**: 鉴权架构设计本身是**优秀**的，采用了业界最佳实践（双 Token、HttpOnly、服务端吊销、Token 轮换）。早期版本里的主要缺口（无 RBAC、无限流、缺模板）均已补齐，**剩下最紧迫的一项不在代码里 —— 是密钥轮换与 Git 历史清理**（见 R2）。代码层面仅剩密码复杂度校验与 Admin 按钮级权限两处待补。

@@ -10,6 +10,8 @@ import { RedisService } from '../redis/redis.service'
 import { AuthKeys } from '../../common/constants/auth-keys'
 // JWT 过期时间解析工具
 import { parseJwtExpiry } from '../../common/utils/jwt.util'
+// 令牌版本号解析（与 JwtAuthGuard 共用同一套规则，避免两边默认值不一致）
+import { parseTokenVersion } from '../../common/utils/token-version.util'
 
 // 单个会话的元数据
 export interface SessionInfo {
@@ -29,16 +31,19 @@ export interface SessionInfo {
  * Redis 数据结构（key 格式见 common/constants/auth-keys.ts）：
  *  - refresh:token:{userId}:{sessionId}        String  单设备 RT，TTL 与 JWT 一致
  *  - session:{userId}                          Hash    会话元数据，field=sessionId, value=JSON
- *  - blacklist:token:{userId}                  String  用户级黑名单，踢全部设备
  *  - blacklist:session:{userId}:{sessionId}    String  设备级黑名单，仅踢该设备
+ *  - auth:ver:{userId}                         String  用户令牌版本号，踢全部设备
  *
  * 与单设备版的差异：
  *  - 同一用户可在多个设备同时登录，每个设备有独立 RT
  *  - 踢下线某设备不影响其他设备
  *  - 复用检测精确到 sessionId 维度
  *
- * 黑名单 TTL 必须 ≥ access token 剩余有效期，否则被踢的 access token
- * 会在黑名单过期后继续可用（见 blacklistTtl）。
+ * 「让 access token 立即失效」有两套粒度，分别对应上面两个吊销键：
+ *  - 单设备 → 设备级黑名单，TTL 必须 ≥ access token 剩余有效期，
+ *    否则被踢的 token 会在黑名单过期后继续可用（见 blacklistTtl）。
+ *  - 全部设备 → 递增令牌版本号，新令牌版本号必然等于当前值，故无需 TTL、
+ *    也不存在"过期后复活"的窗口。
  */
 @Injectable()
 export class SessionService {
@@ -174,14 +179,33 @@ export class SessionService {
   }
 
   /**
-   * 删除用户所有会话（踢全部设备 / 用户注销）
-   * 同时设置用户级黑名单覆盖剩余 access token 有效期
-   * @param ttl 黑名单有效期（秒），默认对齐 access token 有效期
+   * 取用户当前令牌版本号（不存在视为 0）
+   * 签发 access token 时写进 payload，校验时与当前值比较
    */
-  async removeAll(
-    userId: number,
-    ttl: number = this.blacklistTtl,
-  ): Promise<void> {
+  async getTokenVersion(userId: number): Promise<number> {
+    return parseTokenVersion(
+      await this.redisService.get(AuthKeys.tokenVersion(userId)),
+    )
+  }
+
+  /**
+   * 递增用户令牌版本号 —— 一步让该用户**所有**已签发的 access token 失效
+   * 见 auth-keys.ts 中 tokenVersion 的说明（为什么不用布尔型黑名单）
+   */
+  async bumpTokenVersion(userId: number): Promise<void> {
+    await this.redisService.incr(AuthKeys.tokenVersion(userId))
+  }
+
+  /**
+   * 删除用户所有会话（踢全部设备 / 用户注销 / 禁用用户 / 改密码）
+   *
+   * "让已签发的 access token 立即失效"这件事由递增版本号完成，而不是逐条
+   * 拉黑 sessionId：access token 是自包含的，不查库就能通过签名校验，
+   * 只有版本号对不上才会被拒。相比遍历会话列表逐个写黑名单，版本号是 O(1)，
+   * 且不依赖 listSessions 是否枚举成功 —— 踢全部设备是应急手段，
+   * 不能存在"会话列表读不到就静默什么都没踢掉"的可能。
+   */
+  async removeAll(userId: number): Promise<void> {
     // 取出所有 sessionId 用于删除对应的 RT
     const sessions = await this.listSessions(userId)
     // 并发删除所有 RT
@@ -190,8 +214,8 @@ export class SessionService {
     )
     // 删除整个 Hash
     tasks.push(this.redisService.del(AuthKeys.session(userId)))
-    // 加用户级黑名单（覆盖该用户全部设备）
-    tasks.push(this.redisService.set(AuthKeys.blacklistUser(userId), '1', ttl))
+    // 版本号 +1：该用户此前签发的全部 access token 立即失效
+    tasks.push(this.bumpTokenVersion(userId))
     await Promise.all(tasks)
   }
 

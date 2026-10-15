@@ -29,13 +29,12 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import * as bcrypt from 'bcrypt'
 import { User } from './entities/user.entity'
 import { LoginUserDto } from './dto/login-user.dto'
-import { RedisService } from '../redis/redis.service'
 import { RbacService } from '../rbac/rbac.service'
 import { LoginThrottlerService } from '../auth/login-throttler.service'
 import { SessionService, SessionInfo } from '../auth/session.service'
 import { AuditEvents } from '../audit/audit.events'
 import { parseJwtExpiry, getJwtExpiresIn } from '../../common/utils/jwt.util'
-import { AuthKeys, RT_ROTATION_GRACE_SECONDS } from '../../common/constants/auth-keys'
+import { RT_ROTATION_GRACE_SECONDS } from '../../common/constants/auth-keys'
 
 @Injectable()
 export class AuthService {
@@ -44,7 +43,6 @@ export class AuthService {
     private readonly userRepo: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly redisService: RedisService,
     private readonly rbacService: RbacService,
     private readonly throttlerService: LoginThrottlerService,
     private readonly sessionService: SessionService,
@@ -134,13 +132,21 @@ export class AuthService {
       throw new ForbiddenException('账号已被禁用')
     }
 
-    // 6. 登录成功 → 清失败计数 + 清强制下线黑名单
+    // 6. 登录成功 → 清失败计数
+    //    注意这里**不清理任何吊销状态**：设备级黑名单是按 sessionId 隔离的，
+    //    本次登录拿到的是全新的 sessionId，与旧设备的黑名单无关；用户级吊销
+    //    走的是令牌版本号（新令牌天然带最新版本），也不需要"解锁"。
+    //    旧实现会删 blacklist:token:{userId} 这个共享开关，结果是被踢下线的
+    //    用户只要重新登录一次，此前吊销掉的旧 access token 就全部复活了
+    //    （详见 common/constants/auth-keys.ts 里 tokenVersion 的说明）。
     await this.throttlerService.clearFailures(loginDto.username)
-    await this.redisService.del(AuthKeys.blacklistUser(user.id))
 
     // 7. 签发 Token
+    //    tokenVersion：把当前吊销版本号写进令牌，之后管理员踢「全部设备」时
+    //    版本号 +1，这些令牌的版本就比当前值小，校验时会被拒
     const sessionId = this.sessionService.newSessionId()
-    const payload = { sub: user.id, username: user.username, sessionId }
+    const tokenVersion = await this.sessionService.getTokenVersion(user.id)
+    const payload = { sub: user.id, username: user.username, sessionId, tokenVersion }
     const accessToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: getJwtExpiresIn(this.configService, 'JWT_ACCESS_EXPIRES_IN'),
@@ -198,7 +204,12 @@ export class AuthService {
     const user = await this.userRepo.findOneBy({ id: userId })
     if (!user) throw new NotFoundException('用户不存在')
 
-    const payload = { sub: user.id, username: user.username, sessionId }
+    // tokenVersion 必须在刷新时**重新读取**，不能沿用旧 RT 里的值：
+    // 用户可能在两次刷新之间被踢过全部设备，此时 RT 也已随会话一起删掉
+    // （正常情况下刷新根本走不到这里），但保留重读是防止未来放宽删除策略时
+    // 悄悄让旧版本号一路续期下去 —— 那样版本号就不再单调了
+    const tokenVersion = await this.sessionService.getTokenVersion(userId)
+    const payload = { sub: user.id, username: user.username, sessionId, tokenVersion }
     const newAccessToken = this.jwtService.sign(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: getJwtExpiresIn(this.configService, 'JWT_ACCESS_EXPIRES_IN'),

@@ -13,9 +13,9 @@
 如果按 100 分制：
 - 后端架构：**82 / 100**（拆分彻底、安全加固到位、TypeORM 边界清晰）
 - 前端架构：**70 / 100**（Pinia/composable 已落地，但 admin/app 双端代码复用率低，部分 View 文件超大）
-- 安全：**85 / 100**（JWT 双令牌 + 算法白名单 + CSRF + RBAC + Redis 黑名单 + 文件 magic-byte 全套到位）
+- 安全：**88 / 100**（JWT 双令牌 + 算法白名单 + 两级令牌吊销 + 登录限流 + RBAC + 文件 magic-byte 全套到位；扣分主要在密钥轮换与 Git 历史）
 - 可观测性：**55 / 100**（winston 文件日志有，但缺 metrics / APM / 告警）
-- 测试覆盖：**20 / 100**（仅 4 个 spec，覆盖率 < 5%）
+- 测试覆盖：**45 / 100**（14 个 spec / 202 个用例，覆盖全部工具函数、守卫、认证与聊天核心链路；仍未覆盖 controller 层与 `ai/*`）
 - 部署/运维：**75 / 100**（Docker Compose + Nginx 反代 + 多 Dockerfile 已就绪，缺灰度/回滚流程文档）
 
 ---
@@ -117,8 +117,8 @@ vue3-monorepo (pnpm workspace)
 
 | 编号 | 严重度 | 问题 | 影响 |
 |------|--------|------|------|
-| **B1** | 🟠 Major | **测试覆盖仍不足** | 后端约 8800 LOC，spec 已增至 10 个。仍未覆盖：`ai/*`、`audit/*`、`auth.service`、`file.service`、`dashboard`、各 controller |
-| **B2** | ✅ 已修复 | **`console.*` 残留** | 已清零：`grep console.` 仅剩 `sms.service.ts` 的一句说明性注释，无实际调用 |
+| **B1** | 🟠 Major | **测试覆盖仍不足** | 后端约 8800 LOC，spec 已增至 14 个。仍未覆盖：`ai/*`、`audit/*`、`auth.service`、`file.service`、`dashboard`、各 controller |
+| **B2** | ✅ 已修复 | **`console.*` 残留** | 业务代码已清零。仅剩 3 处**刻意保留**：`main.ts` 的两处（生产环境自检必须在 Nest logger 就绪**之前**打印，否则启动即退出时什么也看不到）与 `production-env.util.ts` 提示文案里的一条命令示例 |
 | **B3** | ✅ 已修复 | **Env 配置无 `.env.example`** | 已补齐根 `.env.example` 与 `packages/server/.env.example` 两份模板，逐项带注释 |
 | **B4** | ✅ 已修复 | **JWT Refresh Token 重用检测** | 已实现于 `common/guards/refresh-token.guard.ts`：请求中的 RT ≠ Redis 中存储的 RT 且不在宽限窗口内 → 判定令牌盗用，吊销该设备会话并抛 401 |
 | **B5** | 🟠 Major | **缺 OpenAPI/Swagger 导出物**作为客户端 SDK | admin / app 仍在手写类型，未走 `openapi-typescript` 自动生成 |
@@ -165,7 +165,7 @@ vue3-monorepo (pnpm workspace)
 | **F2** | 🟠 Major | **`RoleManage.vue` 445 行** 单文件含：列表 + 创建/编辑对话框 + 权限树配置对话框。建议拆 `<RoleList> <RoleEditDialog> <RolePermissionDialog>` |
 | **F3** | 🟠 Major | **`AuditLog.vue` 456 行** 同样含列表 + 详情抽屉 + 过滤表单。建议拆 |
 | **F4** | 🟠 Major | **`ChatRoom.vue` 708 行** 单文件：消息列表 + 输入区 + 成员侧滑 + 历史加载 + WebSocket 生命周期 + 滚动管理。建议至少拆 5 个子组件 |
-| **F5** | 🟠 Major | **`catch (e: any)` 泛滥** admin 16 处 + app 15 处，全前端 31 处。建议统一为 `tryCatch(async () => {...}, '操作失败')` 工具函数 |
+| **F5** | 🟠 Major | **`catch (e: any)` 泛滥** admin 16 处 + app 15 处，全前端 31 处。曾写过 `admin/src/utils/tryCatch.ts` 作为统一方案，但**全仓 0 处采用**，已按死代码删除；真要统一时应连同各页面一起改，而不是只留一个没人用的工具函数 |
 | **F6** | 🟡 Minor | `admin/views/audit/AuditLog.vue(321)` `PermissionManage.vue(237-238)` `RoleManage.vue(275-281,331)` 8 处 pre-existing TS 错（`DefaultRow` 类型不匹配）。本次未引入新错误，但既有问题需统一解决 |
 | **F7** | 🟡 Minor | admin 与 app 的 **chat 页面风格不同**（vant vs element-plus），但 `api/chat.ts` 客户端 socket 实现**几乎完全重复**，未抽到 `shared/` |
 | **F8** | 🟡 Minor | `app/views/auth/Login.vue` 用 `as` 断言类型，绕过 TS 检查；建议改为 authStore.login() 返回标准化 payload |
@@ -187,7 +187,7 @@ vue3-monorepo (pnpm workspace)
 - ✅ 路径穿越防御（CWE-22）
 - ✅ bcrypt 密码哈希
 - ✅ Login 限流（`login-throttler.service`）
-- ✅ Redis 黑名单 + status 校验（WS 拒绝禁用用户）
+- ✅ 两级令牌吊销（设备级黑名单 + 用户级令牌版本号）+ status 校验（WS 拒绝禁用用户）
 - ✅ helmet + CSP + compression + cookie-parser
 - ✅ SQL 注入：TypeORM 参数化（无 `LIKE '%' + ... + '%'` 拼接）
 
@@ -254,25 +254,33 @@ vue3-monorepo (pnpm workspace)
 
 ## 7. 测试覆盖（最薄弱环节）
 
-**当前：4 个 spec，覆盖 < 5%**
+**当前：14 个 spec / 202 个用例**
 
 ```
-packages/server/src/common/filters/global-exception.filter.spec.ts
-packages/server/src/modules/auth/login-throttler.service.spec.ts
-packages/server/src/modules/auth/session.service.spec.ts
-packages/server/src/modules/user/user-crud.service.spec.ts
+src/config/production-env.util.spec.ts        生产环境自检（占位密钥 / 短密钥 / 逃生舱）
+src/common/filters/global-exception.filter.spec.ts
+src/common/guards/refresh-token.guard.spec.ts  RT 轮换、复用检测、宽限窗口
+src/common/utils/client-ip.util.spec.ts        客户端 IP 取值（不可伪造 XFF）
+src/common/utils/pagination.util.spec.ts
+src/common/utils/random-filename.util.spec.ts  上传文件名随机化 + 扩展名白名单
+src/common/utils/token-version.util.spec.ts    令牌版本号解析 / 吊销判定
+src/modules/auth/login-throttler.service.spec.ts  IP 限流 + 账号锁定
+src/modules/auth/session.service.spec.ts       会话 CRUD、两级吊销、版本号单调性
+src/modules/chat/chat.gateway.spec.ts          WS 握手、presence、房间消息
+src/modules/chat/chat.service.spec.ts
+src/modules/rbac/rbac.service.spec.ts          权限缓存与降级
+src/modules/sms/sms.service.spec.ts            验证码防爆破 + mock 开关
+src/modules/user/user-crud.service.spec.ts
 ```
 
 | 缺失优先级 | 模块 | 关键测试点 |
 |------------|------|-----------|
 | 🔴 P0 | `audit.subscriber` | 事件驱动解耦验证 + 失败隔离 |
-| 🔴 P0 | `rbac.service` | 角色继承、缓存穿透/击穿/雪崩、Redis 降级 |
-| 🔴 P0 | `chat.gateway` | WS 握手、黑名单、status 校验（已加入 DB 兜底） |
-| 🟠 P1 | `auth.service` | login/refresh/logout/refresh token 重用检测 |
+| 🟠 P1 | `auth.service` | login/refresh/logout 主流程（其依赖的 throttler / session / guard 已各有单测） |
 | 🟠 P1 | `file.service` | magic-byte 误判、所有权校验 |
 | 🟠 P1 | `redis.service` | 重连策略 + 异常降级 |
 | 🟡 P2 | `ai/*` | LLM provider 切换、RAG 召回 |
-| 🟡 P2 | `sms.service` | mock 开关 + NODE_ENV 边界 |
+| 🟡 P2 | 各 controller | 参数校验、守卫装配（目前靠 e2e 兜底，见下） |
 | — | E2E | 原 `app.e2e-spec.ts` 测的是已不存在的 `AppController`，已删除；需要时按真实端点（如 `/health`）重写 |
 
 **前端测试：shared 已有 vitest 配置 + 2 个测试**（`auth-storage.test.ts` / `token-refresh.test.ts`）；admin / app 仍无单测
@@ -331,7 +339,7 @@ packages/server/src/modules/user/user-crud.service.spec.ts
 6. **拆分巨型 view 组件**（F2 + F3 + F4）
    - ChatRoom / AuditLog / RoleManage 拆 3-5 个子组件
 7. **统一 catch 工具**（F5）
-   - `tryCatch` 消除 31 处 `e: any`
+   - 把 31 处 `catch (e: any)` 收敛到统一入口；工具本身要随页面一起替换，否则就是下一个没人用的 `tryCatch.ts`
 8. **CI Pipeline**（O1 + O10）
    - GitHub Actions：lint + type-check + test + build
 9. **Rate Limit on kick / toggle-status**（S3）

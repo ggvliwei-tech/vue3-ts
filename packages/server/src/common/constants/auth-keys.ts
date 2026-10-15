@@ -29,19 +29,34 @@ export const AuthKeys = {
   session: (userId: number) => `session:${userId}`,
 
   /**
-   * 用户级黑名单：踢该用户「全部设备」时写入
-   * 场景：forceKick 不传 sessionId、logout-all
-   */
-  blacklistUser: (userId: number) => `blacklist:token:${userId}`,
-
-  /**
    * 设备级黑名单：仅让「单个设备」的 access token 立即失效
    * 场景：RT 复用检测命中、踢指定设备
-   * 与用户级黑名单分开是为了保证"多设备会话互不影响"——
-   * 单设备出问题不应该把该用户其他设备一起踢下线。
+   * 会话粒度是有意为之：一台设备出问题不该把该用户其他设备一起踢下线。
    */
   blacklistSession: (userId: number, sessionId: string) =>
     `blacklist:session:${userId}:${sessionId}`,
+
+  /**
+   * 用户令牌版本号：单调递增的整数，踢该用户「全部设备」时 +1。
+   * 场景：forceKick 不传 sessionId、logout-all、禁用用户、改密码
+   *
+   * 签发 access token 时把当时的版本号写进 payload.tokenVersion，
+   * 校验时只要 payload 里的版本 < 当前版本，就说明这个令牌签发于某次
+   * 「全部设备下线」之前，直接拒绝。
+   *
+   * 为什么不用「用户级黑名单布尔值」（旧实现）：
+   * 旧键 `blacklist:token:{userId}` 是"有没有被踢过"的开关，而登录成功必须把它
+   * 删掉，否则刚签发的新令牌也会被同一个键拦下、用户 15 分钟内谁都登不进来。
+   * 于是产生了这样一个漏洞链路：管理员踢掉该用户全部设备（例如怀疑令牌泄露）
+   * → 用户随后正常登录一次 → 旧黑名单被清除 → **此前被吊销的那些 access token
+   * 全部复活**，在各自剩余有效期内继续可用。吊销被别人的一次登录撤销了。
+   * 版本号方案没有这个共享开关，登录无需清理任何东西：新令牌版本号天然等于当前值。
+   *
+   * 刻意**不设过期时间**：计数器一旦过期就会从 0 重新开始，版本号回退会让
+   * "小于当前版本"的比较失效（旧令牌反而显得比当前版本新）。每个被踢过的用户
+   * 才有一条，占用可以忽略。
+   */
+  tokenVersion: (userId: number) => `auth:ver:${userId}`,
 }
 
 /**

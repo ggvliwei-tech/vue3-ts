@@ -212,7 +212,7 @@ sys_role          sys_permission        sys_role_permission     sys_user_role
 
 | 事件 | 方向 | payload | 描述 |
 |------|------|---------|------|
-| `connect` | C→S | (handshake.auth.token) | WS 握手，触发 JWT 校验 + 黑名单 + status 检查 |
+| `connect` | C→S | (handshake.auth.token) | WS 握手，触发 JWT 校验 + 吊销状态 + RBAC + status 检查 |
 | `join-room` | C→S | `{ roomId }` | 加入房间（DB 记录 + Socket.IO join + 广播 member-joined） |
 | `leave-room` | C→S | `{ roomId }` | 离开房间 |
 | `send-msg` | C→S | `{ roomId, content }` | 发消息（DTO 校验 + 持久化 + 广播 new-msg） |
@@ -231,9 +231,13 @@ sys_role          sys_permission        sys_role_permission     sys_user_role
 - ✅ **多端在线状态**：room-joined 时下发成员列表，前端维护 `onlineUserIds: Set<number>`
 - ✅ **安全加固**：
   - WS 握手 JWT 算法白名单 `algorithms: ['HS256']`
-  - 黑名单校验（与 JwtAuthGuard 一致）
+  - 吊销状态校验（与 JwtAuthGuard 一致：设备级黑名单 + 用户级令牌版本号）
+  - RBAC 校验 `chat:room`（REST 上的 PermissionsGuard 管不到长连接，不补的话可绕过前端直连 socket）
   - 实时校验 user.status（不发过期 token 给被禁用账号）
-  - send-msg 双重校验：Socket.IO rooms + DB 成员关系（本次新增）
+  - send-msg 双重校验：Socket.IO rooms + DB 成员关系
+  - ⚠️ **已知边界**：以上校验只在**握手时**执行一次。连接建立后被踢下线的用户，
+    已有 socket 不会立即断开（HTTP 侧每条请求都会查，WS 侧不会）。
+    要彻底闭合需引入 Redis pub/sub 通知网关主动断开，属后续迭代。
 - ✅ **断线重连**：前端 `reconnection: true, reconnectionAttempts: 5`，重连后自动 re-join
 
 ### 4.4 用户旅程示例：群聊

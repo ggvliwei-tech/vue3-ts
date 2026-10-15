@@ -8,6 +8,8 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 // 导入上传结果和文件存储接口
 import { UploadResult, FileStorage } from './file-storage.interface';
+// 导入随机文件名生成工具（local / oss 两个实现共用，避免其中一处被改漏）
+import { generateRandomFileName } from '../../../common/utils/random-filename.util';
 
 // 标记为可注入的服务，实现 FileStorage 接口
 @Injectable()
@@ -45,9 +47,10 @@ export class LocalStorage implements FileStorage {
       fs.mkdirSync(targetFolder, { recursive: true });
     }
 
-    // 生成唯一文件名：时间戳 + 随机字符串 + 扩展名，防止覆盖
-    const ext = path.extname(file.originalname);
-    const saveName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    // 生成唯一文件名：密码学随机 + 扩展名，防止覆盖
+    // 不用「时间戳 + Math.random()」的原因见 random-filename.util.ts 文件头：
+    // 那个组合是可预测、可枚举的，而本地上传目录没有鉴权，URL 泄露等于文件公开。
+    const saveName = generateRandomFileName(file.originalname);
     // 拼接文件完整存储路径
     const fullPath = path.join(targetFolder, saveName);
 

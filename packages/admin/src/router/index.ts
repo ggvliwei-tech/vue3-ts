@@ -67,11 +67,14 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '权限管理', permissions: ['permission:list'] },
       },
       {
-        // 审计日志（管理端）：需要 admin:audit 权限码
+        // 审计日志（管理端）：只认 admin:audit。
+        // 不能把 user:audit 也列进来 —— meta.permissions 是「任一即可」，
+        // 而本页调的是管理端接口（@Permissions('admin:audit')），
+        // 只持 user:audit 的人进得来页面、接口却全 403，是条死路由。
         path: 'audit',
         name: 'AuditLog',
         component: () => import('@/views/audit/AuditLog.vue'),
-        meta: { title: '审计日志', permissions: ['admin:audit', 'user:audit'] },
+        meta: { title: '审计日志', permissions: ['admin:audit'] },
       },
     ],
   },

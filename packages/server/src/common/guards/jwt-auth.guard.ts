@@ -15,6 +15,8 @@ import { ConfigService } from '@nestjs/config'
 import { RedisService } from '../../modules/redis/redis.service'
 // 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
 import { AuthKeys } from '../constants/auth-keys'
+// 令牌版本号解析/判定（与 SessionService 共用同一套规则）
+import { isTokenRevoked, parseTokenVersion } from '../utils/token-version.util'
 // RBAC 服务，用于加载用户角色和权限
 import { RbacService } from '../../modules/rbac/rbac.service'
 // nest-winston 日志
@@ -26,7 +28,7 @@ import { Logger as WinstonLogger } from 'winston'
  *
  * 职责：
  *  1. 校验请求头中的 Bearer Token 格式与签名
- *  2. 检查 Redis 黑名单（强制下线拦截）
+ *  2. 检查吊销状态（强制下线拦截）：设备级黑名单 + 用户令牌版本号
  *  3. 从 RbacService 查询用户角色/权限码，挂载到 request.user
  *
  * 注：此守卫不直接查 sys_user 表，需要完整用户信息时控制器自行注入 UserCrudService
@@ -69,27 +71,35 @@ export class JwtAuthGuard implements CanActivate {
         secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
       })
 
-      // 第四步：检查 Redis 黑名单（强制下线拦截）
+      // 第四步：检查吊销状态（强制下线拦截）
       // 两种粒度都要查，缺任一种都会让对应的踢下线操作失效：
-      //  - blacklist:token:{userId}                踢「全部设备」（forceKick 不带 sessionId / logout-all）
-      //  - blacklist:session:{userId}:{sessionId}  踢「指定设备」（RT 复用检测 / forceKick 带 sessionId）
+      //  - 设备级黑名单 blacklist:session:{userId}:{sessionId}
+      //      踢「指定设备」（RT 复用检测 / forceKick 带 sessionId）
+      //  - 用户令牌版本号 auth:ver:{userId}
+      //      踢「全部设备」（forceKick 不带 sessionId / logout-all / 禁用 / 改密）
+      //      token 里带的版本 < 当前版本 ⇒ 签发于某次全量吊销之前 ⇒ 拒绝
       // sessionId 是签发 access token 时的必填字段（见 AuthService.login），故无条件检查
-      // 黑名单检查失败不应阻断请求（避免 Redis 抖动导致 401）
+      // 吊销检查失败不应阻断请求（避免 Redis 抖动导致 401）
       try {
-        const results = await Promise.all([
-          this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
+        const [sessionHit, versionRaw] = await Promise.all([
           this.redisService.exists(
             AuthKeys.blacklistSession(payload.sub, payload.sessionId),
           ),
+          this.redisService.get(AuthKeys.tokenVersion(payload.sub)),
         ])
-        if (results.some((hit) => hit)) {
+        // 旧令牌可能没有 tokenVersion 字段（影响可忽略：access token 只有
+        // 15 分钟寿命，不存在跨越版本升级的存量令牌），缺失按 0 处理
+        if (
+          sessionHit ||
+          isTokenRevoked(payload.tokenVersion, parseTokenVersion(versionRaw))
+        ) {
           throw new UnauthorizedException('账号已在其他地方被强制下线，请重新登录')
         }
       } catch (err) {
         if (err instanceof UnauthorizedException) throw err
-        // 黑名单检查失败仅记日志，不阻断（fail-open）
+        // 吊销检查失败仅记日志，不阻断（fail-open）
         this.logger.warn(
-          `[Auth] 黑名单检查失败: ${(err as Error).message}`,
+          `[Auth] 吊销状态检查失败: ${(err as Error).message}`,
         )
       }
 
