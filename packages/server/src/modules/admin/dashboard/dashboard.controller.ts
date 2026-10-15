@@ -8,7 +8,7 @@ import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard'
 import { PermissionsGuard } from '../../../common/guards/permissions.guard'
 // 权限装饰器
 import { Permissions } from '../../../common/decorators/permissions.decorator'
-// Dashboard Service（C6 拆分后由 Service 承担全部查询逻辑）
+// Dashboard Service（由 Service 承担全部查询逻辑）
 import { DashboardService } from './dashboard.service'
 
 /**

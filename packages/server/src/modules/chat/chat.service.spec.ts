@@ -287,7 +287,7 @@ describe('ChatService', () => {
       ])
 
       const res = await service.getMessages(
-        { roomId: 5, page: 1, limit: 50 } as any,
+        { roomId: 5, page: 1, limit: 50 },
         1,
       )
       expect(res).toEqual({
@@ -308,7 +308,7 @@ describe('ChatService', () => {
       })
       mockManager.save.mockResolvedValueOnce({ id: 1 })
 
-      const room = await service.createRoom({ name: 'r7' } as any, 1, 'alice')
+      const room = await service.createRoom({ name: 'r7' }, 1, 'alice')
 
       expect(room.id).toBe(7)
       expect(mockRoomRepo.manager.transaction).toHaveBeenCalled()

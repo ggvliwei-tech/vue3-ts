@@ -79,7 +79,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           data = { errors: r.message }
         } else if (typeof r.code === 'number') {
           // 已经是业务码
-          businessCode = r.code as BusinessCode
+          businessCode = r.code
         }
       }
     }

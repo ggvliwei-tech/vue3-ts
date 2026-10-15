@@ -4,7 +4,7 @@
 
 // 从 vue 库导入 createApp 函数，用于创建 Vue 应用实例
 import { createApp } from 'vue'
-// 引入 Pinia 状态管理（M1）
+// 引入 Pinia 状态管理
 import { createPinia } from 'pinia'
 // 导入根组件 App.vue
 import App from './App.vue'
@@ -12,9 +12,7 @@ import App from './App.vue'
 import router from './router'
 // 统一认证刷新配置：single-flight 刷新 + 静默续期 + 跨标签页同步
 import { configureAuth } from '@project/shared/token-refresh'
-// 旧版 localStorage 键的一次性迁移
-import { migrateLegacyStorage } from '@project/shared/auth-storage'
-// M1：使用 AuthStore 统一管理 token / userInfo
+// 使用 AuthStore 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 导入用户相关的 API 方法，其中包含 refreshToken 方法
 import { refreshToken } from '@/api/user'
@@ -29,12 +27,8 @@ import 'element-plus/es/components/message/style/css'
 // 手动导入 MessageBox 消息弹框组件的 CSS 样式
 import 'element-plus/es/components/message-box/style/css'
 
-// 创建 Pinia 实例（M1）
+// 创建 Pinia 实例
 const pinia = createPinia()
-
-// 先把历史版本写在 localStorage 平铺键（token / username / roles / permissions）
-// 上的登录态迁移到统一键，必须早于任何鉴权判断
-migrateLegacyStorage()
 
 // 配置认证刷新
 //
@@ -70,8 +64,8 @@ app.directive('permission', vPermission)
 //
 // 注意这里的 .finally 是**会阻塞挂载**的：syncPermissions 内部虽然吞掉了异常，
 // 但 Promise 仍要等 profile 请求 settle 才回调，而 axios 默认超时 15s。
-// 后端慢时首屏就是一段白屏。注释写「不阻塞挂载」是不对的；要真非阻塞，
-// 得把 app.mount 移出 finally，改成挂载后在后台刷新。
+// 后端慢时首屏就是一段白屏。要真非阻塞，得把 app.mount 移出 finally，
+// 改成挂载后在后台刷新。
 syncPermissions().finally(() => {
   app.mount('#app')
 })

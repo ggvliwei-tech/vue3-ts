@@ -15,16 +15,14 @@ export const CurrentUser = createParamDecorator(
     // 如果没有载荷数据，返回 null
     if (!payload) return null;
 
-    // 兼容两种 user 格式：
-    // 1. JWT payload: { sub, username }
-    // 2. User 实体对象: { id, username, ... }
+    // 统一以 JWT 载荷的 sub 作为用户 ID 来源。
+    // JwtAuthGuard 与 RefreshTokenGuard 都会挂载 sub，并各自补齐 id / roles 等字段
+    // （见两个 guard 里对 request.user 的赋值），故这里只需保证 id 与 sub 对齐。
     const user = {
-      // 优先取 payload.sub（JWT 格式），否则取 payload.id（实体对象格式）
-      id: payload.sub || payload.id,
-      // 获取用户名
-      username: payload.username,
       // 展开原始载荷的所有字段
       ...payload,
+      // 用户 ID 以 sub 为准
+      id: payload.sub,
     };
 
     // 如果传了字段名（如 @CurrentUser('username')），返回指定字段

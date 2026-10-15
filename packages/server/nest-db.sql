@@ -1,26 +1,41 @@
 -- =============================================
--- NestJS11 项目数据库初始化脚本 (MySQL 8.0+)
--- 数据库：nest_db
+-- 项目数据库初始化脚本 (MySQL 8.0+)
+-- 数据库：vue3_monorepo（与 docker-compose.yml / .env.example 的 DB_NAME 默认值一致）
 -- 字符集：utf8mb4 / utf8mb4_unicode_ci
+--
+-- 这是仓库中**唯一**的 SQL 脚本：建库、建表、索引、外键、初始数据全在本文件内。
+--   · 部署链路：docker-compose.yml 把它挂成 mysql 容器的
+--     /docker-entrypoint-initdb.d/01-schema.sql，容器首次启动时自动执行。
+--   · 手工执行：mysql -h <host> -u <user> -p < packages/server/nest-db.sql
+--
+-- ⚠️ 重跑 = 完整重置，会清空全部业务数据
+--   每张表都是先 DROP 再 CREATE，所以重复执行的结果是「回到出厂状态」：业务数据、
+--   用户、上传记录全部消失，只剩内置的 admin 与 3 个角色 / 权限码。
+--   这正是本脚本兼任「环境重置」的方式（原 sql/clean-test-data.sql 已合并至本脚本）。
+--   对生产库执行前，务必先 mysqldump 备份。
+--
+-- ⚠️ 重置后必须一并清理 Redis
+--   登录态与 refresh token 存在 Redis（见 modules/auth/session.service.ts），不在 MySQL，
+--   本脚本管不到。重置数据库后 Redis 里的旧会话依然有效，且其指向的 user_id 会重新
+--   落到新建的 admin 身上。要让旧登录态真正失效，需另行清 Redis：
+--     FLUSHDB，或删除 refresh:token:* / session:* 前缀的 key。
+--
 -- 说明：
 --   1. 【本脚本是表结构的唯一权威来源】
---      app.module.ts 里 TypeORM 写死 synchronize: false，实体只提供元数据，
+--      app.module.ts 里 TypeORM 写死 synchronize: false，实体只提供映射元数据，
 --      不会建表也不会改表；真正决定线上结构的就是这个文件。
 --   2. 结构与 TypeORM 实体是**手工对齐**的，并非从实体生成：
 --      本文件里的部分索引 / 外键在实体装饰器上并没有对应声明（如 sys_user 的
 --      uk_sys_user_phone），改动实体时请同步改这里，否则两边会静默漂移。
---   3. 幂等可重复执行（先 DROP 再 CREATE + INSERT IGNORE 初始数据）
---      —— 注意 DROP 会清空数据，这是 bootstrap 脚本，不是增量升级脚本；
---      已上线的库请改用 upgrade-*.sql。
---   4. 执行前请确认 DB_HOST / DB_USER / DB_PWD 与 .env 配置一致
+--   3. 执行前请确认 DB_HOST / DB_USER / DB_PWD 与 .env 配置一致
 -- =============================================
 
 -- 1. 创建数据库（不存在则新建）
-CREATE DATABASE IF NOT EXISTS `nest_db`
+CREATE DATABASE IF NOT EXISTS `vue3_monorepo`
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE `nest_db`;
+USE `vue3_monorepo`;
 
 -- 关闭外键检查，避免 DROP 因外键依赖报错
 SET FOREIGN_KEY_CHECKS = 0;
@@ -267,9 +282,14 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- 16. 初始数据（INSERT IGNORE 幂等）
 -- =============================================
 
--- 16.1 管理员账号（密码：123456，对应 bcrypt 哈希）
+-- 16.1 管理员账号
+-- ⚠️ 密码为 123456（与下面的 bcrypt 哈希对应）。这是公开在代码库里的弱口令，
+--    上线后必须立即登录并修改，否则任何能看到本仓库的人都能进后台。
+--    本脚本无法强制改密，请把「首登改密」写进上线清单。
+--    换哈希时请核对长度 = 60：bcrypt 哈希是 `$2b$10$` + 22 位 salt + 31 位 digest，
+--    少一位不会报错，只会让所有密码都比对失败（历史版本就踩过这个坑）。
 INSERT IGNORE INTO `sys_user` (`username`, `password`, `phone`, `status`, `createTime`)
-VALUES ('admin', '$2b$10$vI8aWBqBg5nTRcXeaMlyLu/E0c2p61c/jAF7oypnE7j4Vbtc9Qv2', '13800000000', 1, UNIX_TIMESTAMP() * 1000);
+VALUES ('admin', '$2b$10$9wbyVpnAtdYZk4KFhKvtZuISzLEgXB5tlw06.XbXMYlwZYd4oC/Ui', '13800000000', 1, UNIX_TIMESTAMP() * 1000);
 
 -- 16.2 三个内置角色
 INSERT IGNORE INTO `sys_role` (`code`, `name`, `description`, `status`, `createTime`) VALUES
@@ -345,7 +365,7 @@ WHERE u.username <> 'admin'
   AND NOT EXISTS (SELECT 1 FROM `sys_user_role` ur WHERE ur.user_id = u.id);
 
 -- =============================================
--- 17. 性能优化（M9 + M13）
+-- 17. 性能优化
 -- 17.1 sys_user.createTime 索引：用于按时间筛选 / 排序用户列表
 -- =============================================
 ALTER TABLE `sys_user`
@@ -362,7 +382,7 @@ ALTER TABLE `sys_audit_log`
 ALTER TABLE `sys_audit_log`
   ADD INDEX `idx_audit_user_time` (`user_id`, `createTime`) COMMENT '按用户+时间组合查询';
 
--- 18. RBAC join 表外键约束（M13 补齐）
+-- 18. RBAC join 表外键约束
 -- 18.1 先清理孤儿数据（FK 添加前必须确保无悬挂引用）
 DELETE ur FROM `sys_user_role` ur
   LEFT JOIN `sys_user` u ON u.id = ur.user_id

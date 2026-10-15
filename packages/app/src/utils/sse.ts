@@ -5,7 +5,7 @@
  * 本次重构：
  *  - token 参数变为可选；不传则从 **@project/shared/auth-storage** 读取
  *    （不走 AuthStore —— pinia 未激活时 useAuthStore() 会直接抛错）
- *  - 抽取通用消费逻辑为私有 consume()，消除两个函数的重复
+ *  - 抽取通用消费逻辑为私有 consume()，供唯一的导出函数复用
  *
  * 注意本模块用原生 fetch，**绕开了 axios 拦截器**：401 不会自动刷新 token，
  * 只会抛 `SSE 请求失败: 401 Unauthorized`。调用方（AiChat.vue）需要靠这个文案
@@ -99,27 +99,10 @@ function resolveToken(explicit?: string): string {
 }
 
 /**
- * 通过 fetch 消费 SSE 流式输出（不带历史）
- * @param question 用户提问
- * @param token 可选；不传则自动从 AuthStore 取
- * @param callbacks 回调
- * @param signal AbortSignal
- */
-export async function consumeSSE(
-  question: string,
-  token: string | undefined,
-  callbacks: StreamCallbacks,
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = `${getBaseURL()}/api/v1/ai/stream?question=${encodeURIComponent(question)}`
-  await consume(url, resolveToken(token), callbacks, signal)
-}
-
-/**
  * 通过 fetch 消费 SSE 流式输出（带 sessionId 上下文）
  * @param question 用户提问
  * @param sessionId 会话 ID
- * @param token 可选；不传则自动从 AuthStore 取
+ * @param token 可选；不传则从统一存储层（auth-storage）自动读取
  * @param callbacks 回调
  * @param signal AbortSignal
  */

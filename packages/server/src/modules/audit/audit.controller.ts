@@ -20,7 +20,7 @@ import { AuditService } from './audit.service'
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
-  // 查询审计日志：仅 admin 角色可访问（user:audit 权限码）
+  // 查询审计日志：需 user:audit 权限码
   @ApiOperation({ summary: '分页查询审计日志（需要 user:audit 权限）' })
   @ApiBearerAuth()
   @Permissions('user:audit')

@@ -53,10 +53,6 @@ export const TOKEN_STORAGE_KEY = 'auth.token'
 /** localStorage 中 userInfo 的键名 */
 export const USER_STORAGE_KEY = 'auth.userInfo'
 
-/** M1 重构前使用的旧键，只在一次性迁移时读取 */
-const LEGACY_TOKEN_KEY = 'token'
-const LEGACY_KEYS = ['token', 'username', 'roles', 'permissions'] as const
-
 /**
  * 安全获取 localStorage：
  * 隐私模式 / 禁用 Cookie / 非浏览器环境（SSR、单测）下访问会直接抛错
@@ -90,6 +86,7 @@ export function setToken(token: string): void {
     } else {
       ls.removeItem(TOKEN_STORAGE_KEY)
     }
+
   } catch {
     // 配额满 / 隐私模式：静默失败，内存态仍可用
   }
@@ -159,59 +156,4 @@ export function getTokenExp(): number {
 /** 当前 token 所属用户 ID，解析失败返回 0 */
 export function getUserIdFromToken(): number {
   return parseJwt(getToken())?.sub ?? 0
-}
-
-// ====================== 旧数据一次性迁移 ======================
-
-/** 从旧键安全读取字符串数组 */
-function readLegacyArray(ls: Storage, key: string): string[] {
-  try {
-    const raw = ls.getItem(key)
-    if (!raw) return []
-    const arr: unknown = JSON.parse(raw)
-    return Array.isArray(arr) ? arr.map(String) : []
-  } catch {
-    return []
-  }
-}
-
-/**
- * 把 M1 重构前写入的旧键（token / username / roles / permissions）
- * 迁移到新的统一键上，然后删除旧键。
- *
- * 只在新键不存在时迁移，避免覆盖用户已刷新过的较新状态。
- * 应在应用启动、任何鉴权判断之前调用一次。
- */
-export function migrateLegacyStorage(): void {
-  const ls = storage()
-  if (!ls) return
-  try {
-    if (!ls.getItem(TOKEN_STORAGE_KEY)) {
-      const legacyToken = ls.getItem(LEGACY_TOKEN_KEY)
-      if (legacyToken) {
-        ls.setItem(TOKEN_STORAGE_KEY, legacyToken)
-        const sub = parseJwt(legacyToken)?.sub
-        const info: StoredUserInfo = {
-          // 旧数据没有单独存 id，从 token 的 sub 还原；
-          // 万一老 token 没有 sub 则留 0，后续 syncPermissions 会用服务端数据覆盖
-          id: typeof sub === 'number' ? sub : 0,
-          username: ls.getItem('username') ?? '',
-          roles: readLegacyArray(ls, 'roles'),
-          permissions: readLegacyArray(ls, 'permissions'),
-        }
-        ls.setItem(USER_STORAGE_KEY, JSON.stringify(info))
-      }
-    }
-  } catch {
-    // 迁移失败不阻塞启动，用户重新登录即可
-  }
-
-  // 无论是否发生迁移，旧键都不再被任何代码读取，一律清掉避免长期残留
-  for (const key of LEGACY_KEYS) {
-    try {
-      ls.removeItem(key)
-    } catch {
-      // 忽略
-    }
-  }
 }

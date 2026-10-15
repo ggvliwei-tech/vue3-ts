@@ -44,7 +44,7 @@ export class ChatController {
   @Get('rooms')
   @ApiOperation({ summary: '获取房间列表' })
   @Permissions('chat:room')
-  // M5：使用 DTO 替换裸 @Query，自动校验 + 转换
+  // 使用 DTO 替换裸 @Query，自动校验 + 转换
   async getRoomList(@Query() dto: QueryRoomListDto) {
     // 调用服务获取分页房间列表
     return this.chatService.getRoomList(dto.page ?? 1, dto.limit ?? 20);
@@ -110,7 +110,7 @@ export class ChatController {
   @Get('room/:id')
   @ApiOperation({ summary: '获取房间详情' })
   @Permissions('chat:room')
-  // M6 修复：路由参数应为 @Param，而非 @Query
+  // 路由参数应为 @Param，而非 @Query
   // @Query('id') 在 path 中永远拿不到 id 值，导致 getRoomById 永远 NaN
   async getRoomDetail(@Param('id') id: string, @Request() req) {
     // 调用服务获取房间详情（service 内部校验请求者是否为该房间成员）
@@ -121,7 +121,7 @@ export class ChatController {
   @Post('room/:id/delete')
   @ApiOperation({ summary: '删除房间' })
   @Permissions('chat:room-delete')
-  // M6 修复：同上
+  // 同上
   async deleteRoom(@Param('id') id: string, @Request() req) {
     // 管理员可删任意房间，普通用户仅能删自己创建的（归属校验在 service 内）
     const isAdmin = (req.user.roles ?? []).includes('admin');

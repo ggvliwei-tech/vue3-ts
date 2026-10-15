@@ -6,8 +6,8 @@ import { TypeOrmModule } from '@nestjs/typeorm'; // TypeORM 数据库模块，�
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt'; // JWT 模块，用于 Token 的签发和验证
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'; // 限流模块 + 守卫，用于接口频率限制
 import { WinstonModule } from 'nest-winston'; // nest-winston 日志模块
-import { EventEmitterModule } from '@nestjs/event-emitter'; // C5：业务与审计解耦
-import { ScheduleModule } from '@nestjs/schedule'; // M9：审计日志定时清理
+import { EventEmitterModule } from '@nestjs/event-emitter'; // 业务与审计解耦
+import { ScheduleModule } from '@nestjs/schedule'; // 审计日志定时清理
 import configuration from './config/configuration'; // 自定义配置加载函数，对环境变量做预处理
 import { winstonConfig } from './common/logger/winston.config'; // 日志输出配置（控制台 + 文件 + 错误分离）
 import { RbacModule } from './modules/rbac/rbac.module'; // RBAC 权限模块
@@ -35,13 +35,13 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
     // 必须在其他可能产生日志的模块前注册
     WinstonModule.forRoot(winstonConfig),
 
-    // C5：全局 EventEmitter，业务服务通过 emit('audit.log') 与审计解耦
+    // 全局 EventEmitter，业务服务通过 emit('audit.log') 与审计解耦
     EventEmitterModule.forRoot({
       // 设为全局以便任何模块都能通过 EventEmitter2 注入
       global: true,
     }),
 
-    // M9：开启定时任务调度（审计日志清理等 cron job）
+    // 开启定时任务调度（审计日志清理等 cron job）
     ScheduleModule.forRoot(),
 
     JwtModule.registerAsync({ // JWT 模块异步注册配置
@@ -68,14 +68,14 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
         // nest-db.sql 才是权威 schema，实体装饰器只做映射元数据。
         // 上面这行注释掉的写法（NODE_ENV !== 'production'）才是"非生产环境自动同步"，
         // 当初为了规避同步误删列的风险改成了硬编码 false，别再按那句话理解。
-        // 改表结构请写增量 SQL（sql/upgrade-*.sql），不要指望实体改动会自动生效。
+        // 改表结构请直接改 nest-db.sql，不要指望实体改动会自动生效。
         // synchronize: process.env.NODE_ENV !== 'production',
         synchronize: false,
         logging: false, // 关闭 SQL 日志输出
         charset: 'utf8mb4', // 使用 utf8mb4 字符集，支持 emoji 等特殊字符
         supportBigNumbers: true, // 支持大数字类型
         bigNumberStrings: false, // 关闭大数强制转字符串，保持数字类型
-        // ========== M10：MySQL 连接池配置 ==========
+        // ========== MySQL 连接池配置 ==========
         // 生产环境推荐：pool 大小 ≈ (CPU 核数 × 2) + 硬盘数
         // 8C16G 单实例建议 20-30;过高会增加 DB 端 context switch
         extra: {

@@ -1,5 +1,5 @@
 /**
- * UserCrudService 单元测试（C5 拆分后）
+ * UserCrudService 单元测试
  *
  * 测试范围：
  *  1. create - 用户名重复抛 ConflictException
@@ -101,7 +101,7 @@ describe('UserCrudService', () => {
       mockUserRepo.create.mockImplementation((data) => data)
       mockUserRepo.save.mockImplementation(async (u) => ({ id: 1, ...u }))
 
-      await service.create(dto as any)
+      await service.create(dto)
 
       const saveCall = mockUserRepo.save.mock.calls[0][0]
       expect(saveCall.password).not.toBe(dto.password)

@@ -24,10 +24,12 @@ import {
   // ApiBearerAuth Swagger Bearer Token 认证标识装饰器
   ApiBearerAuth,
 } from '@nestjs/swagger';
-// P1-3：高频管理操作专用限流（防止恶意脚本批量踢人/封号）
+// 高频管理操作专用限流（防止恶意脚本批量踢人/封号）
 import { Throttle } from '@nestjs/throttler';
-// 用户服务，注入以调用业务逻辑方法
-import { UserService } from './user.service';
+// 认证服务：登录 / 刷新 / 退出 / 强制下线 / 会话管理
+import { AuthService } from './auth.service';
+// 用户 CRUD 服务：注册 / 查询 / 状态切换 / 重置密码
+import { UserCrudService } from './user-crud.service';
 // 注册用户 DTO，定义注册请求的数据结构和校验规则
 import { CreateUserDto } from './dto/create-user.dto';
 // 登录用户 DTO，定义登录请求的数据结构和校验规则
@@ -44,9 +46,9 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { RefreshTokenGuard } from '../../common/guards/refresh-token.guard';
 // 忘记密码 DTO
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
-// M5 + M7：用户列表分页参数 DTO
+// 用户列表分页参数 DTO
 import { QueryUserListDto } from './dto/query-user-list.dto';
-// C7 修复：注入 ConfigService 读取 CORS 白名单用于 Origin 校验
+// 注入 ConfigService 读取 CORS 白名单用于 Origin 校验
 import { ConfigService } from '@nestjs/config';
 
 // Swagger 标签装饰器，将此控制器下的接口归类到 "用户管理模块" 分组
@@ -56,16 +58,17 @@ import { ConfigService } from '@nestjs/config';
 export class UserController {
   // 允许的 Origin 列表（从 CORS_ORIGINS 环境变量读，逗号分隔）
   private readonly allowedOrigins: string[]
-  // 构造函数注入用户服务实例，private readonly 使其成为类属性
+  // 构造函数注入两个专职服务实例，private readonly 使其成为类属性
   constructor(
-    private readonly userService: UserService,
+    private readonly authService: AuthService,
+    private readonly userCrudService: UserCrudService,
     private readonly configService: ConfigService,
   ) {
     this.allowedOrigins = this.configService.get<string[]>('CORS_ORIGINS') || []
   }
 
   /**
-   * C7 修复：CSRF 防御 - 检查 Origin 头是否在白名单内
+   * CSRF 防御 - 检查 Origin 头是否在白名单内
    * 仅对写操作生效（login/refresh/logout），避免跨站表单提交
    * sameSite=strict 已能挡住大部分 CSRF，这是防御纵深的第二层
    */
@@ -90,8 +93,8 @@ export class UserController {
   @Post('register')
   // 注册方法：接收 CreateUserDto 作为请求体参数，调用 service 创建用户
   register(@Body() createUserDto: CreateUserDto) {
-    // 调用用户服务的 create 方法创建用户并返回结果
-    return this.userService.create(createUserDto);
+    // 调用用户 CRUD 服务的 create 方法创建用户并返回结果
+    return this.userCrudService.create(createUserDto);
   }
 
   // Swagger 接口描述：通过手机号 + 验证码重置密码
@@ -103,8 +106,8 @@ export class UserController {
   @Post('forgot-password')
   // 忘记密码方法：接收 ForgotPasswordDto 作为请求体参数
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    // 调用用户服务重置密码
-    return this.userService.resetPasswordByPhone(dto);
+    // 调用用户 CRUD 服务重置密码
+    return this.userCrudService.resetPasswordByPhone(dto);
   }
 
   // Swagger 接口描述：用户登录，RefreshToken 存入 HttpOnly Cookie
@@ -120,7 +123,7 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象，passthrough: true 表示不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
-    // C7: Origin 白名单校验（防 CSRF）
+    // Origin 白名单校验（防 CSRF）
     this.assertSafeOrigin(req)
     // 提取客户端 IP：优先取代理转发的 X-Forwarded-For，否则取 socket.remoteAddress
     // 兼容 Nginx/Cloudflare 等反代场景
@@ -130,8 +133,8 @@ export class UserController {
       'unknown'
     // 提取 User-Agent 头，用于多设备会话展示
     const userAgent = (req.headers['user-agent'] as string) || 'unknown'
-    // 调用用户服务的 login 方法，传入 ip + userAgent 用于 IP 限流与多设备会话
-    const { accessToken, refreshToken, userInfo } = await this.userService.login(dto, { ip, userAgent });
+    // 调用认证服务的 login 方法，传入 ip + userAgent 用于 IP 限流与多设备会话
+    const { accessToken, refreshToken, userInfo } = await this.authService.login(dto, { ip, userAgent });
 
     // ========== 写入 HttpOnly Cookie ==========
     // 判断是否为生产环境，用于决定 Cookie 的 secure 属性
@@ -140,7 +143,7 @@ export class UserController {
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true, // JS 无法读取 Cookie，核心安全配置，防止 XSS 攻击
       secure: isProd, // 生产环境开启 Secure 标志，仅通过 HTTPS 传输 Cookie
-      // C7 修复：sameSite 改 'strict' 阻止任何跨站请求携带 Cookie
+      // sameSite 改 'strict' 阻止任何跨站请求携带 Cookie
       // 注意：strict 在跨域跳转场景（如 SSO）会失效，本项目没有此场景故可放心使用
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000, // Cookie 有效期 7 天（毫秒），与 refreshToken 有效期一致
@@ -166,11 +169,11 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象，passthrough: true 不拦截返回
     @Res({ passthrough: true }) res: Response,
   ) {
-    // C7: Origin 白名单校验（防 CSRF）
+    // Origin 白名单校验（防 CSRF）
     this.assertSafeOrigin(req)
-    // 调用用户服务的 refreshToken 方法，传入 sessionId 定位到具体设备
+    // 调用认证服务的 refreshToken 方法，传入 sessionId 定位到具体设备
     // sessionId 由 RefreshTokenGuard 从 JWT payload 中提取并挂到 req.user
-    const { accessToken, refreshToken: newRefreshToken } = await this.userService.refreshToken(user.id, user.sessionId, user.rtGrace);
+    const { accessToken, refreshToken: newRefreshToken } = await this.authService.refreshToken(user.id, user.sessionId, user.rtGrace);
 
     // 用新的 refreshToken 覆盖旧 Cookie，实现 Token 轮换（更安全）
     // 判断是否为生产环境
@@ -179,7 +182,7 @@ export class UserController {
     res.cookie('refresh_token', newRefreshToken, {
       httpOnly: true, // JS 无法读取，防止 XSS 攻击
       secure: isProd, // 生产环境仅通过 HTTPS 传输
-      sameSite: 'strict', // C7 修复：严格 sameSite 防 CSRF
+      sameSite: 'strict', // 严格 sameSite 防 CSRF
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 天有效期（毫秒）
       path: '/api/v1/user', // Cookie 生效路径
     });
@@ -188,8 +191,8 @@ export class UserController {
     return { accessToken };
   }
 
-  // Swagger 接口描述：退出登录，清空 Cookie 和数据库中的 RefreshToken
-  @ApiOperation({ summary: '退出登录：清空Cookie+数据库RefreshToken' })
+  // Swagger 接口描述：退出登录，清空 Cookie 和 Redis 中的 RefreshToken
+  @ApiOperation({ summary: '退出登录：清空Cookie+Redis RefreshToken' })
   // Post 路由装饰器，登出接口路径为 POST /user/logout
   @Post('logout')
   // 使用 JwtAuthGuard 守卫，确保请求携带有效的 JWT Token
@@ -201,10 +204,10 @@ export class UserController {
     // Res 装饰器获取 Express 响应对象
     @Res({ passthrough: true }) res: Response,
   ) {
-    // 调用用户服务的 logout 方法，删除当前 session 的 RT 和会话元数据
-    await this.userService.logout(user.id, user.sessionId);
+    // 调用认证服务的 logout 方法，删除当前 session 的 RT 和会话元数据
+    await this.authService.logout(user.id, user.sessionId);
     // 使用 res.clearCookie 清除浏览器中的 refresh_token Cookie
-    // C7 修复：与 set 时保持一致（含 secure）
+    // 与 set 时保持一致（含 secure）
     const isProd = process.env.NODE_ENV === 'production'
     res.clearCookie('refresh_token', {
       httpOnly: true, // 与设置时保持一致的 httpOnly 标志
@@ -224,7 +227,7 @@ export class UserController {
   // 双重守卫：先 JWT 认证注入 roles/permissions，再 PermissionsGuard 校验 user:kick 权限码
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('user:kick')
-  // P1-3：踢人操作专用限流 —— 60 秒内最多 5 次（防脚本批量踢人）
+  // 踢人操作专用限流 —— 60 秒内最多 5 次（防脚本批量踢人）
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post(':id/kick')
   // 强制下线方法：接收路由参数 userId、**请求体**中的 sessionId（可选）
@@ -235,8 +238,8 @@ export class UserController {
     // sessionId 可选，不传则踢全部设备
     @Body() body: { sessionId?: string } | undefined,
   ) {
-    // 调用用户服务的 forceKick 方法；传入 body.sessionId 可指定踢某设备
-    return this.userService.forceKick(Number(userId), body?.sessionId);
+    // 调用认证服务的 forceKick 方法；传入 body.sessionId 可指定踢某设备
+    return this.authService.forceKick(Number(userId), body?.sessionId);
   }
 
   // Swagger 接口描述：切换用户状态（启用/禁用，管理员功能）
@@ -244,13 +247,13 @@ export class UserController {
   // Post 路由装饰器，切换状态接口路径为 POST /user/:id/toggle-status
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('user:toggle-status')
-  // P1-3：状态切换专用限流 —— 60 秒内最多 10 次（防脚本批量封号）
+  // 状态切换专用限流 —— 60 秒内最多 10 次（防脚本批量封号）
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/toggle-status')
   // 切换状态方法：接收路由参数 userId
   async toggleStatus(@Param('id') userId: string) {
-    // 调用用户服务的 toggleStatus 方法（不再需要 user 形参，权限校验已上移）
-    return this.userService.toggleStatus(Number(userId));
+    // 调用用户 CRUD 服务的 toggleStatus 方法（不再需要 user 形参，权限校验已上移）
+    return this.userCrudService.toggleStatus(Number(userId));
   }
 
   // Swagger 接口描述：获取当前登录用户信息
@@ -262,7 +265,7 @@ export class UserController {
   @Get('profile')
   getProfile(@CurrentUser() user: any) {
     // 返回当前登录用户的基本信息
-    return this.userService.findById(user.id);
+    return this.userCrudService.findById(user.id);
   }
 
   // Swagger 接口描述：获取用户列表（需要 Token 验证 + user:list 权限码）
@@ -274,11 +277,11 @@ export class UserController {
   @Permissions('user:list')
   // Get 路由装饰器，获取用户列表接口路径为 GET /user
   @Get()
-  // M5 + M7：使用 DTO 接分页参数；响应去掉 phone 字段
+  // 使用 DTO 接分页参数；响应去掉 phone 字段
   // 增量：DTO 新增 keyword/status 筛选，透传到 service
   findAll(@Query() dto: QueryUserListDto) {
-    // 调用用户服务的 findAll 方法返回分页用户列表
-    return this.userService.findAll(dto.page ?? 1, dto.pageSize ?? 20, {
+    // 调用用户 CRUD 服务的 findAll 方法返回分页用户列表
+    return this.userCrudService.findAll(dto.page ?? 1, dto.pageSize ?? 20, {
       keyword: dto.keyword,
       status: dto.status,
     });
@@ -290,12 +293,12 @@ export class UserController {
   @ApiOperation({ summary: '获取当前登录用户的活跃设备列表' })
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  // 路径里的 'me/sessions' 是静态段，与下面那些 @Post(':id/xxx') 不冲突
+  // 路径里的 'me/sessions' 是静态段，与上面那些 @Post(':id/xxx') 不冲突
   // （本控制器当前没有 @Get(':id')）。若将来新增 @Get(':id')，必须放在本行**之后**，
   // 否则 /user/me 会被当成 id='me' 匹配走。
   @Get('me/sessions')
   getMySessions(@CurrentUser() user: any) {
-    return this.userService.getMySessions(user.id);
+    return this.authService.getMySessions(user.id);
   }
 
   // Swagger 接口描述：当前用户主动退出所有设备
@@ -304,7 +307,7 @@ export class UserController {
   @UseGuards(JwtAuthGuard)
   @Post('logout-all')
   async logoutAll(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
-    const result = await this.userService.logoutAll(user.id)
+    const result = await this.authService.logoutAll(user.id)
     // 清除当前设备的 Cookie
     res.clearCookie('refresh_token', {
       httpOnly: true,
@@ -323,6 +326,6 @@ export class UserController {
     @Param('sessionId') sessionId: string,
     @CurrentUser() user: any,
   ) {
-    return this.userService.logout(user.id, sessionId)
+    return this.authService.logout(user.id, sessionId)
   }
 }

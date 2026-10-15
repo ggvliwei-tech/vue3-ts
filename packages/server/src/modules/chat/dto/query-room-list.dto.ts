@@ -1,5 +1,5 @@
 /**
- * 房间列表查询 DTO（M5 补齐）
+ * 房间列表查询 DTO
  * 给 GET /chat/rooms 提供参数校验 + 自动转换
  */
 import { IsNumber, IsOptional, Min, Max } from 'class-validator'

@@ -8,7 +8,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { showToast } from 'vant'
 // 从用户 API 模块中导入 login 登录函数
 import { login } from '@/api/user'
-// M1：使用 AuthStore 统一管理 token / userInfo
+// 使用 AuthStore 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 登录后需要补一次静默续期排期
 import { scheduleSilentRefresh } from '@project/shared/token-refresh'
@@ -53,8 +53,9 @@ async function handleLogin() {
       username: username.value.trim(),
       password: password.value,
     })
-    // M1：统一写入 AuthStore
-    // 注：app 端 userInfo 不强制要求 roles/permissions，仅 admin 需要做按钮级权限
+    // 统一写入 AuthStore
+    // 注：app 端 userInfo 的 roles/permissions 在类型上可选（admin 侧为必填），
+    //     但 app 同样用 v-permission 做按钮级权限，不要据此认为 app 不需要权限数据
     const userInfo = res.data.userInfo as {
       id: number
       username: string

@@ -40,7 +40,7 @@ vue3-monorepo (pnpm workspace)
 
 | 模块 | 行数（估） | 职责 |
 |------|------|------|
-| `user` | 312 (controller) + 225 (crud) + 96 (façade) + auth/service/session | 用户管理、登录/刷新/踢下线、会话 |
+| `user` | 312 (controller) + 225 (crud) + auth.service + session.service | 用户管理、登录/刷新/踢下线、会话 |
 | `rbac` | — | 角色/权限/缓存、Guard |
 | `admin` | — | 后台子模块（role/permission/user-role/audit/dashboard） |
 | `chat` | — | REST + WebSocket Gateway，房间/成员/消息 |
@@ -71,7 +71,7 @@ vue3-monorepo (pnpm workspace)
 ### 2.1 架构亮点（已落地的优秀实践）
 
 1. **上帝服务拆分彻底**
-   - `UserService` 11 依赖 → `AuthService` + `UserCrudService` + Façade
+   - `UserService`（11 依赖）→ `AuthService` + `UserCrudService`
    - `AiService` 537 行 → `LlmProviderService` + `RagService` + `AiChatHistoryService` + `AiChatOrchestrator`
    - `DashboardController` → `DashboardService`（控制器瘦身）
 
@@ -84,9 +84,9 @@ vue3-monorepo (pnpm workspace)
    - `LlmProviderService` 支持 OpenAI / DashScope / Ollama，env 切换
    - `FileStorage` 接口 + `LocalStorage` / `OssStorage` 双实现
 
-4. **Façade 模式保留向后兼容**
-   - `UserService` 仍是 `AuthService + UserCrudService` 的薄门面
-   - 旧注入点不需要改动
+4. **去掉过渡门面**
+   - 已移除 `UserService`，调用方直接注入 `AuthService` 或 `UserCrudService`
+   - 职责边界一目了然，不再有「该调哪一层」的歧义
 
 5. **DTO 全覆盖 + class-validator**
    - 5 个 controller 的 `@Query()` 都已包成 DTO
@@ -117,12 +117,12 @@ vue3-monorepo (pnpm workspace)
 
 | 编号 | 严重度 | 问题 | 影响 |
 |------|--------|------|------|
-| **B1** | 🔴 Critical | **测试覆盖严重不足** | 后端 8843 LOC，仅 4 个 spec（覆盖率 < 5%）。`rbac.service` / `audit.subscriber` / `ai/*` 全模块 0 测试 |
-| **B2** | 🔴 Critical | **仅 1 处 `console.*` 残留**（`sms.service.ts`） | 绕过 winston，无 stack trace，无法被日志系统收集 |
-| **B3** | 🟠 Major | **Env 配置无 `.env.example`** | 新人接手 / Docker 部署需手动猜环境变量，易遗漏（如 `JWT_REFRESH_SECRET` 与 `JWT_ACCESS_SECRET` 区分、`SMS_MOCK`、`DB_POOL_SIZE`） |
-| **B4** | 🟠 Major | **JWT Refresh Token 重用检测**是否真在 AuthService.refreshToken 实现需复核 | 防止 refresh token 泄漏后被盗刷；当前代码未明确展示 `jti` / `reuse-detection` 逻辑 |
+| **B1** | 🟠 Major | **测试覆盖仍不足** | 后端约 8800 LOC，spec 已增至 10 个。仍未覆盖：`ai/*`、`audit/*`、`auth.service`、`file.service`、`dashboard`、各 controller |
+| **B2** | ✅ 已修复 | **`console.*` 残留** | 已清零：`grep console.` 仅剩 `sms.service.ts` 的一句说明性注释，无实际调用 |
+| **B3** | ✅ 已修复 | **Env 配置无 `.env.example`** | 已补齐根 `.env.example` 与 `packages/server/.env.example` 两份模板，逐项带注释 |
+| **B4** | ✅ 已修复 | **JWT Refresh Token 重用检测** | 已实现于 `common/guards/refresh-token.guard.ts`：请求中的 RT ≠ Redis 中存储的 RT 且不在宽限窗口内 → 判定令牌盗用，吊销该设备会话并抛 401 |
 | **B5** | 🟠 Major | **缺 OpenAPI/Swagger 导出物**作为客户端 SDK | admin / app 仍在手写类型，未走 `openapi-typescript` 自动生成 |
-| **B6** | 🟡 Minor | `main.ts:79` CORS 允许 `192.168.x.x` 局域网正则 | 仅 `NODE_ENV !== 'production'` 启用，但 **生产配置如果误设置 NODE_ENV=development 会敞开**。建议改为显式 `LAN_CORS=true` |
+| **B6** | 🟡 Minor | `main.ts:76` CORS 允许 `192.168.x.x` 局域网正则 | 仅 `NODE_ENV !== 'production'` 启用，但 **生产配置如果误设置 NODE_ENV=development 会敞开**。建议改为显式 `LAN_CORS=true` |
 | **B7** | 🟡 Minor | `account_book` 模块尚未审计 | 项目其他 11 个模块已深度重构，此模块可能藏着遗留代码 |
 | **B8** | 🟡 Minor | 缺统一 `package.json` workspaces `engines` 字段约束 Node/pnpm 版本 | 当前 `pnpm@10.18.3` 是 devDep，CI 无强制 |
 | **B9** | 🟡 Minor | `sms.service.ts:27` (controller 27 行) | 业务薄但有 mock，建议挪到 `mock/` 子目录与生产实现隔离 |
@@ -141,7 +141,7 @@ vue3-monorepo (pnpm workspace)
 
 2. **通用 composable 抽取**（M3 + M4）
    - `usePagedList<T>` 通用分页列表
-   - `useAIStream` AI 流式输出
+   - `app/src/utils/sse.ts` AI 流式输出（fetch + ReadableStream，非 composable）
    - `useScrollToBottom` 滚动工具
    - **但目前仅 `UserManage.vue` 一个消费者**（刚接入），Role / Permission / AuditLog 仍是手写 state
 
@@ -241,13 +241,13 @@ vue3-monorepo (pnpm workspace)
 
 | 编号 | 项 |
 |------|----|
-| **O1** | 无 **CI/CD Pipeline**（GitHub Actions / GitLab CI / Jenkinsfile 都没有） |
-| **O2** | 无 **.env.example** 模板，新人部署卡环境变量 |
+| **O1** | ✅ 已有 **CI/CD Pipeline**：`.github/workflows/ci.yml`（type-check / test / build / 产物校验） |
+| **O2** | ✅ 已有 **.env.example** 模板（根 + `packages/server` 两份） |
 | **O3** | 无 **灰度发布 / 回滚脚本** |
-| **O4** | 无 **metrics 暴露**（`/metrics` Prometheus 端点） |
+| **O4** | ✅ 已有 **metrics 暴露**：`modules/metrics/`，`/metrics` 端点已从全局前缀 `api/v1` 中豁免 |
 | **O5** | 无 **APM / Trace**（Jaeger / SkyWalking / OpenTelemetry） |
 | **O6** | 无 **日志聚合**（ELK / Loki / Grafana）配置 |
-| **O7** | Dockerfile 没看到 **多阶段构建缓存优化** + **非 root 用户** 运行 |
+| **O7** | ✅ 已有：Dockerfile 均为多阶段构建，`Dockerfile.server` 以非 root 的 `nestjs`(uid 1001) 运行 |
 | **O8** | 无 **依赖漏洞扫描**（Snyk / Trivy 集成） |
 
 ---
@@ -273,9 +273,9 @@ packages/server/src/modules/user/user-crud.service.spec.ts
 | 🟠 P1 | `redis.service` | 重连策略 + 异常降级 |
 | 🟡 P2 | `ai/*` | LLM provider 切换、RAG 召回 |
 | 🟡 P2 | `sms.service` | mock 开关 + NODE_ENV 边界 |
-| 🟡 P2 | E2E | `app.e2e-spec.ts` 已存在但内容未审 |
+| — | E2E | 原 `app.e2e-spec.ts` 测的是已不存在的 `AppController`，已删除；需要时按真实端点（如 `/health`）重写 |
 
-**前端测试：0 个 spec**（admin/app/shared 全部无单测，无 vitest 配置）
+**前端测试：shared 已有 vitest 配置 + 2 个测试**（`auth-storage.test.ts` / `token-refresh.test.ts`）；admin / app 仍无单测
 
 ---
 
@@ -376,7 +376,7 @@ ThrottlerModule ──→ LoginThrottlerService
 EventEmitterModule (global) ──→ AuditSubscriber (解耦审计)
 ScheduleModule ──→ AuditCleanupCron
 
-UserModule ──→ AuthService + UserCrudService + UserService(Façade)
+UserModule ──→ AuthService + UserCrudService
               ↓
               RbacService (角色/权限码 + Redis 缓存)
               SessionService (Redis 会话管理)
@@ -415,8 +415,8 @@ HealthModule ──→ health indicators (DB / Redis / Memory)
 ## 附录 B：文件清单（关键路径）
 
 ### 后端核心
-- `packages/server/src/main.ts` — 启动入口（133 行）
-- `packages/server/src/app.module.ts` — 根模块（115 行）
+- `packages/server/src/main.ts` — 启动入口（142 行）
+- `packages/server/src/app.module.ts` — 根模块（132 行）
 - `packages/server/src/common/filters/global-exception.filter.ts` — 全局异常
 - `packages/server/src/common/guards/jwt-auth.guard.ts` — JWT 守卫
 - `packages/server/src/common/guards/permissions.guard.ts` — RBAC 守卫
@@ -436,8 +436,7 @@ HealthModule ──→ health indicators (DB / Redis / Memory)
 - `Dockerfile.{server,admin,app}` — 三镜像构建
 - `docker-compose.yml` — 一键起服务（含 MySQL + Redis）
 - `deploy/nginx/` — 反向代理
-- `packages/server/nest-db.sql` — DB schema
-- `packages/server/sql/clean-test-data.sql` — 测试数据清理
+- `packages/server/nest-db.sql` — DB schema（唯一 SQL：初始化 + 重置，重跑即回到出厂状态）
 - `docs/auth-security-audit.md` — 安全审计
 - `docs/system-analysis-report.md` — **本报告**
 

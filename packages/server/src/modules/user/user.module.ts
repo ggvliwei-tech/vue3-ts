@@ -8,10 +8,9 @@ import { SmsModule } from '../sms/sms.module';
 import { RbacModule } from '../rbac/rbac.module';
 // 鉴权模块，提供登录风控/限流/账号锁定 + 多设备会话
 import { AuthModule } from '../auth/auth.module';
-// 审计日志模块，提供 AuditService / AuditSubscriber（C5：审计通过事件解耦）
+// 审计日志模块，提供 AuditService / AuditSubscriber（审计通过事件解耦）
 import { AuditModule } from '../audit/audit.module';
-// C5 拆分后的两个服务
-import { UserService } from './user.service';
+// 职责单一的两个服务
 import { AuthService } from './auth.service';
 import { UserCrudService } from './user-crud.service';
 // 用户控制器，处理 HTTP 请求和路由
@@ -20,15 +19,15 @@ import { UserController } from './user.controller';
 import { User } from './entities/user.entity';
 
 /**
- * UserModule（C5 拆分后）
+ * UserModule
  *
- * 提供：
+ * 提供两个职责单一的服务：
  *  - AuthService       登录 / 刷新 / 退出 / 强制下线 / 会话管理
  *  - UserCrudService   用户注册 / 查询 / 状态切换 / 重置密码
- *  - UserService       兼容门面（Façade），将上述两个服务组合对外暴露
  *
- * 控制器与其他模块只需继续注入 UserService 即可保持原行为，
- * 新代码建议直接注入 AuthService / UserCrudService。
+ * 调用方按用途注入其中之一：
+ *  - UserController                                 两者都用
+ *  - RefreshTokenGuard / ChatGateway                UserCrudService（查用户实体）
  */
 @Module({
   imports: [
@@ -39,8 +38,8 @@ import { User } from './entities/user.entity';
     RbacModule,
   ],
   controllers: [UserController],
-  providers: [AuthService, UserCrudService, UserService],
-  // 全部导出：JwtAuthGuard 等底层场景可按需注入具体服务
-  exports: [AuthService, UserCrudService, UserService],
+  providers: [AuthService, UserCrudService],
+  // 导出给 UserController 之外的消费方（RefreshTokenGuard / ChatGateway）
+  exports: [AuthService, UserCrudService],
 })
 export class UserModule {}

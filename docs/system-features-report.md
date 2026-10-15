@@ -93,7 +93,7 @@
 ### 2.2 关键能力
 
 - ✅ **双令牌机制**：AccessToken（短期，header 传递）+ RefreshToken（长期，HttpOnly Cookie）
-- ✅ **多设备会话管理**：Redis Hash 存 `user:{id}:sessions`，key=sessionId, value=deviceInfo
+- ✅ **多设备会话管理**：Redis Hash 存 `session:{userId}`，field=sessionId, value=JSON(SessionInfo)
 - ✅ **强制下线**：管理员可一键踢下线某个用户的全部设备，并立即吊销 RBAC 缓存
 - ✅ **状态联动**：用户被禁用时所有设备自动吊销（toggleStatus 内部调用 sessionService.removeAll）
 - ✅ **CSRF 防御**：登录/刷新走 Origin 白名单校验
@@ -120,28 +120,44 @@
 
 ## 3. RBAC 权限体系（rbac + admin/*）
 
-### 3.1 权限码清单（共 16 个）
+### 3.1 权限码清单（共 30 个）
 
-| 权限码 | 说明 | 用途 |
+| 权限码 | 说明 | 模块 |
 |--------|------|------|
-| `user:list` | 查看用户列表 | admin 用户管理 |
-| `user:kick` | 强制下线 | admin 用户管理 |
-| `user:toggle-status` | 启停账号 | admin 用户管理 |
-| `user:audit` | 用户相关审计日志 | admin 审计 |
-| `user-role:list` | 查看用户角色 | admin 用户管理 |
-| `user-role:assign` | 分配用户角色 | admin 用户管理 |
-| `user-role:remove` | 移除用户角色 | admin 用户管理 |
-| `role:list` | 查看角色列表 | admin 角色管理 |
-| `role:create` | 创建角色 | admin 角色管理 |
-| `role:update` | 编辑角色 | admin 角色管理 |
-| `role:delete` | 删除角色 | admin 角色管理 |
-| `role:assign-permission` | 给角色分配权限 | admin 角色管理 |
-| `permission:list` | 查看权限列表 | admin 权限管理 |
-| `permission:create` | 创建权限 | admin 权限管理 |
-| `permission:update` | 编辑权限 | admin 权限管理 |
-| `permission:delete` | 删除权限 | admin 权限管理 |
-| `admin:audit` | 管理员操作审计 | admin 审计 |
-| `dashboard:view` | 查看仪表盘 | admin 仪表盘 |
+| `user:list` | 查看用户列表 | user |
+| `user:kick` | 强制用户下线 | user |
+| `user:toggle-status` | 启停用户 | user |
+| `user:audit` | 查看审计日志 | user |
+| `user:session` | 查看多设备会话 | user |
+| `book:list` | 查看账本 | book |
+| `book:create` | 创建账本 | book |
+| `book:update` | 修改账本 | book |
+| `book:delete` | 删除账本 | book |
+| `file:list` | 查看文件 | file |
+| `file:upload` | 上传文件 | file |
+| `file:delete` | 删除文件 | file |
+| `ai:chat` | AI 对话 | ai |
+| `chat:room` | 进入聊天室 | chat |
+| `chat:room-create` | 创建聊天室 | chat |
+| `chat:room-delete` | 删除聊天室 | chat |
+| `role:list` | 查看角色列表 | admin |
+| `role:create` | 创建角色 | admin |
+| `role:update` | 修改角色 | admin |
+| `role:delete` | 删除角色 | admin |
+| `role:assign-permission` | 分配角色权限 | admin |
+| `permission:list` | 查看权限列表 | admin |
+| `permission:create` | 创建权限 | admin |
+| `permission:update` | 修改权限 | admin |
+| `permission:delete` | 删除权限 | admin |
+| `user-role:list` | 查看用户角色 | admin |
+| `user-role:assign` | 分配用户角色 | admin |
+| `user-role:remove` | 移除用户角色 | admin |
+| `admin:audit` | 管理端审计日志 | admin |
+| `dashboard:view` | 查看管理仪表盘 | admin |
+
+> 清单与 `packages/server/nest-db.sql` 16.3 节逐条对齐，模块列即 `sys_permission.module`。
+> 16.4 节的分配规则：admin 拿到全部 30 个；editor 拿到除 `user` / `admin` 模块外的全部；
+> user 恰好 3 个（`book:list` / `ai:chat` / `chat:room`），共 44 条 `sys_role_permission`。
 
 ### 3.2 角色权限继承结构（设计）
 
@@ -264,7 +280,7 @@ sys_role          sys_permission        sys_role_permission     sys_user_role
 
 - ✅ **多 LLM 适配**：`LlmProviderService` 策略模式，支持 OpenAI / DashScope（阿里云通义千问）/ Ollama
 - ✅ **RAG 知识库**：上传 PDF → 切片 → Embedding → 存入 Chroma 向量库 → 召回相关 chunk 作为上下文
-- ✅ **流式输出**：SSE 协议，前端用 `useAIStream` composable 逐字渲染
+- ✅ **流式输出**：SSE 协议，前端用 `app/src/utils/sse.ts`（fetch + ReadableStream）逐字渲染
 - ✅ **多会话隔离**：每个会话独立 sessionId，可切换 / 删除
 - ✅ **会话持久化**：`sys_ai_session` + `sys_ai_message`，`groupBy` 优化避免 N+1
 - ✅ **Token 透传**：`Authorization: Bearer` 携带，前端 SSE EventSource 不支持 header → 用 `fetch + ReadableStream` 手动解析
@@ -343,7 +359,7 @@ sys_role          sys_permission        sys_role_permission     sys_user_role
 
 ### 8.2 关键能力
 
-- ✅ **Dev Mock**：`NODE_ENV !== 'production' && SMS_MOCK !== 'false'` 时启用
+- ✅ **Dev Mock**：`NODE_ENV` 非 `production` / `staging` 且 `SMS_MOCK !== 'false'` 时启用
 - ✅ **生产真发送**：对接短信服务商（具体实现未审计）
 - ✅ **TTL 验证码**：Redis 5 分钟过期
 

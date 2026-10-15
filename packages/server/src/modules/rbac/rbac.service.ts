@@ -38,7 +38,7 @@ const CACHE_TTL = 10 * 60
  *    与 token 内容无关（旧注释写成"写入 JWT payload"是错的）
  *  - 关键操作（如 forceKick）可主动 clearUserCache 立即生效
  *
- * 容错降级（C2 修复）：
+ * 容错降级：
  *  - Redis 不可用时降级到直接查 DB，绝不让缓存成为单点故障
  *  - 写缓存失败仅记日志，不抛异常（不影响 RBAC 校验）
  */

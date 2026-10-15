@@ -1,7 +1,7 @@
 /**
  * 认证服务
  *
- * C5 拆分：从原 UserService 抽出的认证与授权职责：
+ * 认证与授权职责：
  *  - 登录（login）：风控 → 凭据校验 → 签发 Token → 创建 Session
  *  - 刷新 Token（refreshToken）：Token 轮换
  *  - 退出登录（logout / logoutAll）：撤销 Session

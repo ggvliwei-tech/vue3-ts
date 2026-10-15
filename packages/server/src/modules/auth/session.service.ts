@@ -141,18 +141,6 @@ export class SessionService {
   }
 
   /**
-   * 读取「上一个 RT」（仅在宽限窗口内存在，过期返回 null）
-   */
-  async getPreviousRefreshToken(
-    userId: number,
-    sessionId: string,
-  ): Promise<string | null> {
-    return this.redisService.get(
-      AuthKeys.previousRefreshToken(userId, sessionId),
-    )
-  }
-
-  /**
    * 获取用户所有活跃会话列表
    * @returns 按 loginTime 倒序排列的 SessionInfo 数组
    */
@@ -217,22 +205,5 @@ export class SessionService {
       '1',
       this.blacklistTtl,
     )
-  }
-
-  /** 该设备是否已被下线 */
-  async isSessionBlacklisted(
-    userId: number,
-    sessionId: string,
-  ): Promise<boolean> {
-    return (
-      (await this.redisService.exists(
-        AuthKeys.blacklistSession(userId, sessionId),
-      )) === 1
-    )
-  }
-
-  /** 该用户是否已被「全设备」拉黑 */
-  async isBlacklisted(userId: number): Promise<boolean> {
-    return (await this.redisService.exists(AuthKeys.blacklistUser(userId))) === 1
   }
 }

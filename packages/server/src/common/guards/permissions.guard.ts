@@ -13,9 +13,8 @@ import { PERMISSIONS_KEY } from '../decorators/permissions.decorator'
 /**
  * 权限守卫：校验当前用户是否拥有 @Permissions(...) 中声明的所有权限码
  *
- * 与 RolesGuard 的区别：
- *  - RolesGuard 基于"角色"粗粒度校验（如 admin）
- *  - PermissionsGuard 基于"权限码"细粒度校验（如 user:kick）
+ * 页面/接口的访问控制统一走「权限码」这一种细粒度模型（如 user:kick）；
+ * 角色只作为权限码的载体由 RbacService 展开，不直接参与校验。
  *
  * 工作流程：
  *  1. 读取 @Permissions 元数据

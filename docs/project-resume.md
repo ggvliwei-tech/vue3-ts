@@ -56,7 +56,7 @@
 | 类别 | 技术 | 版本 | 用途 |
 |------|------|------|------|
 | 包管理 | pnpm + Workspace | 10.18 | 多包管理 / 依赖隔离 / 软链接共享 |
-| 语言 | TypeScript | 6.x | 全栈严格类型（strict mode） |
+| 语言 | TypeScript | 5.9 | 全栈严格类型（strict mode） |
 | 构建-前端 | Vite | 8.x | dev server 极速冷启动 |
 | 构建-后端 | NestJS CLI | 11.x | nest build / nest start |
 | 代码规范 | ESLint | 9.x | flat config + typescript-eslint |
@@ -68,9 +68,9 @@
 | 类别 | 技术 | 版本 | 用途 |
 |------|------|------|------|
 | 框架 | NestJS | 11 | 模块化 / DI / AOP 装饰器 |
-| ORM | TypeORM + mysql2 | 1.x / 3.x | 实体映射 / Repository / Migration |
+| ORM | TypeORM + mysql2 | 1.x / 3.x | 实体映射 / Repository（schema 由 nest-db.sql 管理，不用 Migration） |
 | 缓存 / 会话 | ioredis | 5.x | 多设备会话 / 黑名单 / 权限缓存 |
-| 鉴权 | @nestjs/jwt + passport-jwt | 11 | Access + Refresh 双 Token |
+| 鉴权 | @nestjs/jwt | 11 | Access + Refresh 双 Token |
 | 限流 | @nestjs/throttler | 6.x | IP 滑动窗口 + 登录失败锁定 |
 | WebSocket | @nestjs/websockets + socket.io | 11 / 4.x | 聊天室 Gateway |
 | SSE | @Sse() + RxJS Observable | - | AI 流式输出 |
@@ -79,7 +79,7 @@
 | 日志 | Winston + nest-winston | 3.x / 1.x | 控制台 + JSON 文件双输出 |
 | 安全 | helmet + compression + cookie-parser | - | 安全头 / gzip / Cookie 解析 |
 | API 文档 | @nestjs/swagger | 11 | OpenAPI 3.0 + Swagger UI |
-| 测试 | Jest + supertest | 30 / 7 | 单元测试 + E2E |
+| 测试 | Jest | 30 | 单元测试 |
 | 定时任务 | @nestjs/schedule | 12 | 审计日志清理 |
 | 事件机制 | @nestjs/event-emitter | 3 | 审计解耦 |
 
@@ -88,21 +88,21 @@
 | 类别 | 技术 | 版本 | 用途 |
 |------|------|------|------|
 | 框架 | Vue | 3.5 | Composition API + `<script setup>` |
-| 路由 | vue-router | 4.x | History 模式 + 路由 meta 权限 |
+| 路由 | vue-router | 5.x | History 模式 + 路由 meta 权限 |
 | 状态 | Pinia | 4.x | 替代 Vuex，更好的 TS 推断 |
 | UI 库 | Element Plus | 2.14 | 中后台组件 + 图标 |
 | 自动导入 | unplugin-auto-import | 21.x | Vue / Vue Router / Pinia / lodash-es 按需 |
 | 自动注册 | unplugin-vue-components | 32.x | Element Plus 组件按需 |
 | HTTP | axios | 1.x | 二次封装（拦截器 + 401 刷新） |
 
-### 3.4 App 移动端 H5（Vue 3 + Vant 5）
+### 3.4 App 移动端 H5（Vue 3 + Vant 4）
 
 | 类别 | 技术 | 版本 | 用途 |
 |------|------|------|------|
 | 框架 | Vue | 3.5 | 同 Admin |
 | 路由 | vue-router | 4.x | - |
 | 状态 | Pinia | 4.x | - |
-| UI 库 | Vant | 5.x | 移动端 H5 组件 |
+| UI 库 | Vant | 4.x | 移动端 H5 组件 |
 | 实时 | socket.io-client | 4.x | 聊天室 |
 | Markdown | markdown-it | 15.x | AI 回复内容渲染 |
 | SSE | fetch + ReadableStream | 原生 | AI 流式输出（支持自定义头） |
@@ -140,7 +140,7 @@ vue3-monorepo/
 │   │       │   ├── enums/      # 统一业务码
 │   │       │   ├── exceptions/ # 业务异常基类
 │   │       │   ├── filters/    # 全局异常过滤器
-│   │       │   ├── guards/     # JwtAuth / Permissions / Roles / RefreshToken
+│   │       │   ├── guards/     # JwtAuth / Permissions / RefreshToken
 │   │       │   ├── interceptors/ # TransformInterceptor
 │   │       │   ├── decorators/ # CurrentUser / Permissions
 │   │       │   └── logger/     # Winston 配置
@@ -327,13 +327,13 @@ sys_user ──< sys_user_role >── sys_role ──< sys_role_permission >─
 |------|------|
 | 端数 | 3 端（Admin + App + Server） |
 | 后端业务模块 | 14 个（auth / user / rbac / admin / chat / ai / account_book / file / sms / metrics / redis / health / audit / ai 子模块） |
-| 数据库表 | 15+ 张（用户 / 角色 / 权限 / 用户角色 / 角色权限 / 审计 / 聊天房间 / 成员 / 消息 / AI 会话 / 消息 / 账本 / 文件 / 短信等） |
+| 数据库表 | 14 张（用户 / 角色 / 权限 / 用户角色 / 角色权限 / 审计 / 聊天房间 / 成员 / 消息 / AI 会话 / AI 消息 / 账本 / 文件 / typeorm_migrations） |
 | API 接口 | 80+ 个 REST + SSE + WebSocket |
 | AI 端点 | 12 个（含 RAG / 流式 / 会话管理 / 文件上传） |
 | Docker 编排容器 | 5 个 |
-| 鉴权守卫 | 4 个（JwtAuth / Permissions / Roles / RefreshToken） |
-| 全局过滤器 | 2 个（GlobalException / HttpException） |
-| 测试覆盖 | LoginThrottler 100% / Session 100% / GlobalExceptionFilter 95%+ / UserService 70%+ |
+| 鉴权守卫 | 3 个（JwtAuth / Permissions / RefreshToken） |
+| 全局过滤器 | 1 个（GlobalException） |
+| 测试覆盖 | 服务端 10 个 spec（GlobalExceptionFilter / RefreshTokenGuard / pagination / LoginThrottler / Session / ChatGateway / ChatService / RbacService / SmsService / UserCrudService）+ shared 2 个（auth-storage / token-refresh） |
 | 健康检查端点 | 2 个（liveness + readiness） |
 | 代码注释 | 全量 JSDoc 中文注释，团队协作友好 |
 
@@ -441,8 +441,8 @@ pnpm dev:full
 ```
 
 访问：
-- Admin：http://localhost:5173
-- App H5：http://localhost:5174
+- Admin：http://localhost:5175
+- App H5：http://localhost:5173
 - API：http://localhost:3000
 - Swagger：http://localhost:3000/api-docs
 

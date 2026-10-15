@@ -1,5 +1,5 @@
 /**
- * 用户列表查询 DTO（M5 + M7 + 增量：keyword/status 筛选）
+ * 用户列表查询 DTO（keyword/status 筛选）
  * GET /user 列表分页参数校验
  *
  * 字段：

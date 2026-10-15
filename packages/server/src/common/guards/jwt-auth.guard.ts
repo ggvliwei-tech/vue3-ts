@@ -29,11 +29,11 @@ import { Logger as WinstonLogger } from 'winston'
  *  2. 检查 Redis 黑名单（强制下线拦截）
  *  3. 从 RbacService 查询用户角色/权限码，挂载到 request.user
  *
- * 注：此守卫不直接查 sys_user 表，需要完整用户信息时控制器自行注入 UserService
+ * 注：此守卫不直接查 sys_user 表，需要完整用户信息时控制器自行注入 UserCrudService
  *
  * 为减少 DB 压力，角色和权限查询由 RbacService 内部 Redis 缓存（10 分钟 TTL）
  *
- * C2 修复：catch 块细分异常类型
+ * catch 块细分异常类型
  *  - TokenExpiredError / JsonWebTokenError → 401 Token 无效
  *  - Redis/RBAC 基础设施错误 → 503 服务暂不可用（不再误导运维）
  */
@@ -73,21 +73,15 @@ export class JwtAuthGuard implements CanActivate {
       // 两种粒度都要查，缺任一种都会让对应的踢下线操作失效：
       //  - blacklist:token:{userId}                踢「全部设备」（forceKick 不带 sessionId / logout-all）
       //  - blacklist:session:{userId}:{sessionId}  踢「指定设备」（RT 复用检测 / forceKick 带 sessionId）
+      // sessionId 是签发 access token 时的必填字段（见 AuthService.login），故无条件检查
       // 黑名单检查失败不应阻断请求（避免 Redis 抖动导致 401）
       try {
-        const checks = [
+        const results = await Promise.all([
           this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
-        ]
-        // access token 的 payload 里带了 sessionId（见 AuthService.login），
-        // 老版本签发的 token 可能没有，故做存在性判断
-        if (payload.sessionId) {
-          checks.push(
-            this.redisService.exists(
-              AuthKeys.blacklistSession(payload.sub, payload.sessionId),
-            ),
-          )
-        }
-        const results = await Promise.all(checks)
+          this.redisService.exists(
+            AuthKeys.blacklistSession(payload.sub, payload.sessionId),
+          ),
+        ])
         if (results.some((hit) => hit)) {
           throw new UnauthorizedException('账号已在其他地方被强制下线，请重新登录')
         }

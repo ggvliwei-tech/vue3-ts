@@ -1,7 +1,7 @@
 /**
  * 用户 CRUD 服务
  *
- * C5 拆分：从原 UserService 抽出的纯 CRUD 职责：
+ * 纯 CRUD 职责：
  *  - 用户注册（create）
  *  - 单查 / 列表查询（findById / findAll）
  *  - 状态切换（toggleStatus）
@@ -64,7 +64,7 @@ export class UserCrudService {
 
   /**
    * 查询用户列表（分页 + 不含密码 / 不含手机号 + 可选 keyword/status 筛选 + 含角色）
-   * M7：手机号是 PII，普通列表不应回传，避免后台侧无意泄漏
+   * 手机号是 PII，普通列表不应回传，避免后台侧无意泄漏
    *     同时支持分页，避免 SELECT * 在用户量大时拖慢 DB
    *
    * 角色字段用单次 batch SQL 拉取后挂到 list 上（避免 N+1）

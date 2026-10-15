@@ -1,5 +1,5 @@
 /**
- * 审计日志定期清理（M9）
+ * 审计日志定期清理
  *
  * 默认每天凌晨 3 点删除 90 天前的审计日志
  * - 保留期可通过环境变量 AUDIT_RETENTION_DAYS 调整
@@ -56,7 +56,7 @@ export class AuditCleanupCron {
 
       let deleted = 0
       // 分批删除直到无更多可删
-      // eslint-disable-next-line no-constant-condition
+       
       while (true) {
         // 第一批：只取主键，带上 take 才是真正的「LIMIT」
         const batch = await this.auditRepo.find({

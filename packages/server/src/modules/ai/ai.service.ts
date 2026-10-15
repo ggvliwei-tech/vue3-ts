@@ -1,7 +1,7 @@
 /**
  * AI 编排服务（AiService / AiOrchestratorService）
  *
- * C4 重构：原 537 行上帝服务拆分为三个职责单一的服务后，本类只承担
+ * 原 537 行上帝服务拆分为三个职责单一的服务后，本类只承担
  * "对话流程编排"职责：协调 LLMProvider / RagService / AiChatHistory
  * 共同完成单轮、多轮、流式等不同形态的对话。
  *

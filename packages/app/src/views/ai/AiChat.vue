@@ -193,7 +193,7 @@ onMounted(async () => {
     // 调用获取最近会话 API
     const res = await getLastSession()
     // 从响应中提取服务端返回的会话 ID（res.data 就是 controller 返回的 { sessionId } 或 null）
-    const serverSessionId = (res.data as any)?.sessionId
+    const serverSessionId = res.data?.sessionId
     // 如果服务端有会话 ID
     if (serverSessionId) {
       // 更新当前会话 ID
@@ -240,8 +240,8 @@ async function ensureSessionId() {
   try {
     // 调用创建会话 API
     const res = await createSession()
-    // 兼容不同的响应结构，提取 sessionId
-    const newId = (res.data as any)?.sessionId
+    // 提取服务端下发的 sessionId
+    const newId = res.data?.sessionId
     // 如果成功提取到 sessionId
     if (newId) {
       // 赋值给响应式变量

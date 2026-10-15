@@ -15,8 +15,6 @@ declare module 'vue-router' {
     title?: string
     // 是否公开路由（如登录页），true 表示无需登录
     public?: boolean
-    // 允许访问的角色编码（任一即可），未配置表示仅需登录
-    roles?: string[]
     // 需要的权限码（任一即可），未配置表示不校验权限码
     permissions?: string[]
   }
@@ -85,7 +83,7 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：依次校验登录态、角色、权限码
+// 路由守卫：依次校验登录态、权限码
 router.beforeEach((to) => {
   // 1. 公开路由（登录页）直接放行
   if (to.meta.public) return true
@@ -96,23 +94,10 @@ router.beforeEach((to) => {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
 
-  // 角色 / 权限与登录态取自同一份数据，不会出现"token 在但权限读不到"的错位
+  // 权限与登录态取自同一份数据，不会出现"token 在但权限读不到"的错位
   const userInfo = getUserInfo()
 
-  // 3. 校验角色（meta.roles 是 OR 语义：拥有任一即可）
-  //
-  // 目前没有**任何**路由声明 meta.roles（全部只用 meta.permissions 表达），
-  // 所以这个分支在当前路由表下不会执行，/403 也不会因角色被触发。
-  // 保留它是有意的兜底：一旦某天要用「粗粒度角色」而不是「细粒度权限码」控页面，
-  // 直接在路由上写 roles 即可生效。若确认不再需要，连同上面 RouteMeta 的
-  // roles 声明一起删掉，别留着当摆设。
-  if (to.meta.roles && to.meta.roles.length > 0) {
-    const userRoles = userInfo?.roles ?? []
-    const hasRole = userRoles.some((r) => to.meta.roles!.includes(r))
-    if (!hasRole) return { path: '/403' }
-  }
-
-  // 4. 校验权限码（meta.permissions 是 OR 语义：拥有任一即可）
+  // 3. 校验权限码（meta.permissions 是 OR 语义：拥有任一即可）
   if (to.meta.permissions && to.meta.permissions.length > 0) {
     const userPerms = userInfo?.permissions ?? []
     const hasPerm = userPerms.some((p) => to.meta.permissions!.includes(p))

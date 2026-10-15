@@ -1,7 +1,7 @@
 /**
  * RAG 检索增强生成服务
  *
- * C4 拆分：从 AiService 抽出的 PDF 解析 + Chroma 向量库相关职责
+ * 从 AiService 抽出的 PDF 解析 + Chroma 向量库相关职责
  * 责任范围：
  *  - PDF 文件解析与文本切块
  *  - Chroma 向量库写入与相似度查询

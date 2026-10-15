@@ -24,8 +24,7 @@
     "format:check": "prettier --check .",
     "type-check": "pnpm -r --parallel type-check",
     "clean": "pnpm -r clean && rimraf -rf node_modules",
-    "test": "pnpm -r test",
-    "test:e2e": "pnpm --filter @project/server test:e2e"
+    "test": "pnpm -r test"
   },
   "keywords": [],
   "author": "",
@@ -44,7 +43,7 @@
     "globals": "^16.5.0",
     "prettier": "^3.4.2",
     "sass": "^1.102.0",
-    "typescript": "~6.0.2",
+    "typescript": "~5.9.3",
     "typescript-eslint": "^8.66.0",
     "unplugin-auto-import": "^21.0",
     "unplugin-vue-components": "^32.1",

@@ -1,7 +1,7 @@
 /**
  * AI 会话历史服务
  *
- * C4 拆分：从 AiService 抽出的会话 + 消息持久化职责
+ * 从 AiService 抽出的会话 + 消息持久化职责
  * 责任范围：
  *  - Redis 缓存会话历史消息（用于多轮对话上下文）
  *  - MySQL session / message 持久化

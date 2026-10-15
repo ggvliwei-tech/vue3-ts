@@ -67,7 +67,7 @@ export class LocalStorage implements FileStorage {
     };
   }
 
-  // 删除本地文件（C8 修复：路径穿越防护）
+  // 删除本地文件（路径穿越防护）
   async delete(filePath: string): Promise<boolean> {
     // 1. 先 resolve 得到绝对路径
     const fullPath = path.resolve(this.baseDir, filePath);

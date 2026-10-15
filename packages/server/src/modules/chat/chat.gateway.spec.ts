@@ -24,7 +24,7 @@ import { ConfigService } from '@nestjs/config'
 import { ChatGateway } from './chat.gateway'
 import { ChatService } from './chat.service'
 import { RedisService } from '../redis/redis.service'
-import { UserService } from '../user/user.service'
+import { UserCrudService } from '../user/user-crud.service'
 import { RbacService } from '../rbac/rbac.service'
 
 const mockChatService = {
@@ -104,7 +104,7 @@ describe('ChatGateway', () => {
           provide: RedisService,
           useValue: { exists: jest.fn(async () => false) },
         },
-        { provide: UserService, useValue: { findUserEntity: jest.fn() } },
+        { provide: UserCrudService, useValue: { findUserEntity: jest.fn() } },
         {
           provide: RbacService,
           useValue: { getUserPermissions: jest.fn(async () => ['chat:room']) },
@@ -343,7 +343,7 @@ describe('ChatGateway', () => {
     it('Socket.IO 房间不含该房间时拒绝，且不落库', async () => {
       const client = createFakeSocket({ rooms: new Set(['9']) })
 
-      await gateway.handleMessage(client, { roomId: 5, content: 'hi' } as any)
+      await gateway.handleMessage(client, { roomId: 5, content: 'hi' })
 
       expect(payloadsOf(client.emit, 'error')).toEqual([
         { code: 403, msg: '您不在该房间中' },
@@ -355,7 +355,7 @@ describe('ChatGateway', () => {
       const client = createFakeSocket({ rooms: new Set(['5']) })
       mockChatService.isUserInRoom.mockResolvedValueOnce(false)
 
-      await gateway.handleMessage(client, { roomId: 5, content: 'hi' } as any)
+      await gateway.handleMessage(client, { roomId: 5, content: 'hi' })
 
       expect(client.leave).toHaveBeenCalledWith('5')
       expect(payloadsOf(client.emit, 'error')).toEqual([
@@ -372,7 +372,7 @@ describe('ChatGateway', () => {
         createdAt: 1700000000000,
       })
 
-      await gateway.handleMessage(client, { roomId: 5, content: 'hi' } as any)
+      await gateway.handleMessage(client, { roomId: 5, content: 'hi' })
 
       expect(mockChatService.saveMessage).toHaveBeenCalledWith(
         5,

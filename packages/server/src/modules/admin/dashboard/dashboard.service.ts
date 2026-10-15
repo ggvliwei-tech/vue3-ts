@@ -18,7 +18,7 @@ import { FileEntity } from '../../file/entities/file.entity'
 import { AuditLog } from '../../audit/entities/audit-log.entity'
 
 /**
- * Dashboard 统计 Service（C6 拆分 + P1-1 优化）
+ * Dashboard 统计 Service
  *
  * 性能优化：
  *  - 原来 getOverview 用 Promise.all 并行 11 次 count() → 11 次 DB 往返
@@ -58,7 +58,7 @@ export class DashboardService {
     const now = Date.now()
     const oneDayMs = 24 * 60 * 60 * 1000
 
-    // ========== P1-1 优化：UNION ALL 单查询取基础计数 ==========
+    // ========== UNION ALL 单查询取基础计数 ==========
     // 5 个独立 count → 1 次往返
     // 注意：表名按实体 @Entity() 声明（sys_user / sys_role / sys_permission / account_book / sys_file）
     const totals = await this.userRepo.manager.query(
@@ -71,7 +71,7 @@ export class DashboardService {
        SELECT 'book_total', COUNT(*) FROM account_book
        UNION ALL
        SELECT 'file_total', COUNT(*) FROM sys_file`,
-    ) as Array<{ k: string; v: string }>
+    )
     const totalMap = new Map(totals.map((r) => [r.k, Number(r.v)]))
     const userTotal = totalMap.get('user_total') ?? 0
     const roleTotal = totalMap.get('role_total') ?? 0
@@ -85,11 +85,11 @@ export class DashboardService {
          SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS active,
          SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END) AS inactive
        FROM sys_user`,
-    ) as Array<{ active: string | null; inactive: string | null }>
+    )
     const userActive = Number(userStatus[0]?.active ?? 0)
     const userInactive = Number(userStatus[0]?.inactive ?? 0)
 
-    // ========== P1-1 优化：UNION ALL 单查询取时间窗口统计 ==========
+    // ========== UNION ALL 单查询取时间窗口统计 ==========
     // 4 个独立 count → 1 次往返
     const windowed = await this.userRepo.manager.query(
       `SELECT 'audit_total' AS k, COUNT(*) AS v FROM sys_audit_log
@@ -101,7 +101,7 @@ export class DashboardService {
        SELECT 'failed_login_24h', COUNT(*) FROM sys_audit_log
          WHERE action = 'login' AND status = 0 AND createTime >= ?`,
       [now - oneDayMs, now - oneDayMs, now - oneDayMs],
-    ) as Array<{ k: string; v: string }>
+    )
     const windowedMap = new Map(windowed.map((r) => [r.k, Number(r.v)]))
     const auditTotal = windowedMap.get('audit_total') ?? 0
     const newUsers24h = windowedMap.get('new_users_24h') ?? 0

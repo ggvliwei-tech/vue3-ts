@@ -1,5 +1,5 @@
 /**
- * 短信服务（M12 收紧）
+ * 短信服务
  *
  * 关键修复：
  *  - 不再通过 API 响应回传 mockCode（避免前端直接拿到验证码绕过短信链路）
@@ -87,7 +87,7 @@ export class SmsService {
   // ====================== Mock 模式判断 ======================
 
   /**
-   * M12 收紧：Mock 仅在 development 环境生效
+   * Mock 仅在 development 环境生效
    *  - production / staging 强制走真实通道
    *  - SMS_MOCK=false 可在 dev 环境显式关闭
    */

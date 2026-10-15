@@ -14,8 +14,6 @@ import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   // 声明私有的 Redis 客户端实例，创建后不可变
   private readonly client: Redis;
-  // 当前连接状态，供健康检查/降级判断使用
-  private _ready = false;
 
   // 构造函数，注入 ConfigService 配置服务
   constructor(
@@ -35,7 +33,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       password: redisPassword || undefined,
       // 延迟连接，需要手动调用 connect() 才建立连接
       lazyConnect: true,
-      // C2 修复：永远不返回 null（避免永久失联），只递增退避上限
+      // 永远不返回 null（避免永久失联），只递增退避上限
       // 旧实现 3 次后返回 null → Redis 闪断 2 秒后客户端永久锁死
       // 新实现：无限重试，backoff 封顶 10 秒，配合 maxRetriesPerRequest 快速失败
       retryStrategy: (times) => Math.min(times * 500, 10_000),
@@ -47,29 +45,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     // 监听 Redis 连接错误事件
     this.client.on('error', (err) => {
-      this._ready = false
       this.logger.warn(`[Redis] 连接错误: ${err.message}`)
     });
 
     // 监听 Redis 连接成功事件
     this.client.on('ready', () => {
-      this._ready = true
       // NestJS LoggerService 标准方法，不依赖 winston 的 info()
       this.logger.log('[Redis] 连接成功')
     });
-
-    // 监听 end（连接关闭）
-    this.client.on('end', () => {
-      this._ready = false
-    });
-  }
-
-  /**
-   * 当前 Redis 连接是否就绪
-   * 供 rbac.service / health.controller 等做降级判断
-   */
-  isReady(): boolean {
-    return this._ready
   }
 
   // 模块初始化生命周期钩子，在应用启动时调用

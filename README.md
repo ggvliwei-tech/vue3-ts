@@ -94,11 +94,12 @@ pnpm build:shared
 pnpm dev:full    # 同时启动 server + admin + app
 # 或分别启动
 pnpm dev:server  # 后端（localhost:3000）
-pnpm dev:admin   # Admin 前端（localhost:5173）
-pnpm dev:app     # App 前端（localhost:5174）
+pnpm dev:admin   # Admin 前端（localhost:5175）
+pnpm dev:app     # App 前端（localhost:5173）
 
 # 6. 局域网访问
-#    把 5173/5174/3000 后面的 localhost 换成你的 LAN IP（如 192.168.1.x）
+#    把 5173/5175/3000 后面的 localhost 换成你的 LAN IP（如 192.168.1.x）
+#    （改用其他端口时，记得同步 backend 的 CORS_ORIGINS 白名单）
 #    vite.config.ts 已配置 host:true，自动绑定 0.0.0.0
 ```
 
@@ -106,7 +107,7 @@ pnpm dev:app     # App 前端（localhost:5174）
 
 ```bash
 # 构建
-pnpm build:all           # 构建 shared + server + admin + app
+pnpm build:all           # 构建 shared + admin + app（不含 server，server 见下）
 pnpm build:shared        # 只构建共享包
 pnpm build:server        # 只构建后端
 
@@ -213,13 +214,14 @@ sys_user          ←── sys_user_role ──→ sys_role
 ### 日志格式
 
 ```
-# 控制台（开发友好，带颜色）
-[NestApp] [Nest] 28676  - 2026/08/28 10:00:00     LOG [UserService] 用户登录成功
+# 控制台（开发友好，带颜色；上下文取自 new Logger(X.name)）
+[NestApp] [Nest] 28676  - 2026/08/28 10:00:00     WARN [JwtAuthGuard] [Auth] 黑名单检查失败: connection is closed
 
 # logs/app-YYYY-MM-DD.log（JSON 结构化）
 {
-  "level": "info",
-  "message": "用户登录成功",
+  "level": "warn",
+  "message": "[Auth] 黑名单检查失败: connection is closed",
+  "context": "JwtAuthGuard",
   "timestamp": "2026-08-28 10:00:00.123",
   "service": "nest-app",
   "env": "production"
@@ -227,6 +229,10 @@ sys_user          ←── sys_user_role ──→ sys_role
 
 # logs/error-YYYY-MM-DD.log（仅 error 级别，供告警系统采集）
 ```
+
+> ⚠️ 文件名里的 `YYYY-MM-DD` 是**进程启动那天**，不是滚动日期：用的是
+> `winston.transports.File` 而非 `DailyRotateFile`，实际切割只按大小（20MB × 14 个文件）。
+> 长期不重启的进程会一直写同一个文件，排查时别把它当「当天日志」。
 
 ### 健康检查
 
@@ -305,11 +311,11 @@ pnpm test
 # 覆盖率报告
 pnpm --filter @project/server test:cov
 
-# 当前覆盖率（关键服务）
-# - LoginThrottlerService: 100%
-# - SessionService:        100%
-# - GlobalExceptionFilter: 95%+
-# - UserService:           70%+（核心路径）
+# 当前单测（服务端 10 个 spec）
+# - common/:  GlobalExceptionFilter / RefreshTokenGuard / pagination.util
+# - modules/: LoginThrottlerService / SessionService / ChatGateway / ChatService
+#             RbacService / SmsService / UserCrudService
+# 前端：shared 有 vitest（auth-storage / token-refresh），admin / app 暂无单测
 ```
 
 ## 📝 开发规范

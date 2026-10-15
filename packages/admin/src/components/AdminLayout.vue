@@ -2,8 +2,11 @@
 <script setup lang="ts">
 // 从 vue 导入 computed 用于创建计算属性
 import { computed } from 'vue'
-// 从 vue-router 导入 useRouter 用于程序化导航
-import { useRouter } from 'vue-router'
+// 从 vue-router 导入 useRouter / useRoute：前者用于程序化导航，后者读取当前路由
+// 注意：这里用 useRoute() 而不是模板里的 $route —— vue-router 的 ComponentCustomProperties
+// 全局增强在本仓库中不会合并进模板上下文（@vue/runtime-core 里那份未受影响），
+// 直接写 $route 会报 TS2339。useRoute() 与 $route 语义完全等价。
+import { useRouter, useRoute } from 'vue-router'
 // 从 element-plus 导入 ElMessage 用于显示消息提示
 import { ElMessage } from 'element-plus'
 // 从 element-plus 图标库显式导入需要的图标
@@ -16,6 +19,8 @@ import { notifyLogout } from '@project/shared/token-refresh'
 
 // 获取路由器实例
 const router = useRouter()
+// 当前路由（等价于模板里的 $route，见文件顶部说明）
+const route = useRoute()
 // 认证 store：用户名等展示信息与登录态同源
 const authStore = useAuthStore()
 
@@ -50,7 +55,7 @@ async function handleLogout() {
       <div class="logo">管理后台</div>
       <!-- Element Plus 菜单组件，default-active 绑定当前路由路径以高亮对应菜单项 -->
       <el-menu
-        :default-active="$route.path"
+        :default-active="route.path"
         router
         background-color="#304156"
         text-color="#bfcbd9"
@@ -103,7 +108,7 @@ async function handleLogout() {
       <!-- 顶部导航栏 -->
       <el-header class="admin-header">
         <!-- 显示当前路由的 meta.title 作为页面标题 -->
-        <span class="header-title">{{ $route.meta.title }}</span>
+        <span class="header-title">{{ route.meta.title }}</span>
         <!-- 右侧操作区：当前登录人 + 退出登录按钮 -->
         <div class="header-right">
           <!-- 当前登录人区域，使用 Element Plus 的 dropdown 风格展示（这里简化为文字+图标） -->

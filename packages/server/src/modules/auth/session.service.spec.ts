@@ -282,21 +282,10 @@ describe('SessionService', () => {
     it('只影响被拉黑的那台设备，同用户其他设备不受波及', async () => {
       await service.blacklistSession(1, 'sess-1')
 
-      expect(await service.isSessionBlacklisted(1, 'sess-1')).toBe(true)
-      expect(await service.isSessionBlacklisted(1, 'sess-2')).toBe(false)
+      expect(redisStore.has('blacklist:session:1:sess-1')).toBe(true)
+      expect(redisStore.has('blacklist:session:1:sess-2')).toBe(false)
       // 设备级拉黑不应连带触发用户级拉黑（否则"多设备互不影响"就失效了）
-      expect(await service.isBlacklisted(1)).toBe(false)
-    })
-  })
-
-  describe('isBlacklisted - 黑名单检查', () => {
-    it('黑名单存在时返回 true', async () => {
-      redisStore.set('blacklist:token:5', { value: '1' })
-      expect(await service.isBlacklisted(5)).toBe(true)
-    })
-
-    it('黑名单不存在时返回 false', async () => {
-      expect(await service.isBlacklisted(999)).toBe(false)
+      expect(redisStore.has('blacklist:token:1')).toBe(false)
     })
   })
 })

@@ -38,7 +38,7 @@ import { DashboardService } from './dashboard/dashboard.service'
  *  - 审计日志查询（管理端命名空间）
  *  - 仪表盘统计
  *
- * 所有路由前缀为 /admin/**，访问需要 admin 角色
+ * 所有路由前缀为 /admin/**，访问按各接口 @Permissions 声明的权限码校验
  */
 @Module({
   imports: [

@@ -9,7 +9,7 @@
 #   - app        Vue3 App 移动端 H5（Nginx 托管）
 #
 # 使用：
-#   1. 准备 nest-db.sql（项目根目录）首次启动会自动导入
+#   1. 数据库 schema 由 packages/server/nest-db.sql 提供，首次启动自动导入（无需手工建库）
 #   2. 复制 .env.example 为 .env 并按需修改密码等
 #   3. docker compose up -d
 #   4. 访问：

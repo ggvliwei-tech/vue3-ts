@@ -1,7 +1,7 @@
 /**
  * LLM 提供方策略服务
  *
- * C4 拆分：将原 AiService 中 LLM 客户端创建与对话调用相关的职责抽出
+ * 从 AiService 抽出的 LLM 客户端创建与对话调用职责
  * 采用策略模式屏蔽 OpenAI / DashScope / Ollama 的差异，
  * 后续新增模型只需在本文件追加 case 分支即可，无需改动业务调用方。
  */

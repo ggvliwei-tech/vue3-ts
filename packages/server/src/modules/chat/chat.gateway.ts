@@ -20,8 +20,8 @@ import { ChatService } from './chat.service';
 import { SendMessageDto } from './dto/send-message.dto';
 // Redis 服务，用于黑名单检查
 import { RedisService } from '../redis/redis.service';
-// 用户服务，用于 status 校验
-import { UserService } from '../user/user.service';
+// 用户 CRUD 服务，用于 status 校验
+import { UserCrudService } from '../user/user-crud.service';
 // RBAC 服务，用于 WS 连接时校验 chat:room 权限（RbacModule 为 @Global，无需在 ChatModule 中 import）
 import { RbacService } from '../rbac/rbac.service';
 // 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
@@ -51,8 +51,8 @@ interface WsSocketData {
 @WebSocketGateway({
   namespace: '/ws',   // 命名空间配置，所有 WebSocket 路径以 /ws 开头
   cors: {
-    // 允许的跨域来源列表，仅允许开发环境前端地址
-    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+    // 允许的跨域来源列表，仅允许开发环境前端地址（app=5173、admin=5175）
+    origin: ['http://localhost:5173', 'http://localhost:5175'],
     // 允许携带凭证（cookie、认证头）进行跨域请求
     credentials: true,
   },
@@ -73,7 +73,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly configService: ConfigService,   // 注入配置服务，用于读取 JWT 密钥
     private readonly chatService: ChatService,       // 注入聊天服务，用于房间管理和消息持久化
     private readonly redisService: RedisService,     // 注入 Redis 服务，用于黑名单检查
-    private readonly userService: UserService,       // 注入用户服务，用于 status 校验
+    private readonly userCrudService: UserCrudService, // 注入用户 CRUD 服务，用于 status 校验
     private readonly rbacService: RbacService,       // 注入 RBAC 服务，用于 WS 连接时的权限码校验
   ) {}
 
@@ -117,17 +117,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // 两种粒度都要查，缺任一种都会让对应的踢下线操作被 WS 绕过：
       //  - 用户级：踢全部设备（forceKick 不带 sessionId / logout-all）
       //  - 设备级：仅踢当前设备（RT 复用检测 / 踢指定设备）
-      const blacklistChecks = [
+      // sessionId 是签发 access token 时的必填字段（见 AuthService.login），故无条件检查
+      const blacklistHits = await Promise.all([
         this.redisService.exists(AuthKeys.blacklistUser(payload.sub)),
-      ];
-      if (payload.sessionId) {
-        blacklistChecks.push(
-          this.redisService.exists(
-            AuthKeys.blacklistSession(payload.sub, payload.sessionId),
-          ),
-        );
-      }
-      const blacklistHits = await Promise.all(blacklistChecks);
+        this.redisService.exists(
+          AuthKeys.blacklistSession(payload.sub, payload.sessionId),
+        ),
+      ]);
       if (blacklistHits.some((hit) => hit)) {
         this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 已在黑名单中`);
         client.emit('error', { code: 401, msg: '账号已被强制下线，请重新登录' });
@@ -137,7 +133,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // 安全加固：检查用户 status（账号是否被禁用）
       // 不依赖 JWT payload，因为 token 签发后状态可能已变
-      const user = await this.userService.findUserEntity(payload.sub);
+      const user = await this.userCrudService.findUserEntity(payload.sub);
       if (!user) {
         this.logger.warn(`WS 连接被拒: 用户 ${payload.username} 不存在`);
         client.emit('error', { code: 401, msg: '用户不存在' });

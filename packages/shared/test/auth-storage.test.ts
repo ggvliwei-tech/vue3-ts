@@ -4,9 +4,8 @@
  * 这一层是 token / userInfo 的唯一读写入口，前端所有鉴权判断都建立在它之上。
  * 历史缺陷正是"写 A 读 B"：AuthStore 写 sessionStorage，而拦截器 / 路由守卫 /
  * websocket / SSE 全读 localStorage，于是新标签页必然走到 /403 且无法自愈。
- * 因此这里锁死两件事：
- *  - 读写必须落在同一组命名空间键（auth.token / auth.userInfo）上
- *  - 旧键迁移必须完整执行，且不覆盖较新的状态
+ * 因此这里锁死一件事：读写必须落在同一组命名空间键
+ * （auth.token / auth.userInfo）上，不得再出现裸键。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -17,7 +16,6 @@ import {
   getTokenExp,
   getUserInfo,
   getUserIdFromToken,
-  migrateLegacyStorage,
   parseJwt,
   setToken,
   setUserInfo,
@@ -161,73 +159,4 @@ describe('auth-storage', () => {
     })
   })
 
-  describe('migrateLegacyStorage', () => {
-    it('把旧键完整迁移到新键', () => {
-      const token = makeJwt({ sub: 55 })
-      localStorage.setItem('token', token)
-      localStorage.setItem('username', 'legacy-user')
-      localStorage.setItem('roles', JSON.stringify(['admin', 'user']))
-      localStorage.setItem('permissions', JSON.stringify(['user:list']))
-
-      migrateLegacyStorage()
-
-      expect(getToken()).toBe(token)
-      expect(getUserInfo()).toEqual({
-        // 旧数据没有单独存 id，必须从 token 的 sub 还原
-        id: 55,
-        username: 'legacy-user',
-        roles: ['admin', 'user'],
-        permissions: ['user:list'],
-      })
-    })
-
-    it('迁移后旧键一律清除', () => {
-      localStorage.setItem('token', makeJwt({ sub: 1 }))
-      localStorage.setItem('username', 'legacy-user')
-
-      migrateLegacyStorage()
-
-      for (const key of ['token', 'username', 'roles', 'permissions']) {
-        expect(localStorage.getItem(key)).toBeNull()
-      }
-    })
-
-    it('没有任何旧数据时也清掉旧键，且不产生新数据', () => {
-      migrateLegacyStorage()
-
-      expect(getToken()).toBe('')
-      expect(getUserInfo()).toBeNull()
-      for (const key of ['token', 'username', 'roles', 'permissions']) {
-        expect(localStorage.getItem(key)).toBeNull()
-      }
-    })
-
-    it('新键已有数据时不覆盖（避免冲掉用户已刷新过的较新状态）', () => {
-      setToken('new-token')
-      localStorage.setItem('token', 'legacy-token')
-
-      migrateLegacyStorage()
-
-      expect(getToken()).toBe('new-token')
-    })
-
-    it('旧 token 解析不出 sub 时 id 记 0，而不是抛错', () => {
-      localStorage.setItem('token', 'not-a-jwt')
-      localStorage.setItem('username', 'legacy-user')
-
-      migrateLegacyStorage()
-
-      expect(getToken()).toBe('not-a-jwt')
-      expect(getUserInfo()?.id).toBe(0)
-    })
-
-    it('旧 roles 不是合法 JSON 时退化为空数组', () => {
-      localStorage.setItem('token', makeJwt({ sub: 1 }))
-      localStorage.setItem('roles', '不是数组')
-
-      migrateLegacyStorage()
-
-      expect(getUserInfo()?.roles).toEqual([])
-    })
-  })
 })

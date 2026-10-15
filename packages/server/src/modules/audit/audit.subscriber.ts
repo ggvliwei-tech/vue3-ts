@@ -1,7 +1,7 @@
 /**
  * 审计事件订阅者
  *
- * C5 重构：**用户侧**业务不再直接调用 AuditService.log()，改为通过
+ * **用户侧**业务不再直接调用 AuditService.log()，改为通过
  * EventEmitter 发出 `audit.log` 事件，本订阅者监听后异步落库。
  *
  * 好处：

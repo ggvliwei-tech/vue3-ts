@@ -1,7 +1,7 @@
 /**
  * 全局认证状态（Pinia Store）
  *
- * M1 重构：把分散在 localStorage / 各 .vue 组件里的 token 与 userInfo
+ * 把分散在 localStorage / 各 .vue 组件里的 token 与 userInfo
  * 统一收敛到一个 Pinia store，集中管理：
  *  - token（AccessToken）+ 持久化
  *  - userInfo（id / username / roles / permissions / status）

@@ -131,7 +131,10 @@ export class ChatService {
    * 该写法的正确性依赖 chat_member 上的唯一键 uk_chat_member_room_user
    * （权威定义在 nest-db.sql；实体上的 @Index 只是把不变量写进元数据）。
    * 若某环境的表缺这个键，INSERT IGNORE 不报错也不去重，会静默插出重复行 ——
-   * 升级脚本 upgrade-chat-member-persistent.sql 的 Step 0 就是为此设的强制前置检查。
+   * 部署后可用下面这条查询确认唯一键在位（NON_UNIQUE 应为 0，返回 2 行）：
+   *   SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE FROM INFORMATION_SCHEMA.STATISTICS
+   *   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_member'
+   *     AND INDEX_NAME = 'uk_chat_member_room_user';
    */
   async joinRoom(roomId: number, userId: number, username: string) {
     // 检查房间是否存在

@@ -45,7 +45,7 @@ describe('GlobalExceptionFilter', () => {
     it('应透传业务码、msg、data', () => {
       const host = mockHost({ headers: {}, url: '/x' })
       const ex = new BusinessException(BusinessCode.FORBIDDEN, '权限不足', { hint: 'no-access' })
-      filter.catch(ex, host as any)
+      filter.catch(ex, host)
 
       const res = host.__mockRes
       expect(res.status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN)
@@ -67,7 +67,7 @@ describe('GlobalExceptionFilter', () => {
     // 修复后应在这里补上 expect(body.code).toBe(BusinessCode.PARAM_INVALID)。
     it('BadRequestException → 400（业务码映射尚未实现，不在此断言）', () => {
       const host = mockHost({ headers: {}, url: '/x' })
-      filter.catch(new BadRequestException('参数错误'), host as any)
+      filter.catch(new BadRequestException('参数错误'), host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST)
       expect(body.msg).toBe('参数错误')
@@ -75,14 +75,14 @@ describe('GlobalExceptionFilter', () => {
 
     it('NotFoundException → 404', () => {
       const host = mockHost({ headers: {}, url: '/x' })
-      filter.catch(new NotFoundException('用户不存在'), host as any)
+      filter.catch(new NotFoundException('用户不存在'), host)
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND)
       expect(host.__mockRes.json.mock.calls[0][0].msg).toBe('用户不存在')
     })
 
     it('UnauthorizedException → 401', () => {
       const host = mockHost({ headers: {}, url: '/x' })
-      filter.catch(new UnauthorizedException('请先登录'), host as any)
+      filter.catch(new UnauthorizedException('请先登录'), host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.UNAUTHORIZED)
       expect(body.msg).toBe('请先登录')
@@ -94,7 +94,7 @@ describe('GlobalExceptionFilter', () => {
         { message: ['name 不能为空', 'phone 格式错误'], error: 'Bad Request', statusCode: 400 },
         HttpStatus.BAD_REQUEST,
       )
-      filter.catch(validationErr, host as any)
+      filter.catch(validationErr, host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.PARAM_INVALID)
       expect(body.msg).toBe('name 不能为空; phone 格式错误')
@@ -106,7 +106,7 @@ describe('GlobalExceptionFilter', () => {
     it('通用 DB 错误 → DATABASE_ERROR 500', () => {
       const host = mockHost({ headers: {}, url: '/x' })
       const err = new QueryFailedError('SELECT 1', [], new Error('connection lost'))
-      filter.catch(err, host as any)
+      filter.catch(err, host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.DATABASE_ERROR)
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -118,7 +118,7 @@ describe('GlobalExceptionFilter', () => {
       const err = new QueryFailedError('INSERT ...', [], driverErr as any)
       // QueryFailedError 在我们的代码里用 (exception as any).driverError 访问
       ;(err as any).driverError = driverErr
-      filter.catch(err, host as any)
+      filter.catch(err, host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.CONFLICT)
       expect(body.msg).toMatch(/已存在/)
@@ -128,7 +128,7 @@ describe('GlobalExceptionFilter', () => {
   describe('未知错误', () => {
     it('未捕获的 Error → INTERNAL_ERROR 500', () => {
       const host = mockHost({ headers: {}, url: '/api/x' })
-      filter.catch(new Error('something blew up'), host as any)
+      filter.catch(new Error('something blew up'), host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.INTERNAL_ERROR)
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -136,7 +136,7 @@ describe('GlobalExceptionFilter', () => {
 
     it('非 Error 抛出值（如字符串）也应被兜底处理', () => {
       const host = mockHost({ headers: {}, url: '/api/x' })
-      filter.catch('raw string error', host as any)
+      filter.catch('raw string error', host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.INTERNAL_ERROR)
     })
@@ -145,7 +145,7 @@ describe('GlobalExceptionFilter', () => {
   describe('requestId 行为', () => {
     it('入参 X-Request-Id 应被透传', () => {
       const host = mockHost({ headers: { 'x-request-id': 'client-supplied-id-123' }, url: '/x' })
-      filter.catch(new BadRequestException('xxx'), host as any)
+      filter.catch(new BadRequestException('xxx'), host)
       expect(host.__mockRes.setHeader).toHaveBeenCalledWith('X-Request-Id', 'client-supplied-id-123')
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.requestId).toBe('client-supplied-id-123')
@@ -153,7 +153,7 @@ describe('GlobalExceptionFilter', () => {
 
     it('未提供时应自动生成', () => {
       const host = mockHost({ headers: {}, url: '/x' })
-      filter.catch(new Error('x'), host as any)
+      filter.catch(new Error('x'), host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.requestId).toMatch(/^req_[a-z0-9_]+$/)
     })
@@ -162,7 +162,7 @@ describe('GlobalExceptionFilter', () => {
   describe('响应格式', () => {
     it('应包含 code/msg/data/requestId/timestamp 五个字段', () => {
       const host = mockHost({ headers: {}, url: '/x' })
-      filter.catch(new BadRequestException('test'), host as any)
+      filter.catch(new BadRequestException('test'), host)
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body).toHaveProperty('code')
       expect(body).toHaveProperty('msg')

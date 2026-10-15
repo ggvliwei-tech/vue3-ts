@@ -1,7 +1,7 @@
 /**
  * JWT 工具函数
  *
- * C5 拆分：从 UserService 抽出 "解析 expiresIn 字符串为秒数" 这类纯工具方法，
+ * 从鉴权链路抽出 "解析 expiresIn 字符串为秒数" 这类纯工具方法，
  * 供 AuthService / SessionService / 其他模块共享，避免重复实现。
  */
 import { ConfigService } from '@nestjs/config'

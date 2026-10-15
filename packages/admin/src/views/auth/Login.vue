@@ -10,7 +10,7 @@ import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 // 导入用户相关的 API 方法，此处使用 login 登录
 import { login } from '@/api/user'
-// M1：使用 Pinia store 统一管理 token / userInfo
+// 使用 Pinia store 统一管理 token / userInfo
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 // 登录后需要补一次静默续期排期
 import { scheduleSilentRefresh } from '@project/shared/token-refresh'
@@ -21,7 +21,7 @@ const router = useRouter()
 const route = useRoute()
 // 创建表单实例的 ref 引用，用于调用表单验证方法
 const formRef = ref<FormInstance>()
-// 认证 store（M1）
+// 认证 store
 const authStore = useAuthStore()
 
 // 创建表单数据的响应式对象，包含用户名和密码字段
@@ -59,8 +59,6 @@ async function handleLogin() {
       password: form.value.password,
     })
     // 统一写入 AuthStore，由 auth-storage 持久化
-    // 此前这里还会额外写一份平铺键（'token' / 'username' / 'roles' / 'permissions'）
-    // 供老代码读取，两处状态各自独立、极易不一致，现已全部收敛到 auth-storage
     authStore.login({
       accessToken: res.data.accessToken,
       userInfo: {

@@ -19,7 +19,7 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
 import { ConfigService } from '@nestjs/config'
 import { RefreshTokenGuard } from './refresh-token.guard'
-import { UserService } from '../../modules/user/user.service'
+import { UserCrudService } from '../../modules/user/user-crud.service'
 import { RedisService } from '../../modules/redis/redis.service'
 
 const USER_ID = 7
@@ -54,7 +54,7 @@ describe('RefreshTokenGuard', () => {
     set: jest.fn(),
     del: jest.fn(),
   }
-  const mockUserService = { findUserEntity: jest.fn() }
+  const mockUserCrudService = { findUserEntity: jest.fn() }
 
   beforeEach(async () => {
     jest.clearAllMocks()
@@ -70,7 +70,7 @@ describe('RefreshTokenGuard', () => {
       sessionId: SESSION_ID,
     })
     mockRedisService.get.mockResolvedValue(VALID_RT)
-    mockUserService.findUserEntity.mockResolvedValue({
+    mockUserCrudService.findUserEntity.mockResolvedValue({
       id: USER_ID,
       username: 'alice',
       status: 1,
@@ -83,7 +83,7 @@ describe('RefreshTokenGuard', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: RedisService, useValue: mockRedisService },
-        { provide: UserService, useValue: mockUserService },
+        { provide: UserCrudService, useValue: mockUserCrudService },
       ],
     }).compile()
 
@@ -200,7 +200,7 @@ describe('RefreshTokenGuard', () => {
 
   describe('用户状态异常', () => {
     it('用户已被禁用时吊销该设备 RT 并拒绝', async () => {
-      mockUserService.findUserEntity.mockResolvedValue({
+      mockUserCrudService.findUserEntity.mockResolvedValue({
         id: USER_ID,
         username: 'alice',
         status: 0,
@@ -215,7 +215,7 @@ describe('RefreshTokenGuard', () => {
     })
 
     it('用户不存在时吊销该设备 RT 并拒绝', async () => {
-      mockUserService.findUserEntity.mockResolvedValue(null)
+      mockUserCrudService.findUserEntity.mockResolvedValue(null)
       const { context } = createContext({ refresh_token: VALID_RT })
 
       await expect(guard.canActivate(context)).rejects.toThrow(/用户不存在/)

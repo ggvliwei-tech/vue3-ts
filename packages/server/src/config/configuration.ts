@@ -24,7 +24,6 @@ export default () => ({ // 导出配置函数，NestJS ConfigModule 会调用此
   OSS_ACCESS_KEY_ID: process.env.OSS_ACCESS_KEY_ID || '', // OSS 访问密钥 ID（选填）
   OSS_ACCESS_KEY_SECRET: process.env.OSS_ACCESS_KEY_SECRET || '', // OSS 访问密钥 Secret（选填）
   OSS_BUCKET: process.env.OSS_BUCKET || '', // OSS Bucket 名称（选填）
-  OSS_BASE_URL: process.env.OSS_BASE_URL || '', // OSS 基础 URL（选填）
   OSS_CDN_DOMAIN: process.env.OSS_CDN_DOMAIN || '', // CDN 域名前缀（选填）
   OSS_UPLOAD_FOLDER: process.env.OSS_UPLOAD_FOLDER || 'uploads', // OSS 上传文件夹前缀，默认 uploads
 

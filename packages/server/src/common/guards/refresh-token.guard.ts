@@ -10,8 +10,8 @@ import {
 import { JwtService } from '@nestjs/jwt'
 // 配置服务，用于读取 Refresh Token 密钥
 import { ConfigService } from '@nestjs/config'
-// 用户服务，用于查询用户信息
-import { UserService } from '../../modules/user/user.service'
+// 用户 CRUD 服务，用于查询用户实体
+import { UserCrudService } from '../../modules/user/user-crud.service'
 // Redis 服务
 import { RedisService } from '../../modules/redis/redis.service'
 // 认证相关 Redis key（集中定义，避免手工拼接导致 key 漂移）
@@ -31,8 +31,8 @@ import { parseJwtExpiry } from '../utils/jwt.util'
  *
  * 注意「只吊销该设备」是刻意的，不是遗漏：用户级 key 会让一台设备出问题
  * 就把该用户其他设备一起踢下线，与「多设备会话互不影响」的承诺矛盾
- * （见实现里 blacklistSession 与 blacklistToken 的区分）。
- * 需要「踢该用户全部设备」请走 UserService.forceKick / logout-all。
+ * （见实现里 blacklistSession 与 blacklistUser 的区分）。
+ * 需要「踢该用户全部设备」请走 AuthService.forceKick / logout-all。
  */
 @Injectable()
 export class RefreshTokenGuard implements CanActivate {
@@ -42,7 +42,7 @@ export class RefreshTokenGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly userService: UserService,
+    private readonly userCrudService: UserCrudService,
     private readonly redisService: RedisService,
   ) {}
 
@@ -135,7 +135,7 @@ export class RefreshTokenGuard implements CanActivate {
     }
 
     // 第四步：RT 一致，从数据库查询用户实体（避免直接信任 JWT payload）
-    const user = await this.userService.findUserEntity(payload.sub)
+    const user = await this.userCrudService.findUserEntity(payload.sub)
     if (!user) {
       // 用户已被删除 → 精确吊销该设备的 RT（key 必须带 sessionId，见下方注释）
       await this.redisService.del(

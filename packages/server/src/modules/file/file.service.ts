@@ -25,7 +25,7 @@ const ALLOW_IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp)$/i;
 const ALLOW_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
 /**
- * M11：图片文件魔术字节（magic bytes / 文件头）指纹
+ * 图片文件魔术字节（magic bytes / 文件头）指纹
  * 仅依赖文件头前 12 字节即可判断真实格式，不信任客户端上传的 mimetype / 后缀
  * - JPEG:  FF D8 FF
  * - PNG:   89 50 4E 47 0D 0A 1A 0A
@@ -134,11 +134,11 @@ export class FileService {
     }
     // 提取文件扩展名
     const ext = file.originalname.substring(file.originalname.lastIndexOf('.')); // 从原始文件名中提取扩展名
-    // M11：扩展名仅作为辅助参考，最终以魔术字节为准（防 .php.jpg 这种欺骗）
+    // 扩展名仅作为辅助参考，最终以魔术字节为准（防 .php.jpg 这种欺骗）
     if (!ALLOW_IMAGE_EXT.test(ext)) {
       throw new BadRequestException('仅支持 jpg、png、gif、webp 图片格式');
     }
-    // M11：通过文件头真实检测图片类型，不信任客户端 mimetype
+    // 通过文件头真实检测图片类型，不信任客户端 mimetype
     const realMime = detectImageTypeByMagic(file.buffer);
     if (!realMime || !ALLOW_MIME.includes(realMime)) {
       throw new BadRequestException('文件内容与图片格式不匹配');
@@ -185,7 +185,7 @@ export class FileService {
 
   /**
    * 删除文件（物理删除+数据库记录）
-   * C8 修复：所有权校验 —— 仅本人或 admin 角色可删
+   * 所有权校验 —— 仅本人或 admin 角色可删
    * @param id 文件 ID
    * @param currentUser 当前登录用户（id + roles）
    */
@@ -198,7 +198,7 @@ export class FileService {
     // 如果文件不存在，抛出异常
     if (!file) throw new BadRequestException('文件不存在');
 
-    // C8: 所有权校验
+    // 所有权校验
     // - admin 角色可删除任意文件
     // - 其他用户只能删除自己上传的文件
     const isAdmin = currentUser.roles?.includes('admin') ?? false

@@ -32,10 +32,10 @@ export class OssStorage implements FileStorage {
     // 如果客户端未初始化，则创建新实例
     if (!this.client) {
       this.client = new OSS({
-        region: <string>this.configService.get('OSS_REGION'),                  // OSS 所在区域
+        region: this.configService.get('OSS_REGION'),                  // OSS 所在区域
         accessKeyId: <string>this.configService.get('OSS_ACCESS_KEY_ID'),      // 访问密钥 ID
         accessKeySecret: <string>this.configService.get('OSS_ACCESS_KEY_SECRET'), // 访问密钥 Secret
-        bucket: <string>this.configService.get('OSS_BUCKET'),                  // OSS Bucket 名称
+        bucket: this.configService.get('OSS_BUCKET'),                  // OSS Bucket 名称
       });
     }
     return this.client;

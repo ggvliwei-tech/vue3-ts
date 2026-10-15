@@ -16,7 +16,7 @@ import { ChatController } from './chat.controller';
 import { ChatRoomEntity } from './entities/chat-room.entity';
 import { ChatMemberEntity } from './entities/chat-member.entity';
 import { ChatMessageEntity } from './entities/chat-message.entity';
-// 用户模块，提供 UserService 用于 status 校验
+// 用户模块，提供 UserCrudService 用于 status 校验
 import { UserModule } from '../user/user.module';
 
 // @Module() 装饰器定义模块元数据
@@ -29,7 +29,7 @@ import { UserModule } from '../user/user.module';
     JwtModule,
     // 配置模块用于读取环境变量
     ConfigModule,
-    // 用户模块，提供 UserService（用于 WS 连接时的 status 校验）
+    // 用户模块，提供 UserCrudService（用于 WS 连接时的 status 校验）
     // 这是**单向**依赖：Chat → User，UserModule 并不导入 ChatModule，
     // 所以这里不需要 forwardRef()（写上反而是误导，会让人以为存在既成循环）
     UserModule,
