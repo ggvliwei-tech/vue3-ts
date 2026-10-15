@@ -22,6 +22,8 @@ import axios, {
 import { getToken } from './auth-storage'
 // 统一刷新入口 + 会话失效出口
 import { handleSessionExpired, refreshAccessToken } from './token-refresh'
+// 统一错误类型：让上层能区分「网络抖动」和「会话失效」（见 api-error.ts 的说明）
+import { ApiError } from './api-error'
 
 // 扩展 AxiosRequestConfig 的自定义请求配置接口
 export interface RequestConfig extends AxiosRequestConfig {
@@ -122,32 +124,50 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
         const originalConfig = (response as any).config as RequestConfig
         // 标记了 skipRefresh 的请求：401 就是业务错误，原样抛给调用方
         if (originalConfig?.skipRefresh) {
-          return Promise.reject(new Error(data.msg || '请求失败'))
+          return Promise.reject(businessError(data.msg, response.status, data.code))
         }
         return handle401(originalConfig, instance)
       }
-      // 其他非 0 状态码视为业务错误，抛出带错误信息的异常
-      return Promise.reject(new Error(data.msg || '请求失败'))
+      // 其他非 0 状态码视为业务错误，抛出带错误信息的异常。
+      // 标成 business：服务端已经明确给了原因（权限不足、参数非法…），
+      // 刷新令牌时遇到这种错误才说明会话真的不能用。
+      return Promise.reject(businessError(data.msg, response.status, data.code))
     },
     // 响应失败回调：处理 HTTP 非 2xx 错误
     (error: unknown) => {
       const originalConfig = (error as any).config as RequestConfig | undefined
+      const status = (error as any).response?.status as number | undefined
       // 判断是否为 HTTP 401 状态码错误
-      if ((error as any).response?.status === 401) {
+      if (status === 401) {
         // 标记了 skipRefresh 的请求：401 是业务错误（如密码错误），
         // 不能当会话过期处理，否则用户永远看不到真正的错误原因
         if (originalConfig?.skipRefresh) {
           const msg = (error as any).response?.data?.msg || '请求失败'
-          return Promise.reject(new Error(msg))
+          return Promise.reject(businessError(msg, status))
         }
         return handle401(originalConfig ?? {}, instance)
       }
       // 提取错误信息：优先取响应体中的 msg，其次取错误对象的 message，最后使用默认提示
       const message = (error as any).response?.data?.msg || (error as Error).message || '网络异常'
-      // 以统一的 Error 对象拒绝
-      return Promise.reject(new Error(message))
+      // 以统一的 ApiError 拒绝。
+      // 有 response 说明请求确实到达了服务端（4xx/5xx）；没有 response 才是
+      // 真正没拿到响应的那一类（断网、DNS 失败、15s 超时、请求被取消）。
+      // 这个区分是 token-refresh 判断「能不能重试」的唯一依据，见 api-error.ts。
+      return Promise.reject(
+        new ApiError(message, { kind: status === undefined ? 'network' : 'http', status }),
+      )
     },
   )
+
+  /**
+   * 构造业务错误（HTTP 2xx 但 code !== 0，或 skipRefresh 请求的 401）
+   *
+   * status 可能为 undefined（极少数场景拿不到响应对象），
+   * 此时仍标成 business 而不是 network —— 能拿到响应体就说明网络是通的。
+   */
+  function businessError(msg: string | undefined, status?: number, code?: number): ApiError {
+    return new ApiError(msg || '请求失败', { kind: 'business', status, code })
+  }
 
   /**
    * 处理 401 响应的内部函数
@@ -183,9 +203,15 @@ export function createRequest(config: AxiosRequestConfig = {}): AxiosInstance {
         return axiosInstance.request(retryConfig) as Promise<AxiosResponse<ApiRes>>
       },
       (err: unknown) => {
-        // 刷新失败时 doRefresh 内部已触发 handleSessionExpired，这里只负责拒绝
-        const message = err instanceof Error ? err.message : '登录已过期，请重新登录'
-        return Promise.reject(new Error(message))
+        // 这里只负责拒绝，不做任何状态清理：
+        //  - 「会话确实失效」的情况，doRefresh 内部已经调过 handleSessionExpired；
+        //  - 「刷新请求碰上断网 / 5xx」属于可恢复失败，状态**必须保留**，
+        //    由调用方提示「网络异常，请稍后重试」，用户不必重新登录。
+        // 早先这里对两种情况一视同仁，配合 doRefresh 的无条件登出，
+        // 一次网络抖动就会把用户踢回登录页。
+        // 原样抛出（而不是包成新 Error）：保留 ApiError 的 kind / status，
+        // 上层才能判断能不能重试。
+        return Promise.reject(err instanceof Error ? err : new Error(String(err)))
       },
     )
   }

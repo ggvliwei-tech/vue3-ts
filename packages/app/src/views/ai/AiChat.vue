@@ -6,6 +6,9 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 // 从 AI API 模块中导入会话相关函数
 import { createSession, getLastSession, getSessionMessages } from '@/api/ai'
+// 权限码常量：模板里的 v-permission="PERM.AI_DOC_PRIVATE" 依赖它，
+// 指令本身已在 main.ts 全局注册，这里只需把常量引入当前模板作用域
+import { PERM } from '@/permission'
 // 从 SSE 工具模块中导入带历史上下文的流式消费函数
 import { consumeSSEWithHistory } from '@/utils/sse'
 // 统一的 token 刷新入口（single-flight，与 401 拦截器 / 静默续期共用同一次刷新）
@@ -598,8 +601,18 @@ onUnmounted(() => {
       left-arrow
       @click-left="router.back()"
     >
-      <!-- 右侧插槽：放置清空对话图标按钮 -->
+      <!-- 右侧插槽：我的资料入口 + 清空对话 -->
       <template #right>
+        <!-- 我的资料：上传 PDF 后提问时 AI 会一并检索，仅本人可见。
+             受 ai:doc:private 控制；没这个权限的用户后端也会拒（403），
+             这里用 v-permission 提前把入口摘掉，免得点进去只看到报错。 -->
+        <van-icon
+          v-permission="PERM.AI_DOC_PRIVATE"
+          name="records"
+          size="20"
+          class="nav-icon"
+          @click="router.push('/my-documents')"
+        />
         <van-icon name="delete-o" size="20" @click="clearChat" />
       </template>
     </van-nav-bar>

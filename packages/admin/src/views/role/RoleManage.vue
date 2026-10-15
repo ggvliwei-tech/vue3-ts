@@ -21,6 +21,8 @@ import {
 } from '@/api/role'
 import { listPermissionsGrouped, type Permission } from '@/api/permission'
 import { formatDate } from '@project/shared'
+// 权限码常量（模板里的 v-permission 用）
+import { PERM } from '@/permission'
 
 // ========== 列表状态 ==========
 const list = ref<Role[]>([])
@@ -35,6 +37,10 @@ const editDialogVisible = ref(false)
 const editFormRef = ref<FormInstance>()
 const editMode = ref<'create' | 'edit'>('create')
 const editingId = ref<number | null>(null)
+// 新建/编辑对话框的提交锁。此前确认按钮写死 `:loading="false"`，
+// 既没有任何进行中的反馈，也拦不住快速双击 —— 双击会发两次 createRole，
+// 第二次撞上 code 唯一约束报"角色编码已存在"，用户看到的是一个莫名其妙的错误。
+const editSubmitting = ref(false)
 const editForm = reactive<CreateRoleParams & { status: number }>({
   code: '',
   name: '',
@@ -145,34 +151,48 @@ async function handleEdit(row: Role) {
 /** 提交新建/编辑 */
 async function handleSubmit() {
   if (!editFormRef.value) return
-  await editFormRef.value.validate(async (valid) => {
-    if (!valid) return
-    try {
-      if (editMode.value === 'create') {
-        await createRole({
-          code: editForm.code,
-          name: editForm.name,
-          description: editForm.description || undefined,
-          status: editForm.status,
-          permissionCodes: editForm.permissionCodes?.filter(Boolean),
-        })
-        ElMessage.success('创建成功')
-      } else {
-        const data: UpdateRoleParams = {
-          name: editForm.name,
-          description: editForm.description || undefined,
-          status: editForm.status,
+  // 提交锁：不能只靠按钮的 :loading 禁用态 —— 它要等本组件的重渲染才会生效，
+  // 极快的双击有可能在那一帧之前就进来。这里同步挡一道。
+  if (editSubmitting.value) return
+  editSubmitting.value = true
+  try {
+    await editFormRef.value.validate(async (valid) => {
+      if (!valid) return
+      try {
+        if (editMode.value === 'create') {
+          await createRole({
+            code: editForm.code,
+            name: editForm.name,
+            description: editForm.description || undefined,
+            status: editForm.status,
+            permissionCodes: editForm.permissionCodes?.filter(Boolean),
+          })
+          ElMessage.success('创建成功')
+        } else {
+          const data: UpdateRoleParams = {
+            name: editForm.name,
+            description: editForm.description || undefined,
+            status: editForm.status,
+          }
+          await updateRole(editingId.value!, data)
+          // 编辑模式下权限变更通过独立的「配置权限」对话框处理
+          ElMessage.success('更新成功')
         }
-        await updateRole(editingId.value!, data)
-        // 编辑模式下权限变更通过独立的「配置权限」对话框处理
-        ElMessage.success('更新成功')
+        editDialogVisible.value = false
+        loadList()
+      } catch (e: any) {
+        ElMessage.error(e.message || '操作失败')
       }
-      editDialogVisible.value = false
-      loadList()
-    } catch (e: any) {
-      ElMessage.error(e.message || '操作失败')
-    }
-  })
+    })
+  } finally {
+    // 必须放在 finally 里，而且在 result 为 false 时也要解锁。
+    // 注意 el-form 的语义：**传了 callback 时它不 reject**，校验失败只是
+    // resolve 出 false 并回调 (false, invalidFields)（element-plus 2.14.3
+    // form.vue 里 `shouldThrow = !isFunction(callback)` 决定了这点）。
+    // 所以解锁不能挂在 catch/reject 上，否则一次校验失败就会把提交按钮
+    // 永久卡在 loading 态 —— 用户改对了字段也点不动。
+    editSubmitting.value = false
+  }
 }
 
 /** 删除角色 */
@@ -217,6 +237,8 @@ async function handleConfigPerm(row: Role) {
 /** 提交权限配置 */
 async function handleSubmitPerm() {
   if (!currentRole.value) return
+  // 同步锁，理由同 handleSubmit：按钮的 :loading 禁用态要等重渲染才生效
+  if (permDialogSubmitting.value) return
   permDialogSubmitting.value = true
   try {
     await assignPermissionsById(currentRole.value.id, checkedPermIds.value)
@@ -258,7 +280,10 @@ onMounted(loadList)
           <el-button @click="keyword = ''; handleSearch()">重置</el-button>
         </el-form-item>
         <el-form-item style="float: right">
-          <el-button type="success" @click="handleCreate">+ 新建角色</el-button>
+          <!-- 无 role:create 时整个入口不渲染；后端 PermissionsGuard 才是真正的边界 -->
+          <el-button v-permission="PERM.ROLE_CREATE" type="success" @click="handleCreate">
+            + 新建角色
+          </el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -286,9 +311,27 @@ onMounted(loadList)
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleEdit(row as Role)">编辑</el-button>
-            <el-button type="warning" size="small" @click="handleConfigPerm(row as Role)">配置权限</el-button>
             <el-button
+              v-permission="PERM.ROLE_UPDATE"
+              type="primary"
+              size="small"
+              @click="handleEdit(row as Role)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              v-permission="PERM.ROLE_ASSIGN_PERMISSION"
+              type="warning"
+              size="small"
+              @click="handleConfigPerm(row as Role)"
+            >
+              配置权限
+            </el-button>
+            <!-- 这里有两层拦截，作用不同，都要留：
+                 v-permission 是「你有没有这个权限」，:disabled 是「这个角色本身能不能删」。
+                 内置角色即便对 admin 也不允许删除（后端也会拒），所以禁用态必须保留。 -->
+            <el-button
+              v-permission="PERM.ROLE_DELETE"
               type="danger"
               size="small"
               :disabled="['admin', 'user', 'editor'].includes(row.code)"
@@ -350,7 +393,7 @@ onMounted(loadList)
       </el-form>
       <template #footer>
         <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="false" @click="handleSubmit">确认</el-button>
+        <el-button type="primary" :loading="editSubmitting" @click="handleSubmit">确认</el-button>
       </template>
     </el-dialog>
 

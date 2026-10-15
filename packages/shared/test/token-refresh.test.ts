@@ -13,9 +13,21 @@ import { makeJwt } from './helpers'
 
 type AuthStorage = typeof import('../src/auth-storage')
 type TokenRefresh = typeof import('../src/token-refresh')
+type ApiErrorModule = typeof import('../src/api-error')
 
 let storage: AuthStorage
 let mod: TokenRefresh
+/**
+ * ApiError 必须从**当前这一代**模块注册表里取，不能用文件顶部的静态 import。
+ *
+ * beforeEach 里的 vi.resetModules() 会让 `await import('../src/token-refresh')`
+ * 连同它的依赖 api-error 一起重新求值，于是 token-refresh 内部用的
+ * ApiError 与静态 import 拿到的是**两个不同的类**，`instanceof` 恒为 false ——
+ * token-refresh 会把所有失败都当成"无法分类"，全部走登出流程，
+ * 而真正的分类逻辑根本没被测到（表现为 5 个可恢复失败的用例集体失败）。
+ * 生产环境只有一份模块实例，不存在这个问题；这里必须跟着测试的重置节奏走。
+ */
+let ApiErrorClass: ApiErrorModule['ApiError']
 
 /** 本测试内注册的 storage 监听器，afterEach 需清理（见 beforeEach 注释） */
 const storageListeners: EventListener[] = []
@@ -46,6 +58,8 @@ beforeEach(async () => {
 
   storage = await import('../src/auth-storage')
   mod = await import('../src/token-refresh')
+  // 与 mod 同一代（见 ApiErrorClass 的说明）
+  ApiErrorClass = (await import('../src/api-error')).ApiError
 })
 
 afterEach(() => {
@@ -128,6 +142,129 @@ describe('refreshAccessToken', () => {
 
     await expect(mod.refreshAccessToken()).rejects.toThrow(/未返回 accessToken/)
     expect(onAuthCleared).toHaveBeenCalledTimes(1)
+  })
+
+  // ---------- 可恢复失败：不能因为一次网络抖动就把用户踢下线 ----------
+  //
+  // 回归：此前 doRefresh 的 catch 是无条件 handleSessionExpired()，注释还写着
+  // "走到这里说明会话真的结束了"。实际只要刷新请求碰上断网 / 超时 / 后端 5xx，
+  // 用户就被清掉本地状态并跳回登录页 —— 而服务端的 refresh token 完好无损，
+  // 过一会儿重试本就能恢复。
+
+  it('刷新碰上网络错误时保留登录态，不跳登录页', async () => {
+    const onAuthCleared = vi.fn()
+    storage.setToken('at-old')
+    storage.setUserInfo({ id: 1, username: 'alice' })
+    mod.configureAuth({
+      refreshFn: vi.fn().mockRejectedValue(new ApiErrorClass('Network Error', { kind: 'network' })),
+      onAuthCleared,
+    })
+
+    await expect(mod.refreshAccessToken()).rejects.toThrow('Network Error')
+
+    // 关键：这三项都不该被动过
+    expect(onAuthCleared).not.toHaveBeenCalled()
+    expect(storage.getToken()).toBe('at-old')
+    expect(storage.getUserInfo()).toEqual({ id: 1, username: 'alice' })
+  })
+
+  it.each([500, 502, 503])('刷新碰上服务端 %s 时同样保留登录态', async (status) => {
+    const onAuthCleared = vi.fn()
+    storage.setToken('at-old')
+    mod.configureAuth({
+      refreshFn: vi
+        .fn()
+        .mockRejectedValue(new ApiErrorClass('服务暂时不可用', { kind: 'http', status })),
+      onAuthCleared,
+    })
+
+    await expect(mod.refreshAccessToken()).rejects.toThrow('服务暂时不可用')
+
+    expect(onAuthCleared).not.toHaveBeenCalled()
+    expect(storage.getToken()).toBe('at-old')
+  })
+
+  it('刷新返回 401（RT 过期/被吊销）时清状态回登录页', async () => {
+    const onAuthCleared = vi.fn()
+    storage.setToken('at-old')
+    mod.configureAuth({
+      refreshFn: vi
+        .fn()
+        .mockRejectedValue(new ApiErrorClass('Token已过期，请重新登录', { kind: 'http', status: 401 })),
+      onAuthCleared,
+    })
+
+    await expect(mod.refreshAccessToken()).rejects.toThrow()
+
+    expect(onAuthCleared).toHaveBeenCalledTimes(1)
+    expect(storage.getToken()).toBe('')
+  })
+
+  it('刷新被服务端以业务码拒绝时清状态回登录页', async () => {
+    const onAuthCleared = vi.fn()
+    storage.setToken('at-old')
+    mod.configureAuth({
+      refreshFn: vi
+        .fn()
+        .mockRejectedValue(new ApiErrorClass('账号已被禁用', { kind: 'business', status: 200, code: 403 })),
+      onAuthCleared,
+    })
+
+    await expect(mod.refreshAccessToken()).rejects.toThrow('账号已被禁用')
+
+    expect(onAuthCleared).toHaveBeenCalledTimes(1)
+    expect(storage.getToken()).toBe('')
+  })
+
+  it('无法分类的抛出值按会话结束处理（保守失败，不留下刷不动的僵死态）', async () => {
+    // refreshFn 绕开了统一请求层时拿不到任何分类信息。此时沿用修复前的行为：
+    // 宁可让用户重新登录，也不要留着一个刷不动又永远不退出的登录态。
+    const onAuthCleared = vi.fn()
+    storage.setToken('at-old')
+    mod.configureAuth({
+      refreshFn: vi.fn().mockRejectedValue(new Error('谁也说不清这是什么错')),
+      onAuthCleared,
+    })
+
+    await expect(mod.refreshAccessToken()).rejects.toThrow('谁也说不清这是什么错')
+
+    expect(onAuthCleared).toHaveBeenCalledTimes(1)
+    expect(storage.getToken()).toBe('')
+  })
+
+  it('可恢复失败后会另排一次重试，而不是就此停摆', async () => {
+    vi.useFakeTimers()
+    const refreshFn = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiErrorClass('Network Error', { kind: 'network' }))
+      .mockResolvedValueOnce({ data: { accessToken: 'at-new' } })
+    storage.setToken('at-old')
+    mod.configureAuth({ refreshFn })
+
+    await mod.refreshAccessToken().catch(() => {})
+    expect(refreshFn).toHaveBeenCalledTimes(1)
+
+    // 等到重试间隔（30s）过去
+    await vi.advanceTimersByTimeAsync(31 * 1000)
+
+    // 第二次成功，token 被更新 —— 证明"断网恢复后能自愈"
+    expect(refreshFn).toHaveBeenCalledTimes(2)
+    expect(storage.getToken()).toBe('at-new')
+  })
+
+  it('会话结束后不排重试', async () => {
+    vi.useFakeTimers()
+    const refreshFn = vi
+      .fn()
+      .mockRejectedValue(new ApiErrorClass('Token已过期', { kind: 'http', status: 401 }))
+    storage.setToken('at-old')
+    mod.configureAuth({ refreshFn })
+
+    await mod.refreshAccessToken().catch(() => {})
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+
+    // 已经登出了，不该再有定时器去打服务端
+    expect(refreshFn).toHaveBeenCalledTimes(1)
   })
 })
 

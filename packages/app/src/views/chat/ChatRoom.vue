@@ -110,28 +110,39 @@ onMounted(async () => {
   // 等待期间组件可能已被卸载（用户快速返回），后续动作全部放弃
   if (tornDown) return
 
-  // ② 成员关系已就绪，此时必然 200
-  await loadHistory()
+  // ② 成员关系已就绪，此时必然 200（第一页）
+  await loadHistory(1)
   if (tornDown) return
 
   // ③ 最后建立实时通道
   setupWebSocket()
 })
 
-// 加载历史消息的异步函数
-async function loadHistory() {
+// 加载历史消息的异步函数。页码由调用方**显式传入**，不在函数内部读 currentPage。
+//
+// 为什么要把页码做成参数：原先 loadMore 是「先 currentPage++ 再 loadHistory()」，
+// 而 loadHistory 内部读的是 currentPage —— 于是一次失败（断网、超时、后端 5xx）
+// 之后页码已经前进了，用户再上拉拿到的是第 3 页，**第 2 页被永久跳过**，
+// 中间那段聊天记录再也加载不出来，且没有任何报错，看起来就像消息本来就不存在。
+// 现在改成「请求成功才提交页码」：失败时 currentPage 原地不动，
+// 用户再次上拉重试的仍是同一页。
+async function loadHistory(page: number): Promise<boolean> {
   // 设置加载历史状态为 true
   loadingHistory.value = true
   try {
     // 调用 API 获取指定房间的历史消息
-    const res = await getRoomMessages(roomId.value, currentPage.value, 50)
+    const res = await getRoomMessages(roomId.value, page, 50)
     // 将获取到的消息列表添加到消息数组前面（新消息在底部）
     messages.value = [...res.data.list.map(m => ({ ...m, isSelf: m.senderId === myUserId.value })), ...messages.value]
     // 如果返回的消息数少于 50 条，说明没有更多历史了
     hasMoreHistory.value = res.data.list.length >= 50
+    // 到这里才算这一页真的拿到了，提交页码
+    currentPage.value = page
+    return true
   } catch (err: any) {
     // 加载失败时显示错误提示
     showToast(err.message || '加载历史消息失败')
+    return false
   } finally {
     // 重置加载历史状态
     loadingHistory.value = false
@@ -150,10 +161,8 @@ async function loadMore() {
   const prevScrollHeight = container?.scrollHeight ?? 0
   const prevScrollTop = container?.scrollTop ?? 0
 
-  // 页码加 1
-  currentPage.value++
-  // 加载下一页历史消息
-  await loadHistory()
+  // 加载下一页历史消息（页码只在成功后由 loadHistory 提交，失败不会吃掉一页）
+  await loadHistory(currentPage.value + 1)
   // 等待 DOM 更新
   await nextTick()
 

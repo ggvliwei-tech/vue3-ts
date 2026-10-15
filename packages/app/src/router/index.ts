@@ -121,6 +121,19 @@ const routes: RouteRecordRaw[] = [
     // 路由元信息：页面标题 + 访问所需权限码
     meta: { title: 'AI 聊天', permissions: [PERM.AI_CHAT] },
   },
+  // 我的资料（私有知识库）路由配置
+  {
+    // 私有资料管理页面路由路径
+    path: '/my-documents',
+    // 路由名称
+    name: 'MyDocuments',
+    // 懒加载私有资料管理页面组件
+    component: () => import('@/views/ai/MyDocuments.vue'),
+    // 路由元信息：页面标题 + 访问所需权限码。
+    // 用的是 ai:doc:private 而不是 ai:chat —— 「能传自己的资料」与「能用 AI 对话」
+    // 是两件独立的事，后端两个接口也是各校验各的权限码。
+    meta: { title: '我的资料', permissions: [PERM.AI_DOC_PRIVATE] },
+  },
   // 聊天室模块路由配置
   {
     // 房间列表页面路由路径

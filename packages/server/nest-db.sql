@@ -329,7 +329,15 @@ INSERT IGNORE INTO `sys_permission` (`code`, `name`, `module`, `description`, `c
   ('user-role:assign',         '分配用户角色',     'admin', '给用户绑定/解绑角色',         UNIX_TIMESTAMP() * 1000),
   ('user-role:remove',         '移除用户角色',     'admin', '移除用户的指定角色',          UNIX_TIMESTAMP() * 1000),
   ('admin:audit',              '管理端审计日志',   'admin', '查询管理端操作审计日志',      UNIX_TIMESTAMP() * 1000),
-  ('dashboard:view',           '查看管理仪表盘',   'admin', '查看管理后台首页统计数据',    UNIX_TIMESTAMP() * 1000);
+  ('dashboard:view',           '查看管理仪表盘',   'admin', '查看管理后台首页统计数据',    UNIX_TIMESTAMP() * 1000),
+  -- ===== 以下为 RAG 两级知识库的权限码 =====
+  -- ai:doc:manage 的 module 刻意用 'admin'：editor 角色的授权条件是
+  -- `p.module NOT IN ('user','admin')`，用 'admin' 就能把它挡在公共知识库之外，
+  -- 实现「公共库只有管理员能写」而不必改角色授权语句。
+  ('ai:doc:manage',            '公共知识库管理',   'admin', '上传/删除公共知识库文档',      UNIX_TIMESTAMP() * 1000),
+  -- ai:doc:private 的 module 用 'ai'：admin / editor 会自动获得，
+  -- user 角色需在下方被显式追加（user 角色是白名单授权，不会自动拿到）。
+  ('ai:doc:private',           '私有资料管理',     'ai',    '上传/删除个人私有资料',        UNIX_TIMESTAMP() * 1000);
 
 -- 16.4 角色-权限分配：admin 拥有全部权限
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
@@ -344,11 +352,12 @@ SELECT r.id, p.id
 FROM `sys_role` r, `sys_permission` p
 WHERE r.code = 'editor' AND p.module NOT IN ('user', 'admin');
 
--- user：仅基础读权限（账本查看 + AI 对话 + 进入聊天室；不含文件模块）
+-- user：仅基础读权限（账本查看 + AI 对话 + 进入聊天室 + 管理自己的私有资料；不含文件模块）
+-- ai:doc:private 必须显式列出：user 是白名单授权，不会因 module='ai' 自动获得
 INSERT IGNORE INTO `sys_role_permission` (`role_id`, `permission_id`)
 SELECT r.id, p.id
 FROM `sys_role` r, `sys_permission` p
-WHERE r.code = 'user' AND p.code IN ('book:list', 'ai:chat', 'chat:room');
+WHERE r.code = 'user' AND p.code IN ('book:list', 'ai:chat', 'chat:room', 'ai:doc:private');
 
 -- 16.5 默认把 admin 账号绑定到 admin 角色
 INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`, `createTime`)
@@ -381,6 +390,40 @@ ALTER TABLE `sys_audit_log`
 --     "某用户的最近操作" 是高频查询场景
 ALTER TABLE `sys_audit_log`
   ADD INDEX `idx_audit_user_time` (`user_id`, `createTime`) COMMENT '按用户+时间组合查询';
+
+-- 17.4 sys_audit_log 复合索引 (username, createTime)：
+--     AuditService.findAll 支持按 username **前缀** 过滤（`${username}%`，
+--     不是 `%kw%`），前缀 LIKE 能命中索引；后接 createTime 让排序也走索引。
+--     用 %kw% 中缀写法的话这个索引就完全用不上了，改动那边时记得同步看这里。
+ALTER TABLE `sys_audit_log`
+  ADD INDEX `idx_audit_username_time` (`username`, `createTime`) COMMENT '按用户名前缀+时间组合查询';
+
+-- 17.5 sys_file 复合索引 (uploadUserId, createTime)：
+--     FileService.findAll 对非 admin 恒有 uploadUserId 归属过滤，且恒按 createTime DESC 排序。
+--     单列 idx_upload_user_id 只能解决过滤，排序仍要 filesort；补上 createTime 让两者都走索引。
+--     （admin 不传过滤条件的那条路径是全表倒序，本索引帮不上，属预期内。）
+ALTER TABLE `sys_file`
+  ADD INDEX `idx_file_user_time` (`uploadUserId`, `createTime`) COMMENT '按上传人+时间组合查询';
+
+-- 17.6 ai_message 复合索引 (session_id, created_at)：
+--     取会话历史恒为 where session_id + order created_at ASC，
+--     且随对话轮次线性增长，是 ai 模块里最可能变大的表。
+--     注意列名是 created_at（下划线），与其余表的 createTime 不同。
+ALTER TABLE `ai_message`
+  ADD INDEX `idx_ai_msg_session_time` (`session_id`, `created_at`) COMMENT '按会话+时间取历史';
+
+-- 17.7 chat_room 索引 (createdAt)：
+--     ChatService.getRoomList 没有 where 条件，只有 order createdAt DESC + 分页。
+--     没有这个索引时每次打开房间列表都要全表扫描 + filesort。
+ALTER TABLE `chat_room`
+  ADD INDEX `idx_chat_room_created` (`createdAt`) COMMENT '房间列表按创建时间排序';
+
+-- 以下两处经核对后**故意不加**，避免后人重复排查：
+--   · chat_member (roomId, userId)：唯一键 uk_chat_member_room_user 的左前缀就是这两列，
+--     再加一个是纯冗余（对应的单列 idx_chat_member_room 亦属重复，本次不动它的原因是
+--     删索引属于破坏性变更，收益为零，不值得在重建脚本里改历史）。
+--   · account_book (userId, createdAt)：实际排序键是 updatedAt 而非 createdAt，
+--     且单用户账本行数很小，filesort 代价可忽略。
 
 -- 18. RBAC join 表外键约束
 -- 18.1 先清理孤儿数据（FK 添加前必须确保无悬挂引用）

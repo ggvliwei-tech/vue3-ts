@@ -115,6 +115,21 @@ export function usePagedList<T = unknown>(
     currentPage.value = 1
     load()
   })
+  // pageSize 变更必须把页码拉回第 1 页。
+  // 此前的写法是把 pageSize 和 currentPage 一起 watch —— 在第 3 页把每页 10 条
+  // 改成 100 条时，页码仍是 3，于是发出去的是 page=3&pageSize=100，越界返回空列表，
+  // 用户看到的是"切成 100 条以后数据全没了"。
+  //
+  // flush:'sync' 是关键，不是随手加的：它让 currentPage 的复位和 pageSize 的赋值
+  // 落在同一个 tick 内。下面的合并 watcher 是同一个 job，Vue 的调度器按 job 去重，
+  // 同一个 tick 里两个源都变也只会触发一次 —— 否则切一次每页条数会连发两个请求。
+  watch(
+    pageSize,
+    () => {
+      currentPage.value = 1
+    },
+    { flush: 'sync' },
+  )
   watch([currentPage, pageSize], () => load())
 
   // 首次加载

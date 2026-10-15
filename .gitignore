@@ -18,6 +18,23 @@ node_modules
 .env.local
 .env.*.local
 
+# ============================================================
+# TLS 证书私钥：**绝不入库**
+# 生产部署把 fullchain.pem / privkey.pem 放在 deploy/certs/ 下，
+# 由 docker-compose 以只读方式挂进 nginx 容器。
+# 私钥一旦提交，等同于把域名的身份交出去 —— 任何人都能用它伪造成你的站点。
+# 之前仓库里没有任何 pem/cert/key 规则，照文档放证书有误提交的风险，
+# 这里显式挡一道。
+# ============================================================
+deploy/certs/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# certbot webroot（http-01 校验用的临时目录，内容是一次性的）
+deploy/certbot-www/
+
 # 运行时产物：日志与本地存储的上传文件
 logs/
 **/logs/

@@ -40,6 +40,8 @@ export const PERM = {
   CHAT_ROOM_CREATE: 'chat:room-create',
   /** 删除聊天室 */
   CHAT_ROOM_DELETE: 'chat:room-delete',
+  /** 管理「我的资料」（上传 / 删除私有知识库文档，仅本人可检索） */
+  AI_DOC_PRIVATE: 'ai:doc:private',
 } as const
 
 /** 首页宫格功能入口配置：每个入口声明需要的权限码，无权限则不渲染 */

@@ -18,6 +18,8 @@ import { getUserRoles, assignUserRoles, type RoleBrief } from '@/api/user-role'
 import { listEnabledRoles, type Role } from '@/api/role'
 import { formatDate } from '@project/shared'
 import { usePagedList, type PageQuery } from '@/composables/usePagedList'
+// 权限码常量（模板里的 v-permission 用）
+import { PERM } from '@/permission'
 
 // ========== 筛选条件（status 双向独立：null/'' = 全部） ==========
 const statusFilter = ref<'' | 0 | 1>('')
@@ -116,6 +118,9 @@ async function handleAssignRoles(user: User) {
 /** 提交角色分配 */
 async function handleSubmitAssign() {
   if (!currentUser.value) return
+  // 同步锁：按钮上的 :loading 要等本组件重渲染才生效，极快的双击有可能赶在那一帧之前进来。
+  // 两次 assignUserRoles 是全量替换语义，后一次会把前一次的结果覆盖掉，界面却提示了两次成功。
+  if (assignSubmitting.value) return
   assignSubmitting.value = true
   try {
     await assignUserRoles(currentUser.value.id, checkedRoleIds.value)
@@ -192,13 +197,26 @@ async function handleSubmitAssign() {
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleAssignRoles(row as User)">
+            <!-- 三个按钮各自对应后端一个权限码，缺哪个就只藏哪个。
+                 后端 PermissionsGuard 仍是真正的边界，这里只是不把点不动的入口摆出来。 -->
+            <el-button
+              v-permission="PERM.USER_ROLE_ASSIGN"
+              type="primary"
+              size="small"
+              @click="handleAssignRoles(row as User)"
+            >
               分配角色
             </el-button>
-            <el-button type="warning" size="small" @click="handleKick((row as User).id, (row as User).username)">
+            <el-button
+              v-permission="PERM.USER_KICK"
+              type="warning"
+              size="small"
+              @click="handleKick((row as User).id, (row as User).username)"
+            >
               强制下线
             </el-button>
             <el-button
+              v-permission="PERM.USER_TOGGLE_STATUS"
               :type="(row as User).status === 1 ? 'danger' : 'success'"
               size="small"
               @click="handleToggleStatus(row as User)"

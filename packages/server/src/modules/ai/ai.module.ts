@@ -14,6 +14,7 @@ import { ConfigModule } from '@nestjs/config'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { AiService } from './ai.service'
 import { AiController } from './ai.controller'
+import { AiDocAdminController } from './ai-doc.controller'
 import { RedisModule } from '../redis/redis.module'
 import { AiSessionEntity } from './entities/ai-session.entity'
 import { AiMessageEntity } from './entities/ai-message.entity'
@@ -33,6 +34,8 @@ import { AiChatHistoryService } from './chat-history/ai-chat-history.service'
     AiChatHistoryService,  // 会话历史持久化
     AiService,             // 编排服务
   ],
-  controllers: [AiController],
+  // AiDocAdminController 的路由前缀是 admin/knowledge，但消费的是本模块的
+  // RagService，因此仍挂在这里（见该文件顶部的说明）
+  controllers: [AiController, AiDocAdminController],
 })
 export class AiModule {}

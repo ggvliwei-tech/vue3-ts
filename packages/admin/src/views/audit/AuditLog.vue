@@ -116,7 +116,16 @@ function actionTagType(action: string): 'primary' | 'success' | 'warning' | 'inf
 }
 
 // ========== 方法 ==========
+
+// 请求序号：只接受最新一次请求的结果。
+// 审计表是这批列表里唯一会随筛选条件变慢的表（username 前缀 + 时间范围 + 排序），
+// 没有这道守卫时，改完筛选条件立刻翻页/再改一次条件，先发的慢请求会后到，
+// 把新条件的结果覆盖成旧条件的 —— 用户看到的列表和他此刻的筛选条件对不上，
+// 而且没有任何提示，还会据此导出 CSV。
+let loadSeq = 0
+
 async function loadList() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const res = await get<PageRes<AuditLogItem>>('/api/v1/admin/audit/logs', {
@@ -131,14 +140,18 @@ async function loadList() {
         endTime: filter.endTime ? new Date(filter.endTime).getTime() + 86399999 : undefined,
       },
     })
+    // 已被更新的请求取代：整份结果丢弃，连 loading 都不动（那是新请求的状态）
+    if (seq !== loadSeq) return
     list.value = res.data.list
     total.value = res.data.total
   } catch (e: any) {
+    // 过期请求的失败同样吞掉，否则一次被取代的失败会清空刚拿到的列表并弹错
+    if (seq !== loadSeq) return
     ElMessage.error(e.message || '加载审计日志失败')
     list.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

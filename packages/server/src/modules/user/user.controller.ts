@@ -34,6 +34,8 @@ import { UserCrudService } from './user-crud.service';
 import { CreateUserDto } from './dto/create-user.dto';
 // 登录用户 DTO，定义登录请求的数据结构和校验规则
 import { LoginUserDto } from './dto/login-user.dto';
+// 强制下线请求体 DTO（替代原先的内联类型，让 ValidationPipe 真正生效）
+import { ForceKickDto } from './dto/force-kick.dto';
 // 客户端 IP 提取（统一走 Express 的 trust proxy 解析，不自行解析 XFF 头）
 import { getClientIp } from '../../common/utils/client-ip.util';
 // JWT 认证守卫，用于保护需要登录验证的接口
@@ -201,9 +203,16 @@ export class UserController {
   async logout(
     // CurrentUser 装饰器获取当前登录用户信息
     @CurrentUser() user: any,
+    // Req 用于取 Origin 头做 CSRF 校验
+    @Req() req: Request,
     // Res 装饰器获取 Express 响应对象
     @Res({ passthrough: true }) res: Response,
   ) {
+    // 与 login / refresh-token 采用同一层 CSRF 防御。
+    // 被强制登出属于骚扰而非入侵（攻击者拿不到 token 本身），但让三个写接口口径一致
+    // 的成本几乎为零，少一处差异就少一处将来要重新论证的地方。
+    // 注意 assertSafeOrigin 对「无 Origin 头」是放行的，所以 curl / 原生 App 不受影响。
+    this.assertSafeOrigin(req)
     // 调用认证服务的 logout 方法，删除当前 session 的 RT 和会话元数据
     await this.authService.logout(user.id, user.sessionId);
     // 使用 res.clearCookie 清除浏览器中的 refresh_token Cookie
@@ -235,8 +244,10 @@ export class UserController {
   // 而忽略的后果是「踢该设备」退化成「踢该用户全部设备」，语义被放大。
   async forceKick(
     @Param('id') userId: string,
-    // sessionId 可选，不传则踢全部设备
-    @Body() body: { sessionId?: string } | undefined,
+    // sessionId 可选，不传则踢全部设备。
+    // 必须走 DTO：内联对象类型在运行时没有元类型，ValidationPipe 会原样透传，
+    // 入参等于没有任何约束（详见 force-kick.dto.ts 的注释）。
+    @Body() body: ForceKickDto,
   ) {
     // 调用认证服务的 forceKick 方法；传入 body.sessionId 可指定踢某设备
     return this.authService.forceKick(Number(userId), body?.sessionId);
@@ -306,12 +317,24 @@ export class UserController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Post('logout-all')
-  async logoutAll(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+  async logoutAll(
+    @CurrentUser() user: any,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    // 同 logout：与 login / refresh-token 口径一致
+    this.assertSafeOrigin(req)
     const result = await this.authService.logoutAll(user.id)
-    // 清除当前设备的 Cookie
+    // 清除当前设备的 Cookie。
+    // 三个属性必须与 set 时（以及上面 logout 里）逐项一致：Cookie 的删除是按
+    // name + domain + path 匹配的，属性不参与匹配，所以这里写 lax / 漏 secure
+    // 并不会让登出失效 —— 但两份 clearCookie 参数不一样，下次改动时极易只改一处，
+    // 届时"某条路径能登出、另一条不能"会成为很难查的问题。此处统一为一份写法。
+    const isProd = process.env.NODE_ENV === 'production'
     res.clearCookie('refresh_token', {
       httpOnly: true,
-      sameSite: 'lax',
+      secure: isProd,
+      sameSite: 'strict',
       path: '/api/v1/user',
     })
     return result

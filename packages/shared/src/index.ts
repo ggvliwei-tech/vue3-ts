@@ -8,6 +8,8 @@
 export * from './types'
 // 导出 HTTP 请求封装
 export * from './request'
+// 导出统一请求错误类型（kind 用于区分「网络抖动」与「会话失效」）
+export * from './api-error'
 // 导出认证状态存储层（token / userInfo 的唯一读写入口）
 export * from './auth-storage'
 // 导出 token 统一刷新模块（single-flight + 静默续期 + 跨标签同步）

@@ -131,7 +131,7 @@ describe('GlobalExceptionFilter', () => {
       expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR)
     })
 
-    it('ER_DUP_ENTRY 唯一约束冲突 → CONFLICT 200/409', () => {
+    it('ER_DUP_ENTRY 唯一约束冲突 → CONFLICT 409', () => {
       const host = mockHost({ headers: {}, url: '/x' })
       const driverErr = { code: 'ER_DUP_ENTRY', errno: 1062, sqlMessage: "Duplicate entry 'alice' for key 'username'" }
       const err = new QueryFailedError('INSERT ...', [], driverErr as any)
@@ -141,6 +141,10 @@ describe('GlobalExceptionFilter', () => {
       const body = host.__mockRes.json.mock.calls[0][0]
       expect(body.code).toBe(BusinessCode.CONFLICT)
       expect(body.msg).toMatch(/已存在/)
+      // HTTP 状态必须跟着业务码走。曾经这里只改了 businessCode 没改 httpStatus，
+      // 结果是「业务上明确是客户端冲突」却回 500 —— 监控里的错误率被这批假 500 抬高，
+      // 真正需要人看的 5xx 被淹掉。这条断言就是防它再退回去。
+      expect(host.__mockRes.status).toHaveBeenCalledWith(HttpStatus.CONFLICT)
     })
   })
 

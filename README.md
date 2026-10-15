@@ -203,6 +203,32 @@ sys_user          ←── sys_user_role ──→ sys_role
 3. → 从 Redis 缓存读用户权限码（无缓存则查 DB 并写入）
 4. → 命中即放行，否则 403
 
+### AI 知识库（RAG）两级隔离
+
+向量库（Chroma）分两级，检索时合并：
+
+| 级别 | collection | 谁能上传 | 谁能检索 |
+|------|-----------|---------|---------|
+| 公共 | `business_docs` | 仅 admin（`ai:doc:manage`） | 所有登录用户 |
+| 私有 | `user_docs_{userId}` | 本人（`ai:doc:private`） | **仅本人** |
+
+- 问答走 `POST /api/v1/ai/rag`，内部对两个库各取 `TOP_K` 再按距离**升序**合并截断
+  （每库各取，否则私有资料会被公共库挤空，隔离等于白做）。
+- 单个库查询抛错时只记 warn 跳过该库，不让整个提问 500 —— 典型触发场景是公共库
+  用另一个 embedding 模型建过，维度对不上。**合并排序的前提是两库同模型同度量**，
+  切 provider 前记得重建公共库。
+- 文档列表 / 删除都直接读 Chroma 的 metadata（`docId` 去重成文档粒度），
+  没有额外的 MySQL 表，因此**向量库与 MySQL 不会出现"删了记录但向量还在"的不一致**。
+
+已知限制（当前规模下可接受，量级上来前需重做）：
+
+- `LLM_TYPE=ollama` 下 RAG 整体不可用：该 provider 不提供 embedding 接口，
+  上传/检索会返回 503 而不是 500。
+- 一个用户一个 collection，Chroma 为每个 collection 单独维护一份 HNSW 索引，
+  用户量大时内存与元数据开销显著。届时应改为单一 `private_docs` +
+  `where: { userId }`，隔离改由 where 条件保证。
+- 列文档用 `collection.get({ include: ['metadatas'] })` 全量载入，chunk 数增长后会变慢。
+
 ### 统一响应格式
 
 ```typescript
@@ -315,10 +341,76 @@ readinessProbe:
 - [ ] 关闭 Swagger（自动：生产环境不挂载）
 - [ ] MySQL / Redis 端口只绑 `127.0.0.1`（compose 默认已是）
 - [ ] 短信：接入 SDK 后保持 `SMS_MOCK=false`；未接入则该功能不可用
-- [ ] 配置 HTTPS（推荐前置 Nginx + Let's Encrypt）
+- [ ] 配置 HTTPS（见下节「生产 HTTPS 部署」）
 - [ ] 配置日志收集（Filebeat / Promtail → ELK / Loki）
 - [ ] 配置监控告警（/health 探针 + 错误日志触发）
 - [ ] 数据库备份策略（每日 mysqldump）—— 仓库**未提供**备份脚本，需自行编写
+
+### 生产 HTTPS 部署
+
+默认的 `docker compose up` **只发布 80 端口、全程明文**：admin / app 容器是公网入口，
+登录口令、JWT、refresh token 的 Cookie 都在明文里过一遍。上线前必须补上 TLS。
+
+仓库里已经备好一份配置骨架 `deploy/nginx/admin.ssl.conf`（**默认不生效**，
+`deploy/nginx/admin.conf` 一个字没动 —— 两个 Dockerfile 共用它，本地没证书时
+往里面写 `ssl_certificate` 会让 nginx 直接起不来）。
+
+**1. 放证书**
+
+```bash
+mkdir -p deploy/certs
+# fullchain.pem 必须是「叶子证书 + 中间证书」的完整链，只放叶子会让部分
+# 浏览器/微信内置内核校验失败（现象：你的电脑正常，别人打开就报错）
+cp /path/to/fullchain.pem deploy/certs/
+cp /path/to/privkey.pem   deploy/certs/
+chmod 600 deploy/certs/privkey.pem
+```
+
+`deploy/certs/` 已在 `.gitignore` 中 —— 私钥泄露等于域名身份被冒用，**绝不要提交**。
+
+**2. 改 `docker-compose.yml` 的 `admin` / `app` 两个服务**
+
+```yaml
+  ports:
+    - "80:80"
+    - "443:443"
+  volumes:
+    - ./deploy/nginx/admin.ssl.conf:/etc/nginx/conf.d/admin.conf:ro   # app 服务写 app.conf
+    - ./deploy/certs:/etc/nginx/certs:ro
+    - ./deploy/certbot-www:/var/www/certbot:ro
+```
+
+**3. 验证语法后再重启**
+
+```bash
+docker run --rm \
+  -v "$PWD/deploy/nginx/admin.ssl.conf:/etc/nginx/conf.d/x.conf:ro" \
+  -v "$PWD/deploy/certs:/etc/nginx/certs:ro" \
+  nginx:1.27-alpine nginx -t
+
+docker compose up -d admin app
+```
+
+生效后：80 端口只放行 `/.well-known/acme-challenge/`（certbot http-01 校验），
+其余一律 301 跳 443。
+
+**几个容易踩的点**
+
+- **证书续期后必须 `docker compose restart admin app`**。nginx 只在启动时读一次
+  证书文件，不重启的话进程里用的还是旧证书 —— 「续期明明成功了，浏览器还是报过期」。
+- **HSTS 先给的是 `max-age=300`（5 分钟），不是最终值**。HSTS 被浏览器记住后
+  **撤不回来**：证书出问题时浏览器会拒绝一切「继续访问」的例外操作，用户被彻底
+  挡在门外。确认证书**自动续期**也跑通了，再把 `admin.ssl.conf` 里的值放大到
+  `63072000`（两年）；`includeSubDomains` 同理，要等所有子域都上了 TLS 再加。
+- **CSP 默认是注释掉的，启用前必须在真实页面上过一遍**。F12 Console 出现
+  `Refused to load/execute ... because it violates the following Content Security
+  Policy directive` 就是被拦了。检查入口至少覆盖：admin 的表格/弹窗/文件上传、
+  app 的图片预览、AI 对话的 markdown 渲染。想先观察不拦截，把指令名换成
+  `Content-Security-Policy-Report-Only`。`style-src` 里的 `'unsafe-inline'`
+  是必需的（Element Plus / Vant 大量内联样式），别当成配错了。
+- **如果前面还有一层负载均衡 / 云 WAF**，TLS 应该在那一层终止，不要把这里的 443
+  直接对公网发布：把 admin / app 的端口改回 `127.0.0.1:${ADMIN_PORT:-8080}:80`
+  （与 mysql / redis / backend 一致），HTTPS 交给 LB 实现。
 
 ### 扩容建议
 
@@ -345,15 +437,17 @@ pnpm test
 # 覆盖率报告
 pnpm --filter @project/server test:cov
 
-# 当前单测（服务端 14 个 spec）
+# 当前单测（服务端 16 个 spec）
 # - common/:  GlobalExceptionFilter / RefreshTokenGuard
-#             client-ip.util / pagination.util / random-filename.util / token-version.util
+#             client-ip.util / mask.util / pagination.util / random-filename.util
+#             / token-version.util
 # - config/:  production-env.util
-# - modules/: LoginThrottlerService / SessionService / ChatGateway / ChatService
-#             RbacService / SmsService / UserCrudService
-# 前端：shared 有 vitest（auth-storage / token-refresh），admin / app 暂无单测
+# - modules/: RagService / LoginThrottlerService / SessionService
+#             ChatGateway / ChatService / RbacService / SmsService / UserCrudService
+# 前端：shared 有 vitest（auth-storage / token-refresh / api-error），
+#       admin / app 暂无单测
 #
-# ⚠️ CI 目前只跑 `--filter @project/server test`，shared 的两个用例不会执行。
+# ⚠️ CI 目前只跑 `--filter @project/server test`，shared 的用例不会执行。
 #    本地验证前端请显式跑：pnpm --filter @project/shared test
 ```
 

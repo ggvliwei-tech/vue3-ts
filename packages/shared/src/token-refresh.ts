@@ -27,6 +27,7 @@
  */
 
 import { TOKEN_STORAGE_KEY, clearAuth, getToken, getTokenExp, setToken } from './auth-storage'
+import { ApiError } from './api-error'
 
 /** 刷新器与回调由各端注入，避免 shared 反向依赖具体的 api 层 */
 export interface AuthRefreshOptions {
@@ -49,6 +50,12 @@ const DEFAULT_ADVANCE_MS = 5 * 60 * 1000
 const JITTER_MS = 2000
 /** 单次调度延迟上限（24 小时），防止意外长时间挂起 */
 const MAX_DELAY_MS = 24 * 60 * 60 * 1000
+/**
+ * 「可恢复失败」后的重试间隔（断网 / 服务端 5xx）。
+ * 取值只需明显小于 access token 的剩余有效期：静默续期本就在提前 5 分钟触发，
+ * 30 秒足够在真正过期前抓住一两次机会；再密只是徒增无效请求。
+ */
+const TRANSIENT_RETRY_MS = 30 * 1000
 
 let refreshFn: AuthRefreshOptions['refreshFn'] | null = null
 let onAuthCleared: (() => void) | null = null
@@ -103,6 +110,33 @@ export function refreshAccessToken(): Promise<string> {
   return inflight
 }
 
+/**
+ * 刷新失败是否**确定**意味着会话已结束。
+ *
+ * 此前这里是无条件 `handleSessionExpired()`，注释还写着"走到这里说明会话真的结束了" ——
+ * 但事实并非如此：只要刷新请求碰上断网、15s 超时、或后端 5xx，
+ * 用户就会被踢回登录页并清掉本地状态，而服务端的 refresh token 完好无损，
+ * 明明过一会儿重试就能恢复。
+ *
+ * 根因在过去那个文件里看不出来：request.ts 抛的一律是裸 Error（不挂 status、
+ * 不挂响应体），三种失败到这里长得一模一样，从结构上就不可能分辨。
+ * 现在 request.ts 会抛带 kind 的 ApiError，于是可以按类别判定：
+ *
+ *  - `network`           —— 没拿到响应。网络问题，与令牌有效性无关 → 不清状态，可重试
+ *  - `http` 5xx          —— 服务端故障。同上 → 不清状态，可重试
+ *  - `http` 4xx          —— 服务端明确拒绝了这次刷新（401 RT 过期/被吊销、
+ *                           403 被禁用/被顶下线、400 参数非法）→ 会话结束
+ *  - `business`          —— HTTP 200 但业务码非 0，服务端已给出明确原因 → 会话结束
+ *  - 其他（非 ApiError） —— 说明 refreshFn 绕开了统一的请求层，拿不到任何分类信息。
+ *                           此时**保守地按会话结束处理**：这是修复前的行为，
+ *                           宁可让用户重新登录，也不要留下一个刷不动又永远不退出的僵死状态。
+ */
+function isSessionEnded(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return true
+  // retryable 的两种（network / 5xx）都不代表会话结束
+  return !err.retryable
+}
+
 async function doRefresh(): Promise<string> {
   try {
     const res = await refreshFn!()
@@ -115,11 +149,34 @@ async function doRefresh(): Promise<string> {
     scheduleSilentRefresh()
     return newToken
   } catch (err) {
-    // 走到这里说明会话真的结束了（RT 过期 / 被吊销 / 被顶下线），
-    // 前端能做的只有清状态并回到登录页
-    handleSessionExpired()
+    if (isSessionEnded(err)) {
+      // 会话真的结束了（RT 过期 / 被吊销 / 被顶下线），
+      // 前端能做的只有清状态并回到登录页
+      handleSessionExpired()
+    } else {
+      // 可恢复失败：保留登录态，另排一次重试。
+      // 不能调用 scheduleSilentRefresh —— 它按 exp 算延迟，而此刻通常已进入
+      // 提前窗口（base <= 0 → delay 0），会立刻再刷一次，变成打服务端的死循环。
+      scheduleTransientRetry()
+    }
     throw err instanceof Error ? err : new Error(String(err))
   }
+}
+
+/**
+ * 排一次「稍后重试」。
+ *
+ * 为什么需要：静默续期定时器是一次性的，失败后不会自己重排。
+ * 没有这个重试的话，一次断网会让「主动续期」这条路彻底停摆 ——
+ * 虽然后续任意 API 请求 401 时仍会触发按需刷新（正确性还在），
+ * 但用户会在令牌过期后先看到一次失败的请求，而不是无感续期。
+ */
+function scheduleTransientRetry(): void {
+  stopSilentRefresh()
+  timer = setTimeout(() => {
+    timer = null
+    refreshAccessToken().catch(() => {})
+  }, TRANSIENT_RETRY_MS)
 }
 
 /** 更新 token 并同步给订阅方（AuthStore） */

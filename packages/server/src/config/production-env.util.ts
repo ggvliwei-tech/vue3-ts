@@ -135,7 +135,7 @@ export function checkProductionEnv(
     })
   }
 
-  // ========== CORS 白名单：只告警 ==========
+  // ========== CORS 白名单：全部只告警，不拦截启动 ==========
   // 本地回环来源在正式部署里几乎没有意义，但它同时也是"一键启动 demo"的
   // 合法配置（docker-compose 默认就是 localhost:8080/8081），所以不能拦。
   const origins = (env.CORS_ORIGINS ?? '')
@@ -148,6 +148,58 @@ export function checkProductionEnv(
       reason:
         '白名单里含 localhost / 127.0.0.1。正式对外部署请替换为真实域名，' +
         '否则浏览器侧仍按本地地址放行',
+    })
+  }
+  // `*` 这条**不是**"放开所有来源"，而是彻底反过来 —— 务必不要按直觉理解：
+  // isOriginAllowed（common/utils/cors.util.ts）做的是 `allowed.includes(origin)`，
+  // 拿字面量 '*' 去和真实 origin 比对，永远不相等；而生产环境下局域网兜底正则
+  // （LAN_ORIGIN_REGEX）是关闭的。于是写了 `*` 的效果等于白名单是空的：
+  // 同源请求照常（本就不受 CORS 约束），所有跨域请求全被拒。
+  // 典型症状是"登录成功但紧接着刷新 token 失败"，与 CORS 毫无关联感，
+  // 排查成本很高 —— 所以给一条明确的提醒，而不是等运维去猜。
+  //
+  // 不升级为 error：写 `*` 并没有打开任何口子（没放宽），且同源部署下一切正常，
+  // 拦掉启动反而会把一个能正常服务的进程弄挂。也不要反过来去"实现"通配符支持 ——
+  // 那才是真的放宽。
+  if (origins.includes('*')) {
+    warnings.push({
+      key: 'CORS_ORIGINS',
+      reason:
+        "含 `*`，但它**不会**放行任何来源：判定逻辑是精确字符串比对，'*' 匹配不上任何 " +
+        '真实 origin，且生产环境已关闭局域网兜底，实际效果等同于白名单为空 —— ' +
+        '同源请求正常、全部跨域请求被拒（典型症状：登录成功但刷新 token 失败）。' +
+        '请逐项填写真实的前端地址（含协议与端口）',
+    })
+  }
+  // 空值同样只告警：admin / app 由同一个 nginx 反代时，前端与 /api 是同源的，
+  // 跨域根本不会发生，这时留空是**正确**配置（见 README「生产 HTTPS 部署」）。
+  // 把空值判成 error 会恰好挡住最推荐的部署形态。
+
+  // ========== LLM：只告警 ==========
+  // 缺 key 只让 AI 对话 / 知识库不可用，不影响登录与其余业务，
+  // 因此不该阻断启动（.env.example 里已注明"启动期不校验"，这里补上提醒即可）。
+  const llmType = env.LLM_TYPE || 'openai' // 与 LlmTypeEnum.OPENAI 一致（modules/ai/enums/llm-type.enum.ts）
+  // 每种 provider 需要的 key；local_ollama 跑本地模型，不需要 key
+  const requiredKey: Record<string, string> = {
+    openai: 'OPENAI_API_KEY',
+    dashscope_qwen: 'DASHSCOPE_API_KEY',
+  }
+  const keyName = requiredKey[llmType]
+  if (keyName && !env[keyName]) {
+    warnings.push({
+      key: keyName,
+      reason:
+        `LLM_TYPE=${llmType} 但 ${keyName} 为空。服务会正常启动，` +
+        '直到第一次对话才在调用处报鉴权错误，容易被误判成后端 bug',
+    })
+  } else if (!keyName && llmType !== 'local_ollama') {
+    // 写错 provider 名时 provider 会静默落到 Ollama 分支（见 llm-provider.service.ts 的
+    // 默认分支），而 Ollama 分支的 embeddings 是 null —— 知识库整体不可用。
+    warnings.push({
+      key: 'LLM_TYPE',
+      reason:
+        `取值「${llmType}」不是已知 provider（openai / dashscope_qwen / local_ollama），` +
+        '会静默回落到本地 Ollama 分支，导致知识库（embedding）不可用',
     })
   }
 

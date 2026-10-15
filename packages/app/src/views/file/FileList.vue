@@ -38,8 +38,24 @@ const limit = 10
 // 防止首次挂载时 van-list 重复触发 onLoad 的标记
 const isInitialLoad = ref(true)
 
+// 请求序号：每真正发出一个请求就自增，响应回来时序号对不上就整份丢弃。
+// 这道守卫修的是一个真实可复现的错乱：
+//   触底加载第 2 页的请求还在路上 → 用户下拉刷新 → onRefresh 先把
+//   page/fileList 重置掉，再因为 loading 为 true 被挡回，刷新请求根本没发出去 →
+//   随后那个"第 2 页"的响应回来，闭包里 isRefresh 仍是 false，于是
+//   fileList = [...刚刚清空的空数组, ...第2页] 并 page++ ——
+//   第 2 页的数据冒充成第 1 页显示，第 1 页永远不会被加载，用户也看不出哪里不对。
+let loadSeq = 0
+
 // 加载文件数据的异步函数，isRefresh 参数控制是否为刷新操作
 async function loadData(isRefresh = false) {
+  // 并发闸门只拦「加载下一页」：同一页被 van-list 连点两遍时挡掉第二次。
+  // 刷新必须能插队进来，否则就是上面那个错乱 —— 旧响应落地时新请求还没发。
+  if (!isRefresh && (finished.value || loading.value)) return
+
+  // 领号：本次请求是当前最新的一个
+  const seq = ++loadSeq
+
   // 如果是刷新操作，重置页码和状态
   if (isRefresh) {
     // 重置页码为 1
@@ -50,9 +66,6 @@ async function loadData(isRefresh = false) {
     fileList.value = []
   }
 
-  // 如果已加载完所有数据或正在加载中，则直接返回
-  if (finished.value || loading.value) return
-
   // 设置加载状态为 true
   loading.value = true
 
@@ -60,6 +73,11 @@ async function loadData(isRefresh = false) {
   try {
     // 调用获取文件列表 API，传入当前页码和每页条数
     const res = await getFileList({ page: page.value, limit })
+
+    // 已经被更新的请求取代（典型场景：这次是过期的"加载更多"，用户已经下拉刷新过），
+    // 结果一律不再写入，也不动 loading/finished —— 那是新请求的状态
+    if (seq !== loadSeq) return
+
     // 从响应数据中解构出列表数据和总记录数
     const { list, total } = res.data
 
@@ -72,16 +90,22 @@ async function loadData(isRefresh = false) {
       page.value++
     }
   } catch (err: any) {
+    // 过期请求的失败同样要吞掉：否则一次被取代的加载失败会弹提示、还把
+    // finished 置成 true，把刚刷新出来的列表锁死在"没有更多了"
+    if (seq !== loadSeq) return
     // 请求失败时弹出错误提示
     showToast(err.message || '加载失败')
     // 请求失败时终止加载，防止 van-list 无限重试
     finished.value = true
   } finally {
-    // 无论成功还是失败，都重置加载和刷新状态
-    loading.value = false
-    refreshing.value = false
-    // 首次加载完成，将标记设为 false
-    isInitialLoad.value = false
+    // 只有仍然是当前请求的那个才有资格复位状态，理由同上
+    if (seq === loadSeq) {
+      // 无论成功还是失败，都重置加载和刷新状态
+      loading.value = false
+      refreshing.value = false
+      // 首次加载完成，将标记设为 false
+      isInitialLoad.value = false
+    }
   }
 }
 

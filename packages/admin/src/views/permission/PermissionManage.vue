@@ -19,6 +19,8 @@ import {
   type UpdatePermissionParams,
 } from '@/api/permission'
 import { formatDate } from '@project/shared'
+// 权限码常量（模板里的 v-permission 用）
+import { PERM } from '@/permission'
 
 // ========== 列表状态 ==========
 const list = ref<Permission[]>([])
@@ -39,6 +41,8 @@ const dialogVisible = ref(false)
 const dialogFormRef = ref<FormInstance>()
 const mode = ref<'create' | 'edit'>('create')
 const editingId = ref<number | null>(null)
+// 新建/编辑对话框的提交锁（此前确认按钮既无 loading 也无防重）
+const submitting = ref(false)
 const form = reactive<CreatePermissionParams>({
   code: '',
   name: '',
@@ -126,33 +130,43 @@ async function handleEdit(row: Permission) {
 
 async function handleSubmit() {
   if (!dialogFormRef.value) return
-  await dialogFormRef.value.validate(async (valid) => {
-    if (!valid) return
-    try {
-      if (mode.value === 'create') {
-        await createPermission({
-          code: form.code,
-          name: form.name,
-          module: form.module,
-          description: form.description || undefined,
-        })
-        ElMessage.success('创建成功')
-      } else {
-        const data: UpdatePermissionParams = {
-          name: form.name,
-          module: form.module,
-          description: form.description || undefined,
+  // 提交锁：与 RoleManage 同一模式。双击确认会发两次 createPermission，
+  // 第二次撞代码唯一约束，用户看到的是一句莫名其妙的"权限编码已存在"。
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    await dialogFormRef.value.validate(async (valid) => {
+      if (!valid) return
+      try {
+        if (mode.value === 'create') {
+          await createPermission({
+            code: form.code,
+            name: form.name,
+            module: form.module,
+            description: form.description || undefined,
+          })
+          ElMessage.success('创建成功')
+        } else {
+          const data: UpdatePermissionParams = {
+            name: form.name,
+            module: form.module,
+            description: form.description || undefined,
+          }
+          await updatePermission(editingId.value!, data)
+          ElMessage.success('更新成功')
         }
-        await updatePermission(editingId.value!, data)
-        ElMessage.success('更新成功')
+        dialogVisible.value = false
+        loadList()
+        loadModules()
+      } catch (e: any) {
+        ElMessage.error(e.message || '操作失败')
       }
-      dialogVisible.value = false
-      loadList()
-      loadModules()
-    } catch (e: any) {
-      ElMessage.error(e.message || '操作失败')
-    }
-  })
+    })
+  } finally {
+    // 必须放 finally：el-form 传了 callback 时校验失败不 reject，只 resolve 出 false，
+    // 解锁一旦挂在失败分支上就会漏掉那条路径（详见 RoleManage 的同名注释）。
+    submitting.value = false
+  }
 }
 
 async function handleDelete(row: Permission) {
@@ -214,7 +228,9 @@ onMounted(() => {
           <el-button @click="handleReset">重置</el-button>
         </el-form-item>
         <el-form-item style="float: right">
-          <el-button type="success" @click="handleCreate">+ 新建权限</el-button>
+          <el-button v-permission="PERM.PERMISSION_CREATE" type="success" @click="handleCreate">
+            + 新建权限
+          </el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -240,8 +256,22 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleEdit(row as Permission)">编辑</el-button>
-            <el-button type="danger" size="small" @click="handleDelete(row as Permission)">删除</el-button>
+            <el-button
+              v-permission="PERM.PERMISSION_UPDATE"
+              type="primary"
+              size="small"
+              @click="handleEdit(row as Permission)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              v-permission="PERM.PERMISSION_DELETE"
+              type="danger"
+              size="small"
+              @click="handleDelete(row as Permission)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -291,7 +321,7 @@ onMounted(() => {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">确认</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleSubmit">确认</el-button>
       </template>
     </el-dialog>
   </div>

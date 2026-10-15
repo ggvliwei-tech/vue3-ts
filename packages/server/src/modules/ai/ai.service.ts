@@ -5,9 +5,10 @@
  * "对话流程编排"职责：协调 LLMProvider / RagService / AiChatHistory
  * 共同完成单轮、多轮、流式等不同形态的对话。
  *
- * 对外接口签名与拆分前完全兼容，Controller 无需改动。
+ * 对话类接口的签名与拆分前完全兼容；RAG 类接口在引入两级知识库隔离后
+ * 改为显式接收 userId（私有库要靠它定位），Controller 侧已同步。
  */
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, BadRequestException } from '@nestjs/common'
 import {
   SystemMessage,
   HumanMessage,
@@ -73,9 +74,28 @@ export class AiService {
 
   // ====================== 3. RAG 检索问答 ======================
 
-  async ragQuery(question: string): Promise<string> {
-    const prompt = await this.ragService.buildPrompt(question)
+  /**
+   * RAG 检索问答
+   *
+   * userKey 是**必填**的：检索要合并「公共库 + 该用户的私有库」，
+   * 少传这个参数就没法确定私有库是哪一个（旧签名允许不传，会被默认成公共库）。
+   */
+  async ragQuery(question: string, userKey: string): Promise<string> {
+    const prompt = await this.ragService.buildPrompt(question, this.toUserId(userKey))
     return this.llmProvider.invoke(DEFAULT_SYSTEM_PROMPT, prompt)
+  }
+
+  /**
+   * 把 JWT 里的 userId（字符串）转成向量库用的数字用户标识。
+   * 转不出合法正整数说明 token 里的 subject 不合预期，直接拒掉，
+   * 而不是带着 NaN 往下走 —— 那会拼出 user_docs_NaN 这种 collection 名。
+   */
+  private toUserId(userKey: string): number {
+    const uid = Number(userKey)
+    if (!Number.isInteger(uid) || uid <= 0) {
+      throw new BadRequestException('非法的用户标识')
+    }
+    return uid
   }
 
   // ====================== 4. SSE 流式打字机（无历史） ======================
@@ -198,10 +218,47 @@ export class AiService {
     await this.chatHistory.clearAll(userId)
   }
 
-  // ====================== 7. RAG 入库 ======================
+  // ====================== 7. RAG 入库与文档管理 ======================
 
   /** 把上传的 PDF 写入向量库。入参是内存 Buffer —— multer 用 memoryStorage，没有磁盘路径 */
-  uploadPdfToVector(buffer: Buffer, collectionName?: string) {
-    return this.ragService.ingestPdf(buffer, collectionName)
+  uploadPdfToVector(buffer: Buffer, filename: string) {
+    return this.ragService.ingestPdf(buffer, { scope: 'public', filename })
+  }
+
+  /**
+   * 上传**私有**资料：落到当前用户自己的 collection。
+   * 与 uploadPdfToVector 分开两个方法而不是加个 scope 参数，
+   * 是为了让调用点一眼看出这条路径会写用户私有数据、必须带 userId。
+   */
+  uploadPrivatePdf(buffer: Buffer, filename: string, userKey: string) {
+    return this.ragService.ingestPdf(buffer, {
+      scope: 'private',
+      userId: this.toUserId(userKey),
+      filename,
+    })
+  }
+
+  /** 列出公共知识库文档（管理端） */
+  listPublicDocs() {
+    return this.ragService.listDocuments({ scope: 'public' })
+  }
+
+  /** 列出当前用户的私有资料 */
+  listPrivateDocs(userKey: string) {
+    return this.ragService.listDocuments({ scope: 'private', userId: this.toUserId(userKey) })
+  }
+
+  /** 删除公共知识库文档，返回删除的切块数 */
+  deletePublicDoc(docId: string) {
+    return this.ragService.deleteDocument({ scope: 'public', docId })
+  }
+
+  /** 删除当前用户的私有资料 */
+  deletePrivateDoc(docId: string, userKey: string) {
+    return this.ragService.deleteDocument({
+      scope: 'private',
+      userId: this.toUserId(userKey),
+      docId,
+    })
   }
 }

@@ -31,6 +31,20 @@ x-default-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# 各服务的 mem_limit / cpus 是一份**保守的起点**，不是压测结论。
+# 不加限制的话，任一容器跑满都会把宿主机拖死 —— 最容易发生的是 mysql：
+# 一条没走索引的查询把 buffer pool 之外的临时表撑爆，或者 redis 被写入
+# 大量 key（它自己的 --maxmemory 只限制数据部分，进程本身的开销不在此列），
+# 结果是整台机器上的其他服务一起变慢，排查时很难指向真正的原因。
+#
+# ⚠️ mem_limit 设得比实际用量低不会"限速"，而是容器被 OOM Killer 干掉后按
+#    restart: unless-stopped 反复重启。上线后请对照 `docker stats` 的实际峰值
+#    调整；mysql / backend 是大头，nginx 两个前端只需要很小的余量。
+#
+# 用 mem_limit / cpus 而不是 deploy.resources.limits：后者是 Swarm 语法的
+# 遗留兼容，`docker compose up`（Compose V2，非 swarm 模式）对这两个字段
+# 是直接生效的，语义更明确。
+
 services:
 
   # ==================== 数据库 ====================
@@ -70,6 +84,10 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+    # 上限给得最宽：InnoDB 默认 buffer pool 128M，加上排序/临时表/连接开销，
+    # 1g 是「小规模够用、又不至于吃掉整台机器」的位置
+    mem_limit: 1g
+    cpus: 2
     networks:
       - app-net
 
@@ -99,6 +117,11 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    # 必须比上面的 --maxmemory 高：maxmemory 只约束数据集，
+    # 进程自身、复制缓冲、AOF 重写时的额外开销都在它之外。
+    # 两者相等会让 Redis 在接近上限时先被内核杀掉（而不是按 LRU 淘汰 key）。
+    mem_limit: 768m
+    cpus: 1
     networks:
       - app-net
 
@@ -210,6 +233,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+    # 解析 PDF、跑 embedding、拼 prompt 都是 CPU 密集的，2 核是给这些留的；
+    # 内存 1g 覆盖 Node 堆默认上限（约 512M～2G，取决于容器可见内存）+ pdf 解析时的峰值。
+    # pdf 上传有 20MB 的体积上限，若将来放宽，这里要跟着放大。
+    mem_limit: 1g
+    cpus: 2
     networks:
       - app-net
 
@@ -229,6 +257,9 @@ services:
         condition: service_healthy
     ports:
       - "${ADMIN_PORT:-8080}:80"
+    # nginx 托管静态资源，内存/CPU 需求都很小；这里给的是余量而非实际用量
+    mem_limit: 128m
+    cpus: 0.5
     networks:
       - app-net
 
@@ -245,6 +276,9 @@ services:
         condition: service_healthy
     ports:
       - "${APP_H5_PORT:-8081}:80"
+    # 同 admin
+    mem_limit: 128m
+    cpus: 0.5
     networks:
       - app-net
 

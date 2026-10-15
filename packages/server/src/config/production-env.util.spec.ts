@@ -18,6 +18,11 @@ describe('checkProductionEnv', () => {
     DB_PWD: 'a-strong-db-password',
     REDIS_PASSWORD: 'a-strong-redis-password',
     CORS_ORIGINS: 'https://admin.example.com,https://app.example.com',
+    // LLM 相关也属于「一份正常的生产配置该有的东西」：缺 key 只告警不拦截，
+    // 但基准配置里必须给上，否则下面那些 `expect(warnings).toEqual([...])`
+    // 的精确断言会平白多出一条 LLM 提醒。
+    LLM_TYPE: 'openai',
+    OPENAI_API_KEY: 'sk-valid-looking-key',
   }
 
   it('完全合规的生产配置不产生任何问题', () => {
@@ -164,6 +169,62 @@ describe('checkProductionEnv', () => {
       CORS_ORIGINS: 'https://localhost.example.com',
     })
     expect(warnings).toEqual([])
+  })
+
+  it('CORS 写成 `*` 时告警，且明确说明它不放行任何来源', () => {
+    // `*` 是精确字符串比对下的空集，不是通配符。这条用例同时钉住「不升级为 error」：
+    // 写 `*` 没有放宽任何口子，拦掉启动只会把一个能正常同源服务的进程弄挂。
+    const { errors, warnings } = checkProductionEnv({
+      ...validProdEnv,
+      CORS_ORIGINS: '*',
+    })
+    expect(errors).toEqual([])
+    expect(warnings.map((w) => w.key)).toEqual(['CORS_ORIGINS'])
+    expect(warnings[0].reason).toContain('不会')
+  })
+
+  it('CORS 留空不产生任何问题（同源部署下的正确配置）', () => {
+    // admin / app 与 /api 由同一个 nginx 反代时请求本就同源，跨域不会发生。
+    // 把空值判成 error 会恰好挡住最推荐的部署形态。
+    const { errors, warnings } = checkProductionEnv({ ...validProdEnv, CORS_ORIGINS: '' })
+    expect(errors).toEqual([])
+    expect(warnings).toEqual([])
+  })
+
+  // ---------- LLM：告警而非拦截 ----------
+
+  it('LLM_TYPE 指定了 provider 却没给对应 key → 告警且不拦启动', () => {
+    // 缺 key 只让 AI 对话不可用，登录与其余业务照常，不该阻断整个服务
+    const { errors, warnings } = checkProductionEnv({
+      ...validProdEnv,
+      LLM_TYPE: 'dashscope_qwen',
+      DASHSCOPE_API_KEY: '',
+    })
+    expect(errors).toEqual([])
+    expect(warnings.map((w) => w.key)).toEqual(['DASHSCOPE_API_KEY'])
+  })
+
+  it('LLM_TYPE 为空时按 openai 判定（与 llm-provider 的默认分支一致）', () => {
+    const { warnings } = checkProductionEnv({
+      ...validProdEnv,
+      LLM_TYPE: '',
+      OPENAI_API_KEY: '',
+    })
+    expect(warnings.map((w) => w.key)).toEqual(['OPENAI_API_KEY'])
+  })
+
+  it('local_ollama 不需要任何 key', () => {
+    const { warnings } = checkProductionEnv({
+      ...validProdEnv,
+      LLM_TYPE: 'local_ollama',
+      OPENAI_API_KEY: '',
+    })
+    expect(warnings).toEqual([])
+  })
+
+  it('LLM_TYPE 写成未知值时告警（会静默回落到 Ollama，导致 embedding 不可用）', () => {
+    const { warnings } = checkProductionEnv({ ...validProdEnv, LLM_TYPE: 'gpt4' })
+    expect(warnings.map((w) => w.key)).toEqual(['LLM_TYPE'])
   })
 
   it('一次列出全部问题，而不是首项即返回', () => {

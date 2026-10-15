@@ -26,11 +26,15 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 
 // 控制器级别守卫装饰器：所有接口均需 JWT 认证 + 权限码校验 + 限流保护
 //
-// ⚠️ PermissionsGuard 不能省：AI 接口会调用按量计费的 LLM 并写入共享向量库，
+// ⚠️ PermissionsGuard 不能省：AI 接口会调用按量计费的 LLM 并写入向量库，
 // 此前这里只有 JwtAuthGuard —— 等同于"登录即可免费调用"。
 // 新注册用户在 nest-db.sql 的种子数据里默认不带任何角色，
 // 只校验登录态意味着任何人都能直接刷爆第三方 API 账单。
-// 权限码 ai:chat 已在 nest-db.sql:287 定义并授予 admin / editor / user 三个内置角色。
+// 权限码 ai:chat / ai:doc:private 已在 nest-db.sql 的 16.3 段定义
+// 并授予 admin / editor / user 三个内置角色。
+//
+// 注：PermissionsGuard 用 getAllAndOverride 读取，**方法级装饰器会覆盖类级**。
+// 下面 upload/pdf 等方法自带 @Permissions('ai:doc:private')，因此不再要求 ai:chat。
 //
 // 限流用 UserThrottlerGuard 且在 JwtAuthGuard **之后**：前者按用户 ID 计数，
 // 依赖后者已经写好 req.user。顺序颠倒会静默退化成按 IP 计数。
@@ -67,11 +71,14 @@ export class AiController {
   }
 
   // POST 路由装饰器：注册 /ai/rag 接口
+  //
+  // 检索范围恒为「公共知识库 + 当前用户自己的私有资料」，用户维度来自 JWT，
+  // **不接受客户端传 userId** —— 否则任何人都能指定别人的私有库来提问。
   @Post('rag')
   // RAG 知识库问答接口处理函数
-  async ragChat(@Body() dto: ChatDto) {
+  async ragChat(@Body() dto: ChatDto, @CurrentUser() user: { id: string; username: string }) {
     // 调用服务层 RAG 问答方法，基于向量检索回答
-    return this.aiService.ragQuery(dto.question);
+    return this.aiService.ragQuery(dto.question, user.id);
   }
 
   // POST 路由装饰器：注册 /ai/stream 接口
@@ -145,23 +152,63 @@ export class AiController {
   }
 
   // POST 路由装饰器：注册 /ai/upload/pdf 接口
+  //
+  // handler 级 @Permissions('ai:doc:private') **覆盖**类级的 'ai:chat'
+  // （PermissionsGuard 用 getAllAndOverride，不是 AND）—— 语义上这正是想要的：
+  // 这个接口管的是「我的资料」，与能否用 AI 对话是两件事。
   @Post('upload/pdf')
-  // Swagger 操作描述：上传 PDF 到 RAG 向量库
-  @ApiOperation({ summary: '上传 PDF 到 RAG 向量库' })
+  // 权限码：仅拥有 ai:doc:private 的用户可上传私有资料
+  @Permissions('ai:doc:private')
+  // Swagger 操作描述：上传 PDF 到个人私有知识库
+  @ApiOperation({ summary: '上传 PDF 到个人私有知识库（仅本人可检索）' })
   // Swagger 声明该接口消费 multipart/form-data 类型
   @ApiConsumes('multipart/form-data')
   // 使用文件上传拦截器，限制文件大小为 20MB
   // 未指定 storage → multer 走默认的 memoryStorage，文件内容在 file.buffer 里。
   // 下游必须用 buffer，不能用 file.path（memoryStorage 下 path 恒为 undefined）。
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
-  // PDF 上传接口处理函数，接收上传的文件
-  async uploadPdf(@UploadedFile() file: Express.Multer.File) {
+  // PDF 上传接口处理函数，接收上传的文件与当前用户
+  async uploadPdf(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: { id: string; username: string },
+  ) {
     // 先判空：不带文件时 file 为 undefined，直接取 .buffer 会抛 TypeError → 500
     if (!file?.buffer?.length) {
       throw new BadRequestException('请选择要上传的 PDF 文件');
     }
-    // 调用服务层将 PDF 解析并存入向量库的方法（内部会校验 PDF 魔术字节）
-    return this.aiService.uploadPdfToVector(file.buffer);
+    // 调用服务层将 PDF 解析并存入**该用户私有** collection 的方法
+    // （内部会校验 PDF 魔术字节与 userId）
+    return this.aiService.uploadPrivatePdf(file.buffer, file.originalname, user.id);
+  }
+
+  // GET 路由装饰器：注册 /ai/documents 接口
+  @Get('documents')
+  // Swagger 操作描述：列出当前用户的私有资料
+  @ApiOperation({ summary: '列出当前用户的私有资料' })
+  // 列出私有资料接口处理函数
+  async listMyDocuments(@CurrentUser() user: { id: string; username: string }) {
+    return this.aiService.listPrivateDocs(user.id);
+  }
+
+  // POST 路由装饰器：注册 /ai/documents/:docId/delete 接口
+  //
+  // 用 POST 而不是 DELETE：与全仓既有的会话删除接口（session/:id/delete）保持一致，
+  // 前端 request 封装也不需要额外放行 DELETE 动词。
+  @Post('documents/:docId/delete')
+  // 权限码：与上传同码，能传就能删自己的
+  @Permissions('ai:doc:private')
+  // Swagger 操作描述：删除当前用户的私有资料
+  @ApiOperation({ summary: '删除当前用户的私有资料' })
+  // 删除私有资料接口处理函数
+  async deleteMyDocument(
+    @Param('docId') docId: string,
+    @CurrentUser() user: { id: string; username: string },
+  ) {
+    // docId 由路由参数传入，服务层在私有作用域下会附带 userId 条件，
+    // 即便 docId 是他人的也删不掉
+    const removed = await this.aiService.deletePrivateDoc(docId, user.id);
+    // 返回实际删除的切块数，0 表示该文档不存在或不属于当前用户
+    return { msg: '资料已删除', removed };
   }
 
   // GET 路由装饰器：注册 /ai/sessions 接口

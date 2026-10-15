@@ -103,6 +103,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       const driverErr = (exception as any).driverError
       if (driverErr?.code === 'ER_DUP_ENTRY') {
         businessCode = BusinessCode.CONFLICT
+        // httpStatus 也必须跟着改：确认冲突是**客户端**的问题（重复提交），
+        // 不是服务端故障。留在 500 的代价是监控里一堆假 500 —— 告警阈值、
+        // 错误率看板、按状态码分流的日志采集全都被这条噪音污染，
+        // 而真正需要人看的 500 会被淹掉。前端解析的也是 msg，不受影响。
+        httpStatus = HttpStatus.CONFLICT
         msg = '数据已存在，请勿重复提交'
       }
       this.logger.error(

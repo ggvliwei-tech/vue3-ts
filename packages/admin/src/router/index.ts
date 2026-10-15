@@ -76,6 +76,16 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/audit/AuditLog.vue'),
         meta: { title: '审计日志', permissions: ['admin:audit'] },
       },
+      {
+        // 公共知识库：只认 ai:doc:manage。
+        // 该权限码的 module 是 'admin'，因此 editor 角色（授权条件为
+        // p.module NOT IN ('user','admin')）拿不到 —— 与页面上传内容全站可见的
+        // 风险等级相匹配。用户自己的私有资料在 app 端，不经此页。
+        path: 'knowledge',
+        name: 'KnowledgeManage',
+        component: () => import('@/views/knowledge/KnowledgeManage.vue'),
+        meta: { title: '知识库管理', permissions: ['ai:doc:manage'] },
+      },
     ],
   },
 ]

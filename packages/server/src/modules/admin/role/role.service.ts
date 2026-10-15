@@ -4,6 +4,8 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { InjectRepository } from '@nestjs/typeorm'
 // Repository 操作符
 import { Repository, In } from 'typeorm'
+// 事务管理器类型（create / remove 里把多个写操作收进同一事务）
+import type { EntityManager } from 'typeorm'
 // 角色实体
 import { RoleEntity } from '../../rbac/entities/role.entity'
 // 权限实体
@@ -86,24 +88,32 @@ export class RoleService {
    * - 可选地一次性绑定若干权限码
    */
   async create(dto: CreateRoleDto): Promise<RoleEntity> {
-    // 校验 code 唯一
+    // 校验 code 唯一。
+    // 这一步本质上是 TOCTOU：并发同名创建时两个请求都能通过校验，
+    // 最终由 sys_role.code 的唯一索引拦下第二个，抛 ER_DUP_ENTRY →
+    // 全局异常过滤器转成 409「数据已存在，请勿重复提交」。这里是快速路径而非安全边界。
     const exists = await this.roleRepo.findOne({ where: { code: dto.code } })
     if (exists) throw new ConflictException(`角色编码已存在：${dto.code}`)
 
-    const role = this.roleRepo.create({
-      code: dto.code,
-      name: dto.name,
-      description: dto.description,
-      status: dto.status ?? 1,
-      createTime: Date.now(),
-    })
-    const saved = await this.roleRepo.save(role)
+    // 事务：建角色 + 绑初始权限必须同生共死。
+    // 拆成两个独立写操作时，若绑定阶段失败（权限码被并发删除等），
+    // 会留下一个「创建成功但少绑了权限」的角色——前端拿到的是 500，
+    // 用户以为没创建成功，实际上列表里已经多了一条。
+    return this.roleRepo.manager.transaction(async (manager) => {
+      const role = manager.create(RoleEntity, {
+        code: dto.code,
+        name: dto.name,
+        description: dto.description,
+        status: dto.status ?? 1,
+        createTime: Date.now(),
+      })
+      const saved = await manager.save(role)
 
-    // 可选：绑定初始权限
-    if (dto.permissionCodes?.length) {
-      await this.bindPermissionsByCode(saved.id, dto.permissionCodes)
-    }
-    return saved
+      if (dto.permissionCodes?.length) {
+        await this.bindPermissionsByCode(manager, saved.id, dto.permissionCodes)
+      }
+      return saved
+    })
   }
 
   /**
@@ -139,19 +149,27 @@ export class RoleService {
       throw new BadRequestException(`内置角色 ${role.code} 不允许删除`)
     }
 
-    // 先取出受影响的用户 ID，**必须在删除 sys_user_role 之前查** ——
+    // 三张表的删除必须收进同一个事务：中途失败会留下「角色没了但 sys_role_permission /
+    // sys_user_role 里还挂着它的 id」的孤儿行——权限绑定查不到角色（无害），
+    // 但用户侧会一直带着一个指向不存在角色的关联，后续重建同名角色时立刻"复活"旧绑定。
+    //
+    // 受影响用户 ID **必须在事务内、删 sys_user_role 之前查** ——
     // 关联行删掉之后就再也查不出谁持有该角色，缓存也就永远清不掉了。
-    const affectedUserIds = await this.collectAffectedUserIds(id)
+    const affectedUserIds = await this.roleRepo.manager.transaction(async (manager) => {
+      const userRoles = await manager.find(UserRoleEntity, { where: { roleId: id } })
 
-    // 先删数据，再清缓存。
+      await manager.delete(RolePermissionEntity, { roleId: id })
+      await manager.delete(UserRoleEntity, { roleId: id })
+      await manager.delete(RoleEntity, { id })
+
+      return userRoles.map((ur) => ur.userId)
+    })
+
+    // 先删数据，再清缓存，且清缓存**在事务提交之后**（不能搬进事务里）。
     // 顺序反过来（先清后删）会留一个真实的越权窗口：清理与删除之间若有请求进来，
     // 它会读到「仍含该角色」的权限集并重新写进缓存，而此后不会再有人清第二次，
     // 于是被删角色的权限继续放行整个缓存 TTL。
     // 删完再清则不存在这个窗口：清完之后的任何读都只能读到已删除的状态。
-    await this.rolePermRepo.delete({ roleId: id })
-    await this.userRoleRepo.delete({ roleId: id })
-    await this.roleRepo.delete({ id })
-
     await this.clearUserCaches(affectedUserIds)
   }
 
@@ -202,12 +220,15 @@ export class RoleService {
 
   /**
    * 内部：按 code 绑定权限（创建角色时调用）
+   *
+   * 走传入的 manager 而不是 this.permRepo / this.rolePermRepo，
+   * 这样它就跑在 create() 的事务里，与建角色同生共死。
    */
-  private async bindPermissionsByCode(roleId: number, codes: string[]): Promise<void> {
-    const perms = await this.permRepo.find({ where: { code: In(codes) } })
+  private async bindPermissionsByCode(manager: EntityManager, roleId: number, codes: string[]): Promise<void> {
+    const perms = await manager.find(PermissionEntity, { where: { code: In(codes) } })
     if (perms.length) {
       const rows = perms.map((p) => ({ roleId, permissionId: p.id }))
-      await this.rolePermRepo.insert(rows)
+      await manager.insert(RolePermissionEntity, rows)
     }
   }
 

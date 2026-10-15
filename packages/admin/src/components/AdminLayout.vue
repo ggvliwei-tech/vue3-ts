@@ -3,14 +3,14 @@
 // 从 vue 导入 computed 用于创建计算属性
 import { computed } from 'vue'
 // 从 vue-router 导入 useRouter / useRoute：前者用于程序化导航，后者读取当前路由
-// 注意：这里用 useRoute() 而不是模板里的 $route —— vue-router 的 ComponentCustomProperties
-// 全局增强在本仓库中不会合并进模板上下文（@vue/runtime-core 里那份未受影响），
-// 直接写 $route 会报 TS2339。useRoute() 与 $route 语义完全等价。
+// （模板里直接写 $route 也已经可以：此前那条 TS2339 的根因是 admin/app 未声明
+//  typescript 导致 @vue/runtime-core 出现两份，已随依赖收口修复。
+//  useRoute() 与 $route 语义等价，此处沿用既有写法，不做无谓改写。）
 import { useRouter, useRoute } from 'vue-router'
 // 从 element-plus 导入 ElMessage 用于显示消息提示
 import { ElMessage } from 'element-plus'
 // 从 element-plus 图标库显式导入需要的图标
-import { Monitor, UserFilled, User, Avatar, Key, Document, Setting } from '@element-plus/icons-vue'
+import { Monitor, UserFilled, User, Avatar, Key, Document, Collection, Setting } from '@element-plus/icons-vue'
 // 导入用户相关的 API 方法，此处使用 logout 退出登录
 import { logout } from '@/api/user'
 // 认证状态与统一登出清理
@@ -78,6 +78,10 @@ async function handleLogout() {
           <el-menu-item index="/users">
             <el-icon><Avatar /></el-icon>
             <span>用户管理</span>
+          </el-menu-item>
+          <el-menu-item index="/knowledge">
+            <el-icon><Collection /></el-icon>
+            <span>知识库管理</span>
           </el-menu-item>
         </el-sub-menu>
 
