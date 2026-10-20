@@ -71,7 +71,14 @@ services:
       - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      # 首次启动自动执行初始化脚本
+      # 首次启动自动执行初始化脚本。
+      # ⚠️ 入口脚本只在数据卷**为空**时初始化。如果首次 `up` 在初始化完成前
+      #    被 Ctrl-C / 重启打断，会留下一个「有系统库、没有业务库和业务账号」的
+      #    半成品卷；此后每次启动都会跳过初始化，backend 永远连不上。
+      #    遇到这种情况只能重置数据卷（会清空容器内数据，确认无需保留后执行）：
+      #      docker compose down
+      #      docker volume rm vue3-monorepo_mysql_data
+      #      docker compose up -d
       - ./packages/server/nest-db.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     command:
       - --character-set-server=utf8mb4
@@ -79,11 +86,27 @@ services:
       - --default-time-zone=+08:00
       - --max_connections=200
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root123456}"]
+      # ⚠️ 不要退回 `mysqladmin ping`：它只判断「服务端有响应」，鉴权失败、
+      #    库不存在时同样返回 0。曾因此把一个**初始化中途被打断**的坏库判成
+      #    healthy（root 空密码、无 vue3_user、无 vue3_monorepo），backend 被
+      #    depends_on 放行后以 `Host '172.x.x.x' is not allowed` 反复重连。
+      #
+      #    这里直接用业务账号走 TCP：只有「账号存在 + 密码正确 + 目标库存在
+      #    + 业务表已导入」四者同时成立才算健康，正好覆盖 backend 真实的连接路径。
+      #    查 information_schema 而不是某张具体表：表名变了不必跟着改检查项，
+      #    但仍能发现「库已建、nest-db.sql 还没跑完/被中断」的半初始化状态。
+      #    $$ 是 compose 的转义，避免宿主机插值；变量由 mysql 镜像自身注入。
+      test:
+        - CMD-SHELL
+        - >-
+          mysql -h 127.0.0.1 -u"$$MYSQL_USER" -p"$$MYSQL_PASSWORD" -N -e
+          'SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() LIMIT 1'
+          "$$MYSQL_DATABASE" | grep -q 1
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      # 首次启动要跑 --initialize 与 nest-db.sql，给足初始化时间
+      start_period: 60s
     # 上限给得最宽：InnoDB 默认 buffer pool 128M，加上排序/临时表/连接开销，
     # 1g 是「小规模够用、又不至于吃掉整台机器」的位置
     mem_limit: 1g
@@ -104,23 +127,91 @@ services:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-    command:
-      - redis-server
-      - --appendonly=yes
-      - --requirepass=${REDIS_PASSWORD:-redis_pass_2026}
-      - --maxmemory-policy=allkeys-lru
+    # 用**字符串形式**而不是列表形式，唯一实质理由是下面密码那对引号：
+      # 折叠标量最终交给 /bin/sh 拆词，写成 --requirepass "xxx" 时，含空格的
+      # 密码仍是一个完整 argv；列表形式（- --requirepass=xxx）没法加引号，
+      # 密码里有空格会被拆成两个参数，redis 只收到前半段而鉴权永远失败。
+      # 当前密码 redis_pass_2026 无空格，两种写法实测解析结果一致，
+      # 但换密码时能少踩一个坑。官方 redis 文档给的也是字符串形式。
+      #
       # 上限必须显式设置：只给 maxmemory-policy 而不给 maxmemory，
       # 淘汰策略根本不会触发，Redis 会一路吃满宿主机内存直到被 OOM Killer 干掉。
-      - --maxmemory=${REDIS_MAXMEMORY:-512mb}
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass "${REDIS_PASSWORD:-redis_pass_2026}"
+      --maxmemory-policy allkeys-lru
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_pass_2026}", "ping"]
+      # --no-auth-warning：redis 7 的 redis-cli 用 -a 会在 stderr 打一行
+      # "Using a password with '-a'..." 警告。不抑制时，部分编排器把
+      # stderr 有输出视为失败，误报 unhealthy。
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-redis_pass_2026}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+      # 冷启动期不算失败：首次初始化 AOF/加载数据时 redis 可能几秒内不响应
+      start_period: 20s
     # 必须比上面的 --maxmemory 高：maxmemory 只约束数据集，
     # 进程自身、复制缓冲、AOF 重写时的额外开销都在它之外。
     # 两者相等会让 Redis 在接近上限时先被内核杀掉（而不是按 LRU 淘汰 key）。
     mem_limit: 768m
+    cpus: 1
+    networks:
+      - app-net
+
+  # ==================== 向量库 ====================
+  # 必须用 chromadb/chroma:1.x —— 配套 chromadb npm 客户端 3.5.0 的 /api/v2 协议。
+  # 用 0.5.x 时响应里不带 configuration_json，客户端会在
+  # `Cannot read properties of undefined (reading 'embedding_function')` 处崩。
+  # 容器端口必须避开 8000：宿主机的 LODOP 打印服务占着它（PID/进程名见
+  # CHROMA 故障排查笔记），同主机多服务并存时这是一种常见冲突。
+  chroma:
+    image: chromadb/chroma:1.5.9
+    container_name: vue3-monorepo-chroma
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - ANONYMIZED_TELEMETRY_DISABLED=true
+      # 持久化目录必须显式开，否则容器重建数据全丢
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    # 绑回环地址，理由同 mysql/redis/backend：服务只该经 app-net 被 backend 访问，
+    # 本机演示/调试用 127.0.0.1:8001 也够；想开公网请改成 "8001:8000" 并配防火墙
+    ports:
+      - "127.0.0.1:${CHROMA_HTTP_PORT:-8001}:8000"
+    healthcheck:
+      # ⚠️ 这个镜像里**没有 curl / wget / python / python3 / nc**。
+      #    chromadb/chroma:1.5.x 把整个服务用 PyInstaller 打成单个二进制
+      #    /usr/local/bin/chroma，Python 解释器不随镜像分发 —— 用 wget/curl
+      #    做探测会以 exit 127 (not found) 连续失败，10 次重试后误报 unhealthy
+      #    （服务本身完全正常，这类"假红"最容易误导排查方向）。
+      #
+      #    镜像里确实存在的是完整的 Debian 用户空间，/usr/bin/bash 可用。
+      #    因此用 bash 的 /dev/tcp 做探测：它是 bash 内建，不需要任何外部二进制，
+      #    也不必往镜像里装包（镜像变大会影响拉取和构建耗时）。
+      #    端点 /api/v2/heartbeat 与 npm 客户端 chromadb 3.5.0 走的 /api/v2 同代。
+      #
+      #    ⚠️ 里面的 $line 必须写成 $$line：compose 会把 $line 当成环境变量插值
+      #    成空串（启动时会打 "The \"line\" variable is not set" 警告），
+      #    探测逻辑随之恒为假，healthcheck 会永远 unhealthy。
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8000 &&
+          printf 'GET /api/v2/heartbeat HTTP/1.0\r\n\r\n' >&3 &&
+          IFS= read -r -t 3 line <&3 &&
+          [[ "$$line" == *200* ]]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # HDF5 + sqlite + HNSW 索引常驻内存，1G 给得稍宽
+    mem_limit: 1g
     cpus: 1
     networks:
       - app-net
@@ -138,6 +229,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      chroma:
+        # 用 service_started 而非 service_healthy：不卡死 backend 启动。
+        # chroma 是 RAG 可选依赖 —— 健康检查还在 start_period 期间时
+        # 不该让 backend 跟着卡住；连通性由 rag.service.ts 构造函数里的
+        # 自检承担，连接失败只 warn 不抛错，RAG 接口才 503/500，其他接口照常服务。
+        condition: service_started
     environment:
       # 应用
       NODE_ENV: production
@@ -146,12 +243,16 @@ services:
       APP_VERSION: ${APP_VERSION:-1.0.0}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # 数据库（指向同网络内的 mysql 容器）
+      # ⚠️ 这里的端口是**容器内**端口（mysql 镜像默认 3306），
+      #    不是宿主机映射端口（那是 ports 段的 ${MYSQL_PORT:-3306}）。
+      #    同理下面的 REDIS_PORT。容器间走 app-net 的服务名 + 镜像默认端口，
+      #    宿主端口挪到哪都不影响 —— 写错会让 backend 连库直接 ECONNREFUSED。
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: ${DB_USER:-vue3_user}
       DB_PWD: ${DB_PWD:-vue3_pass_2026}
       DB_NAME: ${DB_NAME:-vue3_monorepo}
-      # Redis
+      # Redis（端口同 DB_PORT：容器内默认 6379，不是宿主映射的 ${REDIS_PORT}）
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_pass_2026}
@@ -200,6 +301,12 @@ services:
       # （该域名由下面的 extra_hosts 映射，仅 Linux 需要 —— Docker Desktop 自带）
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5}
+      # 向量库：compos 内走服务名解析（chroma:8000）。
+      # 若改用 `pnpm start:dev` 在宿主机直接跑 backend（不在 docker 里），
+      # 把这两个变量改成 CHROMA_HOST=127.0.0.1 / CHROMA_PORT=8001 —— 此时
+      # 127.0.0.1 才是宿主，8001 是 docker run 给 chroma 的端口映射。
+      CHROMA_HOST: ${CHROMA_HOST:-chroma}
+      CHROMA_PORT: ${CHROMA_PORT:-8000}
       # OSS（按需配置）
       OSS_REGION: ${OSS_REGION:-}
       OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
@@ -287,6 +394,8 @@ volumes:
   mysql_data:
     driver: local
   redis_data:
+    driver: local
+  chroma_data:
     driver: local
 
 # ==================== 网络 ====================

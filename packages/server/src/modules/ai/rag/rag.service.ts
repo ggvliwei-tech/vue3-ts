@@ -92,6 +92,29 @@ export class RagService {
       host: this.configService.get('CHROMA_HOST') || 'localhost',
       port: this.configService.get('CHROMA_PORT') || 8000,
     })
+    // 启动期兜一道：连不上 Chroma 别等接口 500，集中报错更易排错。
+    // 上次踩的坑：CHROMA_PORT=8000 默认值命中宿主机的 LODOP 打印服务，
+    // 每个 RAG 接口拿到 HTML 而报 `Cannot read properties of undefined
+    // (reading 'embedding_function')` —— 错误的"形"是 chromadb 客户端
+    // 内部字段访问，根因却是端到端连通性问题，延后到运行时才发现。
+    //
+    // 这里**故意不抛错**：chroma 不可用不该让整个 backend 起不来，
+    // 其他接口（登录、上传、账本）跟 RAG 无关，应当照常服务；
+    // 真正的接口级 500 由 listDocuments / buildPrompt 等路径在调用时兜。
+    void this.chroma
+      .version()
+      .then((v) => this.logger.log(`Chroma 服务端连通正常（version=${v}）`))
+      .catch((err: unknown) => {
+        const host = this.configService.get('CHROMA_HOST') || 'localhost'
+        const port = this.configService.get('CHROMA_PORT') || 8000
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger.error(
+          `Chroma 服务端连不上（${host}:${port}）— ${msg}\n` +
+            `  · 宿主机 8000 被占用（LODOP/打印服务等）时，改 CHROMA_PORT 避开\n` +
+            `  · backend 在 docker 容器里而 chroma 在宿主机：改用 host.docker.internal 或 docker compose 服务名（chroma）\n` +
+            `  · chroma 镜像必须 ≥1.0（npm 客户端 3.5.0 走 /api/v2，老版 0.5.x 不兼容）`,
+        )
+      })
   }
 
   /**
