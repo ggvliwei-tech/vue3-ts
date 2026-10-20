@@ -281,8 +281,11 @@ export class AiController {
   @Post('stream/history')
   // SSE 装饰器：标识该接口为 Server-Sent Events 流式输出
   @Sse()
-  // Swagger 操作描述：SSE 流式输出（带历史上下文）
-  @ApiOperation({ summary: 'SSE 流式输出（带历史上下文）' })
+  // Swagger 操作描述：SSE 流式输出（带历史上下文 + 知识库检索）
+  //
+  // 每轮提问都会先检索「公共库 + 当前用户私有库」，命中的 PDF 切块拼进
+  // 系统提示词后再交给 LLM；检索失败会降级为普通聊天，不影响回复。
+  @ApiOperation({ summary: 'SSE 流式输出（带历史上下文 + 知识库检索）' })
   // 带历史的流式输出接口，接收问题、sessionId 和当前用户
   async streamWithHistory(
     @Body() dto: ChatDto, // 请求体：question（必填）+ sessionId（可选），校验见 ChatDto

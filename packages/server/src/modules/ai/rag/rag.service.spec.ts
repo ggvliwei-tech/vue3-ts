@@ -327,6 +327,47 @@ describe('RagService', () => {
     })
   })
 
+  // ===================== 3.1 聊天流程的降级检索 =====================
+
+  describe('tryBuildContext', () => {
+    it('命中时返回与 buildPrompt 相同的「参考上下文」格式', async () => {
+      mockQuery.mockResolvedValue(
+        queryResult([{ text: 'PDF 里的内容', distance: 0.2, filename: 'mine.pdf' }]),
+      )
+
+      const context = await service.tryBuildContext('问题', USER_ID)
+
+      expect(context).toContain('【我的资料·mine.pdf】')
+      expect(context).toContain('PDF 里的内容')
+    })
+
+    it('embeddings 不可用时降级为空串，不抛 503（普通聊天不能被拖垮）', async () => {
+      mockRequireEmbeddings.mockImplementation(() => {
+        throw new EmbeddingsUnavailableError('LLM_TYPE=local_ollama 不支持 embedding')
+      })
+
+      await expect(service.tryBuildContext('问题', USER_ID)).resolves.toBe('')
+    })
+
+    it('Chroma 连不上时降级为空串', async () => {
+      mockGetCollection.mockRejectedValue(new Error('ECONNREFUSED 127.0.0.1:8001'))
+
+      await expect(service.tryBuildContext('问题', USER_ID)).resolves.toBe('')
+    })
+
+    it('检索超时后按无资料继续，不让聊天一直等待', async () => {
+      jest.useFakeTimers()
+      try {
+        mockEmbedQuery.mockReturnValue(new Promise(() => undefined))
+        const pending = service.tryBuildContext('问题', USER_ID)
+        await jest.advanceTimersByTimeAsync(5000)
+        await expect(pending).resolves.toBe('')
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+  })
+
   // ===================== 4. 文档列表 =====================
 
   describe('listDocuments', () => {

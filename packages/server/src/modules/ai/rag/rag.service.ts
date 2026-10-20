@@ -42,6 +42,14 @@ const TOP_K = 3
 const PUBLIC_COLLECTION = 'business_docs'
 /** metadata 里 filename 的最大留存长度，防止超长文件名撑大元数据 */
 const FILENAME_MAX_LENGTH = 200
+/**
+ * 对话流程里的检索超时。
+ *
+ * 普通对话**不能**被向量检索拖住：embedding 接口偶发卡死时，openai SDK 的默认
+ * 超时是分钟级，用户会先看到聊天框转圈几十秒。超时后按"本轮没有检索到资料"
+ * 继续走 LLM —— 少一点上下文，总比不回复好。
+ */
+const RETRIEVE_TIMEOUT_MS = 5000
 
 /** 知识库作用域 */
 export type RagScope = 'public' | 'private'
@@ -83,6 +91,11 @@ interface Retrieved {
 export class RagService {
   private readonly logger = new Logger(RagService.name)
   private readonly chroma: ChromaClient
+  /**
+   * 上一次「降级检索」的原因，用于抑制重复日志。
+   * 对话每问一句都会尝试检索，Chroma 挂掉时若不抑制，每次提问都会刷一条 warn。
+   */
+  private lastDegradeReason: string | null = null
 
   constructor(
     private readonly configService: ConfigService,
@@ -358,10 +371,13 @@ export class RagService {
   }
 
   /**
-   * 检索公共库 + 当前用户私有库，合并后组装 Prompt。
-   * 业务侧只需要把返回的 prompt 喂给 LLM 即可。
+   * 检索公共库 + 当前用户私有库，按距离升序合并后取全局 TOP_K。
+   *
+   * 这是所有 RAG 路径的唯一检索入口：显式问答接口（buildPrompt）和
+   * AI 聊天流程（tryBuildContext）必须走同一套合并逻辑，否则两边检索
+   * 到的资料范围会悄悄分叉。
    */
-  async buildPrompt(question: string, userId: number): Promise<string> {
+  async retrieve(question: string, userId: number): Promise<Retrieved[]> {
     const embeddings = this.requireEmbeddings()
     const questionVec = await embeddings.embedQuery(question)
 
@@ -373,14 +389,72 @@ export class RagService {
     ]
     // Chroma 的 distance 越小越相似
     merged.sort((a, b) => a.distance - b.distance)
-    const top = merged.slice(0, TOP_K)
+    return merged.slice(0, TOP_K)
+  }
 
-    const context = top
+  /** 把命中的切块拼成 Prompt 里的「参考上下文」；无命中时返回空串 */
+  private formatContext(hits: Retrieved[]): string {
+    return hits
       .map(
         (hit) =>
           `【${hit.scope === 'public' ? '公共资料' : '我的资料'}·${hit.filename}】\n${hit.text}`,
       )
       .join('\n\n')
+  }
+
+  /**
+   * 对话流程专用的「尽力而为」检索：
+   * 检索失败 / embedding 不可用 / 超时都只降级为「本轮没有参考资料」，
+   * **绝不**让普通聊天因为向量库问题报错。
+   *
+   * 与 buildPrompt 的区别：后者是显式的知识库问答，配置错误应该 503 让用户看见；
+   * 这里只是给聊天加一层增强，没检索到也要照常回答。
+   */
+  async tryBuildContext(question: string, userId: number): Promise<string> {
+    try {
+      const hits = await this.withTimeout(
+        this.retrieve(question, userId),
+        RETRIEVE_TIMEOUT_MS,
+        null,
+      )
+      if (hits === null) {
+        this.logDegrade(`检索超过 ${RETRIEVE_TIMEOUT_MS}ms 未完成`)
+        return ''
+      }
+      // 成功一次就重置，后续再出问题时还能重新提示
+      this.lastDegradeReason = null
+      return this.formatContext(hits)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.logDegrade(msg)
+      return ''
+    }
+  }
+
+  /** 同一原因的降级只记一次 warn，避免每次提问都刷屏 */
+  private logDegrade(reason: string): void {
+    if (reason === this.lastDegradeReason) return
+    this.lastDegradeReason = reason
+    this.logger.warn(`知识库检索不可用，本轮对话将不带参考资料继续：${reason}`)
+  }
+
+  /** 给检索加超时；超时返回 fallback，而不是继续等 embedding 接口 */
+  private withTimeout<T>(task: Promise<T>, ms: number, fallback: T): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms)
+    })
+    return Promise.race([task, timeout]).finally(() => {
+      if (timer) clearTimeout(timer)
+    })
+  }
+
+  /**
+   * 检索公共库 + 当前用户私有库，合并后组装 Prompt（显式知识库问答接口用）。
+   * 业务侧只需要把返回的 prompt 喂给 LLM 即可。
+   */
+  async buildPrompt(question: string, userId: number): Promise<string> {
+    const context = this.formatContext(await this.retrieve(question, userId))
 
     return `
 基于下面参考内容回答问题，不知道就如实回答不知道，禁止编造内容：

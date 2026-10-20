@@ -234,6 +234,9 @@ sys_user          ←── sys_user_role ──→ sys_role
 
 - 问答走 `POST /api/v1/ai/rag`，内部对两个库各取 `TOP_K` 再按距离**升序**合并截断
   （每库各取，否则私有资料会被公共库挤空，隔离等于白做）。
+- **AI 聊天框也会自动检索知识库**：`stream/history` 与 `chat/history` 每轮提问
+  都会先用同一套合并逻辑检索，把命中的切块拼进系统提示词。检索失败、embedding
+  不可用或超过 5 秒时降级为普通聊天（不报错、不带资料），聊天本身不受影响。
 - 单个库查询抛错时只记 warn 跳过该库，不让整个提问 500 —— 典型触发场景是公共库
   用另一个 embedding 模型建过，维度对不上。**合并排序的前提是两库同模型同度量**，
   切 provider 前记得重建公共库。
@@ -243,7 +246,7 @@ sys_user          ←── sys_user_role ──→ sys_role
 已知限制（当前规模下可接受，量级上来前需重做）：
 
 - `LLM_TYPE=ollama` 下 RAG 整体不可用：该 provider 不提供 embedding 接口，
-  上传/检索会返回 503 而不是 500。
+  上传与显式的 `/ai/rag` 会返回 503 而不是 500；聊天框则自动降级为不检索资料。
 - 一个用户一个 collection，Chroma 为每个 collection 单独维护一份 HNSW 索引，
   用户量大时内存与元数据开销显著。届时应改为单一 `private_docs` +
   `where: { userId }`，隔离改由 where 条件保证。
