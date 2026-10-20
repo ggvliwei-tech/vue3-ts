@@ -3,10 +3,16 @@
 -- 数据库：vue3_monorepo（与 docker-compose.yml / .env.example 的 DB_NAME 默认值一致）
 -- 字符集：utf8mb4 / utf8mb4_unicode_ci
 --
--- 这是仓库中**唯一**的 SQL 脚本：建库、建表、索引、外键、初始数据全在本文件内。
+-- 这是**全量重建**脚本：建库、建表、索引、外键、初始数据全在本文件内。
 --   · 部署链路：docker-compose.yml 把它挂成 mysql 容器的
 --     /docker-entrypoint-initdb.d/01-schema.sql，容器首次启动时自动执行。
 --   · 手工执行：mysql -h <host> -u <user> -p < packages/server/nest-db.sql
+--
+-- ⚠️ 本文件只能用来**新建 / 重置**环境，不能用来给已有的库打补丁
+--   下面每张表都是 DROP + CREATE，对已上线的库跑它等于清库。
+--   已经初始化过的库需要补数据时，走 sql/ 目录下的增量脚本（按日期命名、幂等）：
+--     sql/2026-10-15-rag-doc-permissions.sql   补 RAG 两级知识库的两个权限码
+--   新增权限码 / 索引时请**两处都改**：本文件（供新建环境）+ 一个增量脚本（供已有环境）。
 --
 -- ⚠️ 重跑 = 完整重置，会清空全部业务数据
 --   每张表都是先 DROP 再 CREATE，所以重复执行的结果是「回到出厂状态」：业务数据、
@@ -331,6 +337,11 @@ INSERT IGNORE INTO `sys_permission` (`code`, `name`, `module`, `description`, `c
   ('admin:audit',              '管理端审计日志',   'admin', '查询管理端操作审计日志',      UNIX_TIMESTAMP() * 1000),
   ('dashboard:view',           '查看管理仪表盘',   'admin', '查看管理后台首页统计数据',    UNIX_TIMESTAMP() * 1000),
   -- ===== 以下为 RAG 两级知识库的权限码 =====
+  -- ⚠️ 这两条是**后补**的：在本文件加入它们之前就已经初始化过的库（本地开发库、
+  --    已上线环境）里没有这两行，表现为 admin 打开「知识库管理」直接跳 /403。
+  --    那种库不能用本脚本补（会清库），要跑幂等增量脚本：
+  --      sql/2026-10-15-rag-doc-permissions.sql
+  --    跑完让相关账号重新登录 —— 权限集合在 Redis 有 10 分钟缓存（rbac.service.ts）。
   -- ai:doc:manage 的 module 刻意用 'admin'：editor 角色的授权条件是
   -- `p.module NOT IN ('user','admin')`，用 'admin' 就能把它挡在公共知识库之外，
   -- 实现「公共库只有管理员能写」而不必改角色授权语句。

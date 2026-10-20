@@ -81,7 +81,7 @@ docker compose down -v
 | `./logs/backend`、`./uploads/backend` 已 `mkdir` 且 `chown 1001:1001` | 容器内以非 root 的 `nestjs`(uid 1001) 运行。若由 Docker 以 root 创建这两个目录，日志写不进、上传报 EACCES —— 启动阶段**不报错**，上线后第一次上传才炸 |
 | `DB_NAME` 保持 `vue3_monorepo` | 初始化脚本 `nest-db.sql` 里的库名是硬编码的。改了名字会建出一个空库，14 张表依旧建进原库，后端连上空库 |
 | 短信：`SMS_MOCK` 按需设置 | 阿里云 SDK 尚未接入，`production` 下真实通道固定返回 503，即「忘记密码 / 短信登录」不可用。临时办法是设 `SMS_MOCK=true`，验证码写入 `./logs/backend` 由运维取；正式上线请接入 SDK |
-| 已规划数据库备份 | 仓库只提供 `mysql_data` 命名卷，**没有**备份脚本。`nest-db.sql` 含 `DROP TABLE`，不要在已有数据的环境重跑 |
+| 已规划数据库备份 | 仓库只提供 `mysql_data` 命名卷，**没有**备份脚本。`nest-db.sql` 含 `DROP TABLE`，不要在已有数据的环境重跑。已有环境的补数据走 `packages/server/sql/` 下的增量脚本（幂等），改结构则本文件与增量脚本必须同改 |
 
 > **Linux 上的目录权限**：`docker compose up` 时若 `./logs/backend` / `./uploads/backend` 不存在，Docker daemon 会以 root 创建它们（属主 root:root、权限 755），容器内的 `nestjs` 用户随即失去写权限。这一步只在首次部署时需要，之后目录已存在就不会被重建。
 >
@@ -98,6 +98,13 @@ pnpm build:shared
 
 # 3. 准备数据库（确保 MySQL 已运行）
 #    在 MySQL 中执行 packages/server/nest-db.sql
+#    ⚠️ 这个脚本是「全量重建」（每张表先 DROP 再 CREATE），只用于新建/重置环境。
+#       **已经在用的库不要再跑它** —— 需要补数据时走 packages/server/sql/ 下的
+#       增量脚本（按日期命名、幂等、可重复执行），并让相关账号重新登录：
+#         mysql -h <host> -u <user> -p --default-character-set=utf8mb4 <dbname> \
+#           < packages/server/sql/2026-10-15-rag-doc-permissions.sql
+#       为什么必须重新登录：权限集合在 Redis 里有 10 分钟缓存（rbac.service.ts），
+#       且每个后端进程还有一份进程内缓存，不重新登录会看到「改了没生效」。
 
 # 4. 配置 packages/server/.env
 #    cp packages/server/.env.example packages/server/.env

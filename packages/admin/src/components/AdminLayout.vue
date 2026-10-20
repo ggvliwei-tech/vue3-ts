@@ -16,6 +16,8 @@ import { logout } from '@/api/user'
 // 认证状态与统一登出清理
 import { useAuthStore } from '@project/shared/stores/useAuthStore'
 import { notifyLogout } from '@project/shared/token-refresh'
+// 权限码常量：菜单项的可见性与下面 router/index.ts 的路由守卫用同一批码
+import { PERM } from '@/permission'
 
 // 获取路由器实例
 const router = useRouter()
@@ -79,7 +81,11 @@ async function handleLogout() {
             <el-icon><Avatar /></el-icon>
             <span>用户管理</span>
           </el-menu-item>
-          <el-menu-item index="/knowledge">
+          <!-- 知识库管理只对持有 ai:doc:manage 的账号开放（当前只有 admin 角色有），
+               所以这里必须和下面 router/index.ts 的 meta.permissions 一样加判定。
+               少了它，普通账号会看到一个点得动、点进去直接跳 /403 的入口 ——
+               D2 给页面内按钮铺 v-permission 时漏掉了菜单项这一层。 -->
+          <el-menu-item v-permission="PERM.AI_DOC_MANAGE" index="/knowledge">
             <el-icon><Collection /></el-icon>
             <span>知识库管理</span>
           </el-menu-item>
