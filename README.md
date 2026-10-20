@@ -72,6 +72,11 @@ docker compose down
 docker compose down -v
 ```
 
+> **改了代码后要重建镜像**：容器里运行的是构建时的 `dist/` 与前端产物，没有热更新。
+> 只改前端/后端代码时执行 `docker compose up -d --build`（或只重建某个服务：
+> `docker compose up -d --build backend`）。仅 `docker compose restart` 不会带入新代码，
+> 表现为「代码明明改了、线上行为没变」。
+
 **部署清单（上线前逐项确认）**
 
 | 项 | 为什么 |
@@ -95,6 +100,14 @@ pnpm install
 
 # 2. 启动共享包（一次性）
 pnpm build:shared
+
+# 2.1 可选：本机没有 MySQL / Redis / Chroma 时，只起依赖容器
+#     docker compose up -d mysql redis chroma
+#     然后把 packages/server/.env 指向宿主机映射端口（以根 .env 为准）：
+#       DB_HOST=127.0.0.1    DB_PORT=3307     # 根 .env 的 MYSQL_PORT
+#       REDIS_HOST=127.0.0.1 REDIS_PORT=6380  # 根 .env 的 REDIS_PORT
+#       CHROMA_HOST=127.0.0.1 CHROMA_PORT=8001
+#     ⚠️ 容器版 backend 同样占用 3000，宿主机直跑前先 `docker compose stop backend`。
 
 # 3. 准备数据库（确保 MySQL 已运行）
 #    在 MySQL 中执行 packages/server/nest-db.sql

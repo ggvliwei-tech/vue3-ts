@@ -7,7 +7,8 @@ FROM node:22-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@10.18.3 --activate
 WORKDIR /app
 
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc* ./
+# 不写 `.npmrc*`：仓库里没有 .npmrc，COPY 通配符匹配不到文件会让构建直接失败
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/shared ./packages/shared
 COPY packages/app ./packages/app
 

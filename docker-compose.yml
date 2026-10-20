@@ -221,6 +221,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.server
+      args:
+        # 国内网络访问 Alpine 官方源常 TLS 握手失败；能直连官方源时改为
+        # https://dl-cdn.alpinelinux.org（见 .env.example 的 ALPINE_MIRROR）
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://mirrors.aliyun.com}
     container_name: vue3-monorepo-backend
     restart: unless-stopped
     logging: *default-logging
@@ -238,6 +242,9 @@ services:
     environment:
       # 应用
       NODE_ENV: production
+      # 容器默认是 UTC（即使宿主在 +08:00），不设时 winston 日志会与
+      # mysql 容器、宿主机相差 8 小时，排查问题时极易对错时间线
+      TZ: Asia/Shanghai
       APP_PORT: 3000
       APP_HOST: 0.0.0.0
       APP_VERSION: ${APP_VERSION:-1.0.0}
@@ -304,7 +311,7 @@ services:
       # （该域名由下面的 extra_hosts 映射，仅 Linux 需要 —— Docker Desktop 自带）
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5}
-      # 向量库：compos 内走服务名解析（chroma:8000）。
+      # 向量库：compose 内走服务名解析（chroma:8000）。
       # 若改用 `pnpm start:dev` 在宿主机直接跑 backend（不在 docker 里），
       # 把这两个变量改成 CHROMA_HOST=127.0.0.1 / CHROMA_PORT=8001 —— 此时
       # 127.0.0.1 才是宿主，8001 是 docker run 给 chroma 的端口映射。
