@@ -294,6 +294,9 @@ services:
       LLM_TYPE: ${LLM_TYPE:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       DASHSCOPE_MODEL: ${DASHSCOPE_MODEL:-qwen-plus}
+      # 知识库（RAG）用的 embedding 模型。不设时代码兜底 text-embedding-v3；
+      # 注意不能沿用 OpenAI 的默认嵌入模型，DashScope 兼容端点不认。
+      DASHSCOPE_EMBEDDING_MODEL: ${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-3.5-turbo}

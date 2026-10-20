@@ -36,6 +36,13 @@
 --   3. 执行前请确认 DB_HOST / DB_USER / DB_PWD 与 .env 配置一致
 -- =============================================
 
+-- ⚠️ 必须在任何中文数据之前设置连接字符集。
+--    docker-entrypoint 调用的 mysql 客户端默认字符集取决于容器 locale，实测为
+--    latin1；本文件是 UTF-8，若按 latin1 解释，'管理员' 会被转成双重编码的
+--    'ç®¡ç†å‘˜' 落库（HEX 从 E7AEA1... 变成 C3A7C2AE...），接口返回时前端显示乱码。
+--    显式 SET NAMES 后，无论客户端默认值是什么都按 utf8mb4 解释后续语句。
+SET NAMES utf8mb4;
+
 -- 1. 创建数据库（不存在则新建）
 CREATE DATABASE IF NOT EXISTS `vue3_monorepo`
   DEFAULT CHARACTER SET utf8mb4

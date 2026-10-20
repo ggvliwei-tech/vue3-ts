@@ -166,7 +166,15 @@ export class AiController {
   // 使用文件上传拦截器，限制文件大小为 20MB
   // 未指定 storage → multer 走默认的 memoryStorage，文件内容在 file.buffer 里。
   // 下游必须用 buffer，不能用 file.path（memoryStorage 下 path 恒为 undefined）。
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 20 * 1024 * 1024 },
+      // busboy 默认用 latin1 解析 multipart 头里的文件名，浏览器的 UTF-8
+      // 中文名会被解成 `æå...` 这类乱码，并原样写进 Chroma metadata。
+      // 显式声明 UTF-8，保证「我的资料」列表显示的是真实文件名。
+      defParamCharset: 'utf8',
+    }),
+  )
   // PDF 上传接口处理函数，接收上传的文件与当前用户
   async uploadPdf(
     @UploadedFile() file: Express.Multer.File,

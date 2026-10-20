@@ -182,8 +182,10 @@ export class RagService {
       return this.llmProvider.requireEmbeddings()
     } catch (err) {
       if (err instanceof EmbeddingsUnavailableError) {
+        // 带上具体原因（缺哪个 key / 哪个 provider 不支持），否则运维只能看到
+        // 一句笼统的「不可用」，还得回代码里猜是配置没生效还是模型选错了。
         throw new ServiceUnavailableException(
-          '当前 LLM 配置不提供 embedding 能力，知识库功能不可用（请在 .env 中改用支持 embeddings 的 provider）',
+          `知识库功能不可用：${err.message}。请检查后端容器的 LLM 相关环境变量后重启`,
         )
       }
       throw err
@@ -233,6 +235,25 @@ export class RagService {
   }
 
   /**
+   * 修复历史文件名乱码：multipart 文件名曾被 busboy 按 latin1 解码，
+   * UTF-8 中文会变成 `æµ‹è¯•.pdf` 这类字符并写进 Chroma metadata。
+   *
+   * 只在字符串**全部**落在 latin1 范围（码点 ≤ 0xFF）时尝试反解：
+   *  - 正确解码的中文名码点 > 0xFF，原样返回，不会被二次破坏；
+   *  - 纯 ASCII 名反解前后一致；
+   *  - 反解出现 U+FFFD（非法 UTF-8）说明它本来就是 latin1 文本，保持原值。
+   *
+   * 新上传已由 FileInterceptor 的 defParamCharset=utf8 从源头修正，
+   * 这里只负责让历史数据在列表 / 检索 Prompt 里正常显示。
+   */
+  private repairLatin1Mojibake(value: string): string {
+    if (!value) return value
+    if ([...value].some((ch) => (ch.codePointAt(0) ?? 0) > 0xff)) return value
+    const decoded = Buffer.from(value, 'latin1').toString('utf8')
+    return decoded.includes('�') ? value : decoded
+  }
+
+  /**
    * 规范上传文件名：只取最后一段路径、去掉控制字符与格式字符、限制长度。
    * 文件名会进 metadata 并拼进 Prompt，不能原样信任客户端。
    *
@@ -240,7 +261,7 @@ export class RagService {
    * 转义区间：源码里不留裸控制字节，避免被工具链 / git 当成二进制文件。
    */
   private normalizeFilename(raw: string | undefined): string {
-    const base = (raw ?? '').split(/[\\/]/).pop() ?? ''
+    const base = this.repairLatin1Mojibake((raw ?? '').split(/[\\/]/).pop() ?? '')
     const cleaned = base.replace(/[\p{Cc}\p{Cf}]/gu, '').trim()
     return cleaned.slice(0, FILENAME_MAX_LENGTH) || '未命名文档'
   }
@@ -318,7 +339,10 @@ export class RagService {
           text,
           // 距离缺失时排到最后，而不是当成 0（0 会被误读成"最相似"）
           distance: distances[i] ?? Number.POSITIVE_INFINITY,
-          filename: this.metaString(metadatas[i] ?? null, 'filename', '未知文档'),
+          // 历史文档的 filename 可能是 latin1 乱码，进 Prompt 前统一修复
+          filename: this.repairLatin1Mojibake(
+            this.metaString(metadatas[i] ?? null, 'filename', '未知文档'),
+          ),
           scope: target.scope,
         })
       }
@@ -392,7 +416,10 @@ ${question}
         }
         byDocId.set(docId, {
           docId,
-          filename: this.metaString(meta, 'filename', '未知文档'),
+          // 修复旧版本按 latin1 解码留下的文件名乱码（新上传已是正确的 UTF-8）
+          filename: this.repairLatin1Mojibake(
+            this.metaString(meta, 'filename', '未知文档'),
+          ),
           chunks: 1,
           uploadedAt: this.metaNumber(meta, 'uploadedAt', 0),
         })

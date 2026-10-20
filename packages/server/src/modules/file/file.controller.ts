@@ -69,7 +69,11 @@ export class FileController {
   @Permissions('file:upload')
   // 注册单文件上传拦截器，拦截字段名为 'file'，限制文件大小 5MB
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      // 文件名按 UTF-8 解码，避免中文名变成 `æå...` 存进 sys_file
+      defParamCharset: 'utf8',
+    }),
   )
   // 处理单文件上传的请求，file 为拦截器解析后的文件对象
   async uploadImage(
@@ -97,6 +101,8 @@ export class FileController {
         limits: {
           fileSize: 5 * 1024 * 1024, // 单文件5MB
         },
+        // 同上：多文件上传同样按 UTF-8 解析中文文件名
+        defParamCharset: 'utf8',
       },
     ),
   )

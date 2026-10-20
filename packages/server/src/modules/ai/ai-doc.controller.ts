@@ -45,7 +45,13 @@ export class AiDocAdminController {
   @ApiOperation({ summary: '上传 PDF 到公共知识库（全站用户可检索）' })
   @ApiConsumes('multipart/form-data')
   // 与私有库上传同样的 20MB 上限；未指定 storage → memoryStorage，内容在 file.buffer
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 20 * 1024 * 1024 },
+      // 同 AiController：不声明 utf8 时中文文件名会被 busboy 按 latin1 解码成乱码
+      defParamCharset: 'utf8',
+    }),
+  )
   async upload(@UploadedFile() file: Express.Multer.File) {
     // 不带文件时 file 为 undefined，直接取 .buffer 会抛 TypeError → 500
     if (!file?.buffer?.length) {

@@ -49,6 +49,10 @@ jest.mock('chromadb', () => {
   return {
     ChromaNotFoundError,
     ChromaClient: jest.fn().mockImplementation(() => ({
+      // 构造函数里有一次启动期连通性自检（this.chroma.version()），
+      // mock 缺了它会直接在 new RagService(...) 处抛
+      // `this.chroma.version is not a function`，整个用例集连初始化都过不去。
+      version: jest.fn().mockResolvedValue('1.0.0'),
       getOrCreateCollection: (...args: unknown[]) => mockGetOrCreateCollection(...args),
       getCollection: (...args: unknown[]) => mockGetCollection(...args),
     })),
@@ -341,6 +345,23 @@ describe('RagService', () => {
       expect(docs).toHaveLength(2)
       expect(docs[0]).toEqual({ docId: 'b', filename: 'b.pdf', chunks: 1, uploadedAt: 200 })
       expect(docs[1]).toEqual({ docId: 'a', filename: 'a.pdf', chunks: 2, uploadedAt: 100 })
+    })
+
+    it('修复历史文件名乱码，且不误伤已正确解码的中文名', async () => {
+      // '测试.pdf' 的 UTF-8 字节被按 latin1 解码后的形态（旧版 busboy 的产物）
+      const mojibake = Buffer.from('测试.pdf', 'utf8').toString('latin1')
+      mockGet.mockResolvedValue({
+        ids: ['old#0', 'new#0'],
+        metadatas: [
+          { docId: 'old', chunk: 0, filename: mojibake, uploadedAt: 100 },
+          { docId: 'new', chunk: 0, filename: '测试.pdf', uploadedAt: 200 },
+        ],
+      })
+
+      const docs = await service.listDocuments({ scope: 'public' })
+
+      // 两条都必须显示为正常中文：老的靠读时反解，新的本来就是对的
+      expect(docs.map((d) => d.filename)).toEqual(['测试.pdf', '测试.pdf'])
     })
 
     it('库不存在时返回空数组', async () => {
