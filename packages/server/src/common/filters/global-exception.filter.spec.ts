@@ -165,6 +165,64 @@ describe('GlobalExceptionFilter', () => {
     })
   })
 
+  // 本地调试时前端只拿到「系统内部错误」根本没法定位问题，所以非生产环境
+  // 会把真实错误信息拼进 msg；生产必须保持通用文案（详情只进日志）。
+  describe('错误详情透出策略', () => {
+    const original = process.env.NODE_ENV
+
+    afterEach(() => {
+      if (original === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = original
+    })
+
+    it('非生产环境：未知错误的 msg 附带真实原因', () => {
+      process.env.NODE_ENV = 'development'
+      const host = mockHost({ headers: {}, url: '/api/x' })
+      filter.catch(new Error("connect ECONNREFUSED 127.0.0.1:3307"), host)
+      const body = host.__mockRes.json.mock.calls[0][0]
+      expect(body.code).toBe(BusinessCode.INTERNAL_ERROR)
+      expect(body.msg).toContain('系统内部错误')
+      expect(body.msg).toContain('ECONNREFUSED')
+    })
+
+    it('非生产环境：非 Error 抛出值也能透出', () => {
+      process.env.NODE_ENV = 'development'
+      const host = mockHost({ headers: {}, url: '/api/x' })
+      filter.catch('raw string error', host)
+      expect(host.__mockRes.json.mock.calls[0][0].msg).toContain('raw string error')
+    })
+
+    it('生产环境：未知错误只给通用文案', () => {
+      process.env.NODE_ENV = 'production'
+      const host = mockHost({ headers: {}, url: '/api/x' })
+      filter.catch(new Error('secret internal detail'), host)
+      const body = host.__mockRes.json.mock.calls[0][0]
+      expect(body.msg).toBe('系统内部错误')
+    })
+
+    it('生产环境：通用 DB 错误不泄漏驱动信息', () => {
+      process.env.NODE_ENV = 'production'
+      const host = mockHost({ headers: {}, url: '/api/x' })
+      const driverErr = { code: 'ER_NO_SUCH_TABLE', sqlMessage: "Table 'vue3_monorepo.foo' doesn't exist" }
+      const err = new QueryFailedError('SELECT * FROM foo', [], driverErr as any)
+      ;(err as any).driverError = driverErr
+      filter.catch(err, host)
+      const body = host.__mockRes.json.mock.calls[0][0]
+      expect(body.msg).toBe('数据库操作失败')
+      expect(body.msg).not.toContain('foo')
+    })
+
+    it('非生产环境：通用 DB 错误的 msg 附带 sqlMessage', () => {
+      process.env.NODE_ENV = 'development'
+      const host = mockHost({ headers: {}, url: '/api/x' })
+      const driverErr = { code: 'ER_NO_SUCH_TABLE', sqlMessage: "Table 'vue3_monorepo.foo' doesn't exist" }
+      const err = new QueryFailedError('SELECT * FROM foo', [], driverErr as any)
+      ;(err as any).driverError = driverErr
+      filter.catch(err, host)
+      expect(host.__mockRes.json.mock.calls[0][0].msg).toContain("Table 'vue3_monorepo.foo' doesn't exist")
+    })
+  })
+
   describe('requestId 行为', () => {
     it('入参 X-Request-Id 应被透传', () => {
       const host = mockHost({ headers: { 'x-request-id': 'client-supplied-id-123' }, url: '/x' })

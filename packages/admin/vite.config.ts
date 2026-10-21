@@ -1,38 +1,45 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
-import { networkInterfaces } from 'os'
 
 /**
- * 探测本机首个非回环 IPv4
+ * 读取 .env / .env.local（mode 固定 development：代理只在 dev server 生效）
+ *
+ * 用 loadEnv 而不是只读 process.env：Windows 下在 npm script 里写
+ * `VITE_API_TARGET=... vite` 这种前缀赋值根本不会生效，开发者只能改代码。
+ * 放进 .env.local（已被 .gitignore 忽略）才能既跨平台又不污染仓库。
  */
-function getPrimaryIPv4(): string {
-  const interfaces = networkInterfaces()
-  for (const name of Object.keys(interfaces)) {
-    for (const net of interfaces[name] || []) {
-      const familyV4 = typeof net.family === 'string' ? 'IPv4' : 4
-      if (net.family === familyV4 && !net.internal) {
-        return net.address
-      }
-    }
-  }
-  return 'localhost'
-}
+const env = loadEnv('development', __dirname, '')
 
 /**
- * 解析 API 代理目标
- * admin 端优先用 LAN_API_TARGET（与 app 区分命名空间）
+ * 解析 API 代理目标。
+ *
+ * 默认 **127.0.0.1:3000**，而不是自动探测本机 LAN IP：
+ *  - compose 里的 backend 只发布在 127.0.0.1:3000（见 docker-compose.yml 的 ports），
+ *    用 LAN IP 去连会直接 ECONNREFUSED，Vite 代理返回 500，页面上所有接口都像挂了；
+ *  - 自动探测还可能选中 VPN / WSL 虚拟网卡，换台机器结果就变。
+ *
+ * 代理运行在宿主机上，所以手机用 http://<局域网IP>:5175 访问时，target 仍写回环即可。
+ *
+ * 本地调试「后端也跑在宿主机」时，在 packages/admin/.env.local 写：
+ *   VITE_API_TARGET=http://127.0.0.1:3001
+ * （后端同步在 packages/server/.env.local 设 APP_PORT=3001，避开 Docker 的 3000）
+ *
+ * 优先级：shell 环境变量 > .env.local > .env > 默认值。
  */
 function resolveApiTarget(): string {
   const explicit =
     process.env.LAN_API_TARGET ||
+    env.LAN_API_TARGET ||
     process.env.VITE_API_TARGET ||
-    process.env.API_TARGET
+    env.VITE_API_TARGET ||
+    process.env.API_TARGET ||
+    env.API_TARGET
   if (explicit) return explicit.replace(/\/+$/, '')
-  return `http://${getPrimaryIPv4()}:3000`
+  return 'http://127.0.0.1:3000'
 }
 
 const API_TARGET = resolveApiTarget()
@@ -66,6 +73,13 @@ export default defineConfig({
         target: API_TARGET,
         changeOrigin: true,
         rewrite: (path) => path,
+      },
+      // 本地存储的上传文件由后端以 /uploads/** 提供。
+      // 不代理时浏览器会向 Vite（5175）要图片，拿到 404 或 index.html，
+      // 表现为「上传成功但预览全裂」—— 生产环境有 nginx 转这条路径，dev 没有。
+      '/uploads': {
+        target: API_TARGET,
+        changeOrigin: true,
       },
     },
   },

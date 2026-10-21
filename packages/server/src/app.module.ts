@@ -29,7 +29,12 @@ import { MetricsModule } from './modules/metrics/metrics.module'; // Prometheus 
     ConfigModule.forRoot({ // 配置模块初始化
       isGlobal: true, // 设为全局模块，其他模块无需重复导入即可使用 ConfigService
       load: [configuration], // 加载自定义配置函数，对环境变量做预处理
-      envFilePath: '.env', // 指定环境变量文件路径
+      // 环境变量文件，**按数组顺序从左到右加载，先命中的优先**：
+      //   1. .env.local —— 开发者本机私有覆盖（已 gitignore），用来改 APP_PORT、
+      //      指向别的数据库等，不会污染团队的 .env；
+      //   2. .env —— 基础配置，与 .env.example 对应。
+      // 容器里两者都不存在（compose 通过 environment 注入），配置无效也无副作用。
+      envFilePath: ['.env.local', '.env'],
     }),
 
     // 全局日志模块：替换 NestJS 默认 console logger

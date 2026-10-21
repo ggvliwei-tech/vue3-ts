@@ -148,12 +148,36 @@ async function bootstrap() {
   // ========== 启动横幅（结构化日志） ==========
   const localIPs = getLocalIPv4Addresses()
   const env = process.env.NODE_ENV || 'development'
+  const isProd = env === 'production'
+
+  // 端口与 compose 里的 backend 冲突时给出明确提示。
+  // Windows 下 0.0.0.0:3000 与 127.0.0.1:3000 能同时监听，进程不会报错，
+  // 但 localhost:3000（浏览器/代理默认目标）命中的是 Docker 那个后端，
+  // 于是「明明是刚改的代码却不生效」「本地后端日志一条没有」这类假故障。
+  if (!isProd && port === 3000) {
+    logger.warn(
+      '⚠️  APP_PORT=3000 与 docker compose 中 backend 发布的 127.0.0.1:3000 重叠。' +
+        '浏览器访问 localhost:3000 会命中 Docker 后端而非本进程；' +
+        '本地调试请在 packages/server/.env.local 写 APP_PORT=3001，' +
+        '并让前端 .env.local 的 VITE_API_TARGET 指向 http://127.0.0.1:3001。',
+    )
+  }
+
+  // 本地调试时把依赖地址打进横幅：连的还是容器映射端口（MySQL 3307 / Redis 6380 /
+  // Chroma 8001）一眼可辨，省得 500 之后再去翻 .env 猜连的是哪个库。
+  const dependencies = isProd
+    ? ''
+    : `  MySQL：   ${configService.get<string>('DB_HOST')}:${configService.get<number>('DB_PORT')} / ${configService.get<string>('DB_NAME')}\n` +
+      `  Redis：   ${configService.get<string>('REDIS_HOST') ?? '127.0.0.1'}:${configService.get<number>('REDIS_PORT') ?? 6379}\n` +
+      `  Chroma：  ${process.env.CHROMA_HOST ?? '127.0.0.1'}:${process.env.CHROMA_PORT ?? 8000}\n`
+
   logger.log(
     `\n${'─'.repeat(60)}\n` +
       `🚀  NestJS 服务启动成功 [${env}]\n` +
       `${'─'.repeat(60)}\n` +
       `  监听地址：${host}:${port}\n` +
       `  本机访问：http://localhost:${port}\n` +
+      dependencies +
       (localIPs.length > 0
         ? `  局域网访问：http://${localIPs[0]}:${port}${localIPs.length > 1 ? '\n  其他 IP：  ' + localIPs.slice(1).map((ip) => `http://${ip}:${port}`).join('\n             ') : ''}\n`
         : '') +

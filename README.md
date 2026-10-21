@@ -94,6 +94,20 @@ docker compose down -v
 
 ### 方式二：本地开发
 
+本地开发有两种模式，区别只在**后端跑在哪**。前端（Vite）两种模式下都一样，
+代理默认指向 `http://127.0.0.1:3000`，正好是 compose 里 backend 的发布地址。
+
+| 模式 | 后端 | 什么时候用 | 需要额外配置 |
+|---|---|---|---|
+| A. 服务端留在 Docker | `docker compose` 里的 backend | 只改前端；或想用同一份后端联调 | 无（前端留空即可） |
+| B. 前后端都本地 | 宿主机 `pnpm dev:server`，端口 **3001** | 改后端代码、需要断点/热重载/Swagger | 后端 `.env.local` 设 `APP_PORT=3001`；前端 `.env.local` 设 `VITE_API_TARGET=http://127.0.0.1:3001` |
+
+> ⚠️ **端口 3000 只属于一个后端**。compose 把 backend 发布在 `127.0.0.1:3000`；
+> 宿主机后端若也用 3000，Windows 上两个进程能同时监听（一个绑 `0.0.0.0`、一个绑
+> `127.0.0.1`），但 `localhost:3000` 会命中 Docker 那个 —— 表现为「代码改了不生效」
+> 或「后端日志一条没有」。所以模式 B 必须把本地后端挪到 3001。
+> 启动时若检测到 `APP_PORT=3000` 且非生产环境，后端会在日志里给出同样的警告。
+
 ```bash
 # 1. 安装依赖（需要 pnpm >= 10）
 pnpm install
@@ -101,15 +115,16 @@ pnpm install
 # 2. 启动共享包（一次性）
 pnpm build:shared
 
-# 2.1 可选：本机没有 MySQL / Redis / Chroma 时，只起依赖容器
-#     docker compose up -d mysql redis chroma
-#     然后把 packages/server/.env 指向宿主机映射端口（以根 .env 为准）：
-#       DB_HOST=127.0.0.1    DB_PORT=3307     # 根 .env 的 MYSQL_PORT
-#       REDIS_HOST=127.0.0.1 REDIS_PORT=6380  # 根 .env 的 REDIS_PORT
-#       CHROMA_HOST=127.0.0.1 CHROMA_PORT=8001
-#     ⚠️ 容器版 backend 同样占用 3000，宿主机直跑前先 `docker compose stop backend`。
+# 3. 起依赖（MySQL / Redis / Chroma）。模式 A 下执行完整 compose 即可；
+#    模式 B 只起依赖容器即可：
+#      docker compose up -d mysql redis chroma
+#    然后让 packages/server/.env（推荐写进 .env.local 覆盖）指向宿主机映射端口
+#    （以根 .env 为准）：
+#      DB_HOST=127.0.0.1    DB_PORT=3307     # 根 .env 的 MYSQL_PORT
+#      REDIS_HOST=127.0.0.1 REDIS_PORT=6380  # 根 .env 的 REDIS_PORT
+#      CHROMA_HOST=127.0.0.1 CHROMA_PORT=8001
 
-# 3. 准备数据库（确保 MySQL 已运行）
+# 4. 准备数据库（确保 MySQL 已运行）
 #    在 MySQL 中执行 packages/server/nest-db.sql
 #    ⚠️ 这个脚本是「全量重建」（每张表先 DROP 再 CREATE），只用于新建/重置环境。
 #       **已经在用的库不要再跑它** —— 需要补数据时走 packages/server/sql/ 下的
@@ -119,7 +134,7 @@ pnpm build:shared
 #       为什么必须重新登录：权限集合在 Redis 里有 10 分钟缓存（rbac.service.ts），
 #       且每个后端进程还有一份进程内缓存，不重新登录会看到「改了没生效」。
 
-# 4. 配置 packages/server/.env
+# 5. 配置 packages/server/.env
 #    cp packages/server/.env.example packages/server/.env
 #    ⚠️ 用 packages/server/.env.example，不是根目录那个 .env.example：
 #       根目录的是给 docker compose 用的，里面没有 DB_HOST / LOCAL_UPLOAD_BASE_DIR 等
@@ -130,19 +145,45 @@ pnpm build:shared
 #    LOCAL_UPLOAD_BASE_DIR  LOCAL_STATIC_PREFIX
 #    其余常用项（REDIS_* / LLM_TYPE / STORAGE_TYPE / APP_PORT 等）都有默认值，
 #    逐项说明见该模板文件内的注释。
+#
+#    本机私有覆盖写 packages/server/.env.local（已 gitignore，优先于 .env 读取），
+#    不要直接改 .env —— 那个文件是团队共享的基础配置。
 
-# 5. 启动开发服务
-pnpm dev:full    # 同时启动 server + admin + app
-# 或分别启动
-pnpm dev:server  # 后端（localhost:3000）
+# 6. 模式 B 额外两步（模式 A 跳过，前端留空即可）
+#    packages/server/.env.local：
+#      APP_PORT=3001
+#    packages/admin/.env.local 与 packages/app/.env.local：
+#      VITE_API_TARGET=http://127.0.0.1:3001
+#    Vite 代理读取顺序：shell 环境变量 > .env.local > .env > 默认 127.0.0.1:3000。
+#    注意 Windows 下 `VITE_API_TARGET=... pnpm dev` 这种前缀赋值不生效，请写进文件。
+
+# 7. 启动开发服务
+#    模式 A：服务端已在 Docker 里，只起前端
 pnpm dev:admin   # Admin 前端（localhost:5175）
 pnpm dev:app     # App 前端（localhost:5173）
+#    模式 B：前后端都本地
+pnpm dev:full    # 同时启动 server + admin + app
+# 或分别启动
+pnpm dev:server  # 后端（PORT 由 APP_PORT 决定，模式 B 为 3001）
 
-# 6. 局域网访问
-#    把 5173/5175/3000 后面的 localhost 换成你的 LAN IP（如 192.168.1.x）
+# 8. 局域网访问
+#    把 5173/5175 后面的 localhost 换成你的 LAN IP（如 192.168.1.x）
 #    （改用其他端口时，记得同步 backend 的 CORS_ORIGINS 白名单）
-#    vite.config.ts 已配置 host:true，自动绑定 0.0.0.0
+#    vite.config.ts 已配置 host:true，自动绑定 0.0.0.0；
+#    代理 target 是宿主机回环地址，手机经 Vite 访问时同样可用。
 ```
+
+**本地出现「系统内部错误」时怎么查**
+
+1. 先确认命中的是哪个后端：`curl http://127.0.0.1:3000/health/ready`（compose 后端）
+   与 `curl http://127.0.0.1:3001/health/ready`（模式 B 的本地后端）。哪个连不上，
+   就是依赖（MySQL/Redis/Chroma）没起来或端口填错。
+2. 非生产环境下，500 响应的 `msg` 会附带真实原因（如 `系统内部错误（connect
+   ECONNREFUSED 127.0.0.1:3307）`），生产环境仍只返回通用文案，详情看日志里的
+   `X-Request-Id`。
+3. 前端图片/附件 404：确认后端在跑，且 Vite 已代理 `/uploads`（两个前端都配了）。
+4. 检查后端启动横幅：非生产环境会打印实际连接的 MySQL / Redis / Chroma 地址，
+   以及 3000 端口与 Docker 冲突的警告。
 
 ## 🛠️ 常用命令
 

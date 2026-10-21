@@ -109,6 +109,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         // 而真正需要人看的 500 会被淹掉。前端解析的也是 msg，不受影响。
         httpStatus = HttpStatus.CONFLICT
         msg = '数据已存在，请勿重复提交'
+      } else {
+        // 非唯一约束的 DB 错误在生产只给通用文案（避免泄漏表名/SQL），
+        // 本地开发把驱动层原因带上 —— 否则页面只显示「系统内部错误」，
+        // 分不清是连不上 MySQL、表结构漂移还是 SQL 写错了。
+        msg = this.withDevDetail(msg, driverErr?.sqlMessage ?? exception.message)
       }
       this.logger.error(
         `[${requestId}] DB error: ${driverErr?.sqlMessage ?? exception.message}`,
@@ -120,6 +125,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       this.logger.error(
         `[${requestId}] Unhandled error on ${request.method} ${request.url}: ${err?.stack ?? exception}`,
       )
+      // 生产环境保持「系统内部错误」通用文案（错误详情只进日志，防止泄漏内部实现）；
+      // 非生产把真实 message 带给前端，本地调试时一眼能看出是 ECONNREFUSED、
+      // 环境变量缺失还是代码 TypeError，不必再去翻日志。
+      msg = this.withDevDetail(msg, err?.message ?? String(exception))
     }
 
     // 4xx 级别用 warn，5xx 用 error（避免日志噪音）
@@ -138,6 +147,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       requestId,
       timestamp: Date.now(),
     })
+  }
+
+  /**
+   * 非生产环境在通用文案后追加真实错误信息。
+   *
+   * 生产环境（NODE_ENV=production）原样返回，500 响应里仍只有「系统内部错误」，
+   * 详细信息靠 requestId 去日志里查 —— 这是对外接口的既定约定，不要放宽。
+   */
+  private withDevDetail(msg: string, detail: unknown): string {
+    if (process.env.NODE_ENV === 'production') return msg
+    const text = typeof detail === 'string' ? detail.trim() : ''
+    return text ? `${msg}（${text}）` : msg
   }
 
   /**
@@ -165,6 +186,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? (r.message as string[]).join('; ')
           : ((r.message as string) ?? exception.message)
       }
+    } else {
+      // 与 HTTP 出口保持一致：非生产把未知错误的真实原因推给客户端
+      msg = this.withDevDetail(msg, (exception as Error)?.message ?? String(exception))
     }
 
     this.logger.error(
